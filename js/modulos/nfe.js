@@ -1,8 +1,4 @@
 
-const SEFAZ_URL = 'https://octano-sefaz-production.up.railway.app';
-
-// Senha do certificado em memória (sessão)
-let _certSenha = null;
 let nfeXmlDados = null;
 let nfeTanques = [];
 let _empresaId = null;
@@ -26,49 +22,31 @@ async function moduloNfe() {
   }
 
   const temCert = !!_empresa?.cert_path;
+  const senhaAtual = getCertSenha();
 
-  // Carrega manifestadas pendentes
   const { data: manifestadas } = await sb
-    .from('oct_nfe_manifestadas')
-    .select('*')
-    .eq('empresa_id', _empresaId)
-    .eq('status', 'manifestada')
+    .from('oct_nfe_manifestadas').select('*')
+    .eq('empresa_id', _empresaId).eq('status', 'manifestada')
     .order('nsu', { ascending: false });
 
-  // Carrega importadas
   const { data: importadas } = await sb
-    .from('oct_nfe_entrada')
-    .select('*, oct_pessoas(nome)')
+    .from('oct_nfe_entrada').select('*, oct_pessoas(nome)')
     .eq('empresa_id', _empresaId)
-    .order('entrada', { ascending: false })
-    .limit(30);
+    .order('entrada', { ascending: false }).limit(30);
 
-  // Ultimo NSU salvo
   const { data: ultimoNsuRow } = await sb
-    .from('oct_nfe_manifestadas')
-    .select('nsu')
+    .from('oct_nfe_manifestadas').select('nsu')
     .eq('empresa_id', _empresaId)
-    .order('nsu', { ascending: false })
-    .limit(1)
-    .single();
+    .order('nsu', { ascending: false }).limit(1).single();
   const ultimoNsu = ultimoNsuRow?.nsu || '0';
 
   conteudo.innerHTML = `
     <div style="max-width:1200px">
 
-      <!-- HEADER -->
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
         <div class="modulo-header" style="margin-bottom:0;border:none"><h2>📄 NF-e Entrada</h2></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${temCert ? `
-            <button onclick="abrirManifestar()" class="btn-manifestar" id="btn-abrir-manifestar">
-              🔄 Manifestar NF-e
-            </button>
-          ` : `
-            <span style="color:#888;font-size:0.82rem;padding:8px 12px;background:#13151f;border-radius:6px;border:1px solid #2a2d3e">
-              ⚠️ Cadastre o certificado digital para usar a manifestação automática
-            </span>
-          `}
+          ${temCert ? `<button onclick="abrirManifestar()" class="btn-manifestar">🔄 Manifestar NF-e</button>` : `<span style="color:#888;font-size:0.82rem;padding:8px 12px;background:#13151f;border-radius:6px;border:1px solid #2a2d3e">⚠️ Cadastre o certificado para usar manifestação</span>`}
           <button onclick="abrirImportarNfe()" class="btn-salvar" style="padding:8px 18px">📂 Importar XML</button>
         </div>
       </div>
@@ -80,7 +58,6 @@ async function moduloNfe() {
             <h3 style="color:#60a5fa;font-size:0.95rem">🔄 Manifestação do Destinatário — SEFAZ</h3>
             <button onclick="fecharManifestar()" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">✕</button>
           </div>
-
           <div class="form-grid" style="max-width:600px;margin-bottom:16px">
             <div class="form-group">
               <label>Ambiente</label>
@@ -91,37 +68,25 @@ async function moduloNfe() {
             </div>
             <div class="form-group">
               <label>Último NSU consultado</label>
-              <input id="manifest-nsu" type="text" value="${ultimoNsu}" placeholder="0" />
+              <input id="manifest-nsu" type="text" value="${ultimoNsu}" />
             </div>
-            <div class="form-group span2" id="manifest-senha-area" style="${_certSenha ? 'display:none' : ''}">
-              <label>Senha do certificado *</label>
+            <div class="form-group span2">
+              <label>Senha do certificado ${senhaAtual ? '— <span style="color:#4caf50">✅ salva na sessão</span>' : '*'}</label>
               <div style="display:flex;gap:8px;align-items:center">
-                <input id="manifest-senha" type="password" placeholder="Senha do certificado digital" style="flex:1" value="${_certSenha || ''}" />
-                ${_certSenha ? '<span style="color:#4caf50;font-size:0.82rem">✅ Senha salva na sessão</span>' : ''}
+                <input id="manifest-senha" type="password" placeholder="${senhaAtual ? '••••••• (salva)' : 'Senha do certificado digital'}" style="flex:1" />
+                ${senhaAtual ? `<button onclick="limparSenhaSessao()" style="padding:6px 10px;border-radius:5px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem;white-space:nowrap">🔄 Trocar</button>` : ''}
               </div>
             </div>
-            ${_certSenha ? `
-              <div class="form-group span2">
-                <label>Certificado</label>
-                <div style="display:flex;align-items:center;gap:10px">
-                  <span style="color:#4caf50;font-size:0.85rem">🔒 ${_empresa?.cert_nome || 'Certificado cadastrado'} — senha salva na sessão</span>
-                  <button onclick="limparSenhaSessao()" style="font-size:0.75rem;padding:3px 8px;border-radius:4px;border:1px solid #555;background:transparent;color:#888;cursor:pointer">Trocar senha</button>
-                </div>
-              </div>
-            ` : ''}
           </div>
-
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button onclick="executarManifestar()" class="btn-salvar">🔍 Buscar NF-es na SEFAZ</button>
             <span id="manifest-msg" style="font-size:0.85rem"></span>
           </div>
-
-          <!-- Erro SEFAZ -->
           <div id="manifest-erro-sefaz" style="display:none;margin-top:12px;padding:12px;background:#1a1010;border:1px solid #5a2a2a;border-radius:8px;font-size:0.82rem;color:#f87171"></div>
         </div>
       </div>
 
-      <!-- AREA IMPORTAR XML -->
+      <!-- IMPORTAR XML -->
       <div id="nfe-importar" style="display:none;margin-bottom:20px">
         <div class="cert-box">
           <div class="cert-drop" onclick="document.getElementById('nfe-xml-file').click()">
@@ -132,24 +97,19 @@ async function moduloNfe() {
         </div>
       </div>
 
-      <!-- PREVIEW NF-e -->
+      <!-- PREVIEW -->
       <div id="nfe-preview" style="display:none;margin-bottom:20px"></div>
 
       <!-- PAINEL DUPLO -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-
-        <!-- COLUNA MANIFESTADAS -->
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #2a4a6a;padding-bottom:8px">
             <h3 style="color:#60a5fa;font-size:0.9rem">📥 Manifestadas — aguardando importação</h3>
             <span style="background:#1a2a3a;color:#60a5fa;font-size:0.75rem;padding:2px 8px;border-radius:10px;border:1px solid #2a4a6a">${manifestadas?.length || 0}</span>
           </div>
           <div id="lista-manifestadas">
-            ${!manifestadas || manifestadas.length === 0 ? `
-              <div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">
-                Nenhuma NF-e manifestada pendente
-              </div>
-            ` : manifestadas.map(n => `
+            ${!manifestadas || manifestadas.length === 0 ? `<div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">Nenhuma NF-e manifestada pendente</div>` :
+            manifestadas.map(n => `
               <div class="nfe-card manifestada" id="card-manifestada-${n.id}">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start">
                   <div>
@@ -158,9 +118,9 @@ async function moduloNfe() {
                     ${n.emit_cnpj ? `<div style="font-size:0.7rem;color:#555">${n.emit_cnpj}</div>` : ''}
                   </div>
                   <div style="text-align:right">
-                    ${n.valor ? `<div style="color:#f97316;font-weight:600;font-size:0.9rem">R$ ${Number(n.valor).toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>` : ''}
-                    ${n.emissao ? `<div style="font-size:0.75rem;color:#888">${new Date(n.emissao + 'T12:00:00').toLocaleDateString('pt-BR')}</div>` : ''}
-                    <div style="font-size:0.68rem;color:#555">NSU: ${n.nsu}</div>
+                    ${n.valor ? `<div style="color:#f97316;font-weight:600;font-size:0.88rem">R$ ${Number(n.valor).toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>` : ''}
+                    ${n.emissao ? `<div style="font-size:0.72rem;color:#888">${new Date(n.emissao + 'T12:00:00').toLocaleDateString('pt-BR')}</div>` : ''}
+                    <div style="font-size:0.65rem;color:#555">NSU: ${n.nsu}</div>
                   </div>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
@@ -173,18 +133,14 @@ async function moduloNfe() {
           </div>
         </div>
 
-        <!-- COLUNA IMPORTADAS -->
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #2a5a2a;padding-bottom:8px">
             <h3 style="color:#4caf50;font-size:0.9rem">✅ Importadas</h3>
             <span style="background:#1a3a1a;color:#4caf50;font-size:0.75rem;padding:2px 8px;border-radius:10px;border:1px solid #2a5a2a">${importadas?.length || 0}</span>
           </div>
           <div id="lista-importadas">
-            ${!importadas || importadas.length === 0 ? `
-              <div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">
-                Nenhuma NF-e importada ainda
-              </div>
-            ` : importadas.map(n => `
+            ${!importadas || importadas.length === 0 ? `<div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">Nenhuma NF-e importada ainda</div>` :
+            importadas.map(n => `
               <div class="nfe-card importada">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start">
                   <div>
@@ -193,33 +149,29 @@ async function moduloNfe() {
                     <div style="font-size:0.7rem;color:#555">${n.emissao ? new Date(n.emissao + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
                   </div>
                   <div style="text-align:right">
-                    <div style="color:#4caf50;font-weight:600;font-size:0.9rem">R$ ${Number(n.valor_total || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-                    <span class="nfe-status ${n.status}">${n.status}</span>
+                    <div style="color:#4caf50;font-weight:600;font-size:0.88rem">R$ ${Number(n.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+                    <span class="nfe-status importada">importada</span>
                   </div>
                 </div>
               </div>
             `).join('')}
           </div>
         </div>
-
       </div>
     </div>
   `;
 }
 
 function abrirManifestar() {
-  const painel = document.getElementById('nfe-manifestar-painel');
-  painel.style.display = painel.style.display === 'none' ? 'block' : 'none';
+  const p = document.getElementById('nfe-manifestar-painel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
 }
-
 function fecharManifestar() {
   document.getElementById('nfe-manifestar-painel').style.display = 'none';
 }
-
 function limparSenhaSessao() {
-  _certSenha = null;
-  moduloNfe();
-  setTimeout(() => abrirManifestar(), 300);
+  setCertSenha(null);
+  moduloNfe().then(() => abrirManifestar());
 }
 
 async function executarManifestar() {
@@ -227,20 +179,18 @@ async function executarManifestar() {
   const erroDiv = document.getElementById('manifest-erro-sefaz');
   const ambiente = document.getElementById('manifest-ambiente').value;
   const nsu = document.getElementById('manifest-nsu').value || '0';
-  const senhaInput = document.getElementById('manifest-senha');
-  const senha = senhaInput?.value || _certSenha;
+  const senhaInput = document.getElementById('manifest-senha').value;
+  const senha = senhaInput || getCertSenha();
 
   erroDiv.style.display = 'none';
-
   if (!senha) { msg.textContent = 'Informe a senha do certificado.'; msg.style.color = '#f44'; return; }
 
-  _certSenha = senha;
+  setCertSenha(senha);
   msg.textContent = '🔄 Consultando SEFAZ...'; msg.style.color = '#888';
 
   try {
     const { data: certBlob, error: certErr } = await sb.storage.from('octano-certs').download(_empresa.cert_path);
     if (certErr) { msg.textContent = 'Erro ao carregar certificado.'; msg.style.color = '#f44'; return; }
-
     const certBuffer = await certBlob.arrayBuffer();
     const certBase64 = btoa(String.fromCharCode(...new Uint8Array(certBuffer)));
     const cnpj = _empresa.cnpj?.replace(/\D/g, '');
@@ -250,144 +200,111 @@ async function executarManifestar() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cnpj, cert_base64: certBase64, cert_senha: senha, ambiente, ultimo_nsu: nsu })
     });
-
     const dados = await resp.json();
 
     if (dados.erro) {
-      msg.textContent = '❌ Erro na comunicação';
-      msg.style.color = '#f44';
+      msg.textContent = '❌ Erro na comunicação'; msg.style.color = '#f44';
       erroDiv.style.display = 'block';
-      erroDiv.innerHTML = `<strong>Erro:</strong> ${dados.erro}${dados.detalhes ? `<br><pre style="margin-top:6px;font-size:0.75rem;white-space:pre-wrap">${dados.detalhes}</pre>` : ''}`;
+      erroDiv.innerHTML = `<strong>Erro:</strong> ${dados.erro}${dados.detalhes ? `<br><pre style="margin-top:6px;font-size:0.72rem;white-space:pre-wrap;opacity:0.8">${dados.detalhes}</pre>` : ''}`;
       return;
     }
 
-    // Mostra status SEFAZ mesmo sem erro
     if (dados.cstat && dados.cstat !== '138') {
       erroDiv.style.display = 'block';
-      erroDiv.style.borderColor = '#5a4a00';
-      erroDiv.style.background = '#1a1500';
-      erroDiv.style.color = '#fbbf24';
-      erroDiv.innerHTML = `<strong>SEFAZ:</strong> [${dados.cstat}] ${dados.xmotivo}`;
+      erroDiv.style.cssText = 'display:block;margin-top:12px;padding:12px;background:#1a1500;border:1px solid #5a4a00;border-radius:8px;font-size:0.82rem;color:#fbbf24';
+      erroDiv.innerHTML = `<strong>SEFAZ [${dados.cstat}]:</strong> ${dados.xmotivo}`;
     }
 
     if (!dados.nfes || dados.nfes.length === 0) {
-      msg.textContent = '✅ Nenhuma NF-e nova encontrada.';
-      msg.style.color = '#4caf50';
+      msg.textContent = '✅ Nenhuma NF-e nova encontrada.'; msg.style.color = '#4caf50';
       if (dados.ultimo_nsu) document.getElementById('manifest-nsu').value = dados.ultimo_nsu;
       return;
     }
 
-    // Salva no banco
     let salvas = 0;
     for (const n of dados.nfes) {
       const { error } = await sb.from('oct_nfe_manifestadas').upsert({
-        empresa_id: _empresaId,
-        nsu: n.nsu,
-        schema: n.schema,
-        chave_nfe: n.chave || null,
-        numero: n.numero || null,
-        serie: n.serie || null,
-        emissao: n.emissao || null,
-        emitente: n.emitente || null,
+        empresa_id: _empresaId, nsu: n.nsu, schema: n.schema,
+        chave_nfe: n.chave || null, numero: n.numero || null, serie: n.serie || null,
+        emissao: n.emissao || null, emitente: n.emitente || null,
         emit_cnpj: n.emitCnpj || null,
         valor: n.valor ? parseFloat(n.valor) : null,
-        nat_op: n.natOp || null,
-        xml: n.xml || null,
-        tipo: n.tipo || 'resumo',
-        status: 'manifestada',
+        nat_op: n.natOp || null, xml: n.xml || null,
+        tipo: n.tipo || 'resumo', status: 'manifestada',
         ultimo_nsu_consulta: dados.ultimo_nsu,
       }, { onConflict: 'empresa_id,nsu', ignoreDuplicates: true });
       if (!error) salvas++;
     }
 
     if (dados.ultimo_nsu) document.getElementById('manifest-nsu').value = dados.ultimo_nsu;
-
-    msg.textContent = `✅ ${salvas} NF-e(s) salvas! Atualizando...`;
-    msg.style.color = '#4caf50';
+    msg.textContent = `✅ ${salvas} NF-e(s) salvas!`; msg.style.color = '#4caf50';
     setTimeout(() => moduloNfe(), 1000);
 
   } catch(e) {
-    msg.textContent = '❌ ' + e.message;
-    msg.style.color = '#f44';
+    msg.textContent = '❌ ' + e.message; msg.style.color = '#f44';
     erroDiv.style.display = 'block';
-    erroDiv.innerHTML = `<strong>Erro interno:</strong> ${e.message}`;
+    erroDiv.innerHTML = `<strong>Erro:</strong> ${e.message}`;
   }
 }
 
 async function importarDoManifestado(id) {
   const { data: n } = await sb.from('oct_nfe_manifestadas').select('*').eq('id', id).single();
-  if (!n?.xml) { alert('XML não disponível. Baixe o XML primeiro.'); return; }
-
+  if (!n?.xml) { alert('XML não disponível. Use "Baixar XML" primeiro.'); return; }
   const { data: tanques } = await sb.from('oct_tanques').select('*').eq('empresa_id', _empresaId).order('numero');
   nfeTanques = tanques || [];
-
   const parser = new DOMParser();
   const xml = parser.parseFromString(n.xml, 'text/xml');
   await processarXmlNfe(xml, `NF-e_${n.numero || n.nsu}.xml`, id);
 }
 
 async function baixarXmlManifestado(id, nsu) {
-  const msg = document.getElementById('manifest-msg') || { textContent: '', style: {} };
-  const senha = _certSenha;
-  if (!senha) { alert('Abra o painel de manifestação e informe a senha primeiro.'); return; }
-
+  const senha = getCertSenha();
+  const ambiente = document.getElementById('manifest-ambiente')?.value || 'producao';
+  if (!senha) { alert('Abra o painel de Manifestar NF-e e informe a senha primeiro.'); return; }
   try {
     const { data: certBlob } = await sb.storage.from('octano-certs').download(_empresa.cert_path);
     const certBuffer = await certBlob.arrayBuffer();
     const certBase64 = btoa(String.fromCharCode(...new Uint8Array(certBuffer)));
     const cnpj = _empresa.cnpj?.replace(/\D/g, '');
-    const ambiente = document.getElementById('manifest-ambiente')?.value || 'producao';
-
     const resp = await fetch(`${SEFAZ_URL}/xml/${nsu}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cnpj, cert_base64: certBase64, cert_senha: senha, ambiente, nsu })
     });
     const dados = await resp.json();
-
-    if (dados.nfes && dados.nfes[0]?.xml) {
+    if (dados.nfes?.[0]?.xml) {
       await sb.from('oct_nfe_manifestadas').update({ xml: dados.nfes[0].xml }).eq('id', id);
       moduloNfe();
-    } else {
-      alert('Não foi possível baixar o XML: ' + (dados.erro || 'Sem dados'));
-    }
-  } catch(e) {
-    alert('Erro: ' + e.message);
-  }
+    } else { alert('Não foi possível baixar o XML: ' + (dados.erro || JSON.stringify(dados))); }
+  } catch(e) { alert('Erro: ' + e.message); }
 }
 
 async function cienciaManifestado(chave) {
-  const senha = _certSenha;
-  if (!senha) { alert('Informe a senha do certificado no painel de manifestação.'); return; }
+  const senha = getCertSenha();
   const ambiente = document.getElementById('manifest-ambiente')?.value || 'producao';
-
+  if (!senha) { alert('Informe a senha no painel de manifestação primeiro.'); return; }
   try {
     const { data: certBlob } = await sb.storage.from('octano-certs').download(_empresa.cert_path);
     const certBuffer = await certBlob.arrayBuffer();
     const certBase64 = btoa(String.fromCharCode(...new Uint8Array(certBuffer)));
     const cnpj = _empresa.cnpj?.replace(/\D/g, '');
-
     const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cnpj, chave_nfe: chave, cert_base64: certBase64, cert_senha: senha, ambiente })
     });
     const dados = await resp.json();
     alert(`SEFAZ: [${dados.cstat}] ${dados.xmotivo}`);
-  } catch(e) {
-    alert('Erro: ' + e.message);
-  }
+  } catch(e) { alert('Erro: ' + e.message); }
 }
 
 async function ignorarManifestado(id) {
-  if (!confirm('Ignorar esta NF-e? Ela não aparecerá mais na lista.')) return;
+  if (!confirm('Ignorar esta NF-e?')) return;
   await sb.from('oct_nfe_manifestadas').update({ status: 'ignorada' }).eq('id', id);
   document.getElementById(`card-manifestada-${id}`)?.remove();
 }
 
 function abrirImportarNfe() {
-  const area = document.getElementById('nfe-importar');
-  area.style.display = area.style.display === 'none' ? 'block' : 'none';
+  const a = document.getElementById('nfe-importar');
+  a.style.display = a.style.display === 'none' ? 'block' : 'none';
 }
 
 function lerXmlNfe(input) {
@@ -414,6 +331,8 @@ function getXmlVal(xml, tag) {
   return el ? el.textContent.trim() : '';
 }
 
+const TIPOS_PAG = {'01':'Dinheiro','02':'Cheque','03':'Cartão Crédito','04':'Cartão Débito','05':'Crédito Loja','10':'Vale Alimentação','11':'Vale Refeição','13':'Vale Combustível','15':'Boleto','90':'Sem Pagamento','99':'Outros'};
+
 async function processarXmlNfe(xml, nomeArquivo, manifestadaId) {
   const chave = getXmlVal(xml, 'chNFe');
   const numero = getXmlVal(xml, 'nNF');
@@ -428,25 +347,16 @@ async function processarXmlNfe(xml, nomeArquivo, manifestadaId) {
   const vCOFINS = parseFloat(getXmlVal(xml, 'vCOFINS')) || 0;
   const vFrete = parseFloat(getXmlVal(xml, 'vFrete')) || 0;
 
-  // Pagamentos
   const pagamentos = [];
-  const dets_pag = xml.getElementsByTagName('detPag');
-  for (const p of dets_pag) {
-    pagamentos.push({
-      tPag: p.querySelector('tPag')?.textContent || '',
-      vPag: parseFloat(p.querySelector('vPag')?.textContent || '0'),
-    });
+  for (const p of xml.getElementsByTagName('detPag')) {
+    pagamentos.push({ tPag: p.querySelector('tPag')?.textContent || '', vPag: parseFloat(p.querySelector('vPag')?.textContent || '0') });
   }
-  // Fallback pagamento
-  if (pagamentos.length === 0) {
-    const tPag = getXmlVal(xml, 'tPag');
-    const vPag = parseFloat(getXmlVal(xml, 'vPag')) || vNF;
-    if (tPag) pagamentos.push({ tPag, vPag });
+  if (pagamentos.length === 0 && getXmlVal(xml, 'tPag')) {
+    pagamentos.push({ tPag: getXmlVal(xml, 'tPag'), vPag: parseFloat(getXmlVal(xml, 'vPag')) || vNF });
   }
 
-  const dets = xml.getElementsByTagName('det');
   const itens = [];
-  for (const det of dets) {
+  for (const det of xml.getElementsByTagName('det')) {
     itens.push({
       codigo: det.querySelector('cProd')?.textContent || '',
       descricao: det.querySelector('xProd')?.textContent || '',
@@ -471,8 +381,6 @@ async function processarXmlNfe(xml, nomeArquivo, manifestadaId) {
   renderPreviewNfe();
 }
 
-const TIPOS_PAG = { '01':'Dinheiro','02':'Cheque','03':'Cartão Crédito','04':'Cartão Débito','05':'Crédito Loja','10':'Vale Alimentação','11':'Vale Refeição','12':'Vale Presente','13':'Vale Combustível','15':'Boleto','90':'Sem Pagamento','99':'Outros' };
-
 function renderPreviewNfe() {
   const d = nfeXmlDados;
   document.getElementById('nfe-importar').style.display = 'none';
@@ -486,58 +394,46 @@ function renderPreviewNfe() {
         <h3 style="color:#f97316;font-size:0.95rem">📄 NF-e ${d.numero}/${d.serie} — ${d.emitNome}</h3>
         <button onclick="cancelarNfe()" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">✕</button>
       </div>
-
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-        <div><span class="nfe-label">NF-e Nº</span><br><strong>${d.numero}/${d.serie}</strong></div>
-        <div><span class="nfe-label">Emissão</span><br><strong>${d.emissao ? new Date(d.emissao + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</strong></div>
-        <div><span class="nfe-label">Valor Total</span><br><strong style="color:#f97316">R$ ${d.vNF.toLocaleString('pt-BR', {minimumFractionDigits:2})}</strong></div>
-        <div style="grid-column:span 2"><span class="nfe-label">Fornecedor</span><br><strong>${d.emitNome}</strong><br><span style="font-size:0.75rem;color:#888">${d.emitCnpj}</span></div>
-        <div><span class="nfe-label">Natureza</span><br>${d.natOp}</div>
+        <div><span class="nfe-label">Nº</span><br><strong>${d.numero}/${d.serie}</strong></div>
+        <div><span class="nfe-label">Emissão</span><br><strong>${d.emissao ? new Date(d.emissao+'T12:00:00').toLocaleDateString('pt-BR') : '-'}</strong></div>
+        <div><span class="nfe-label">Total</span><br><strong style="color:#f97316">R$ ${d.vNF.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
+        <div style="grid-column:span 2"><span class="nfe-label">Fornecedor</span><br><strong>${d.emitNome}</strong><br><span style="font-size:0.72rem;color:#888">${d.emitCnpj}</span></div>
+        <div><span class="nfe-label">Pagamento</span><br>${d.pagamentos.map(p=>`${TIPOS_PAG[p.tPag]||p.tPag}: R$ ${p.vPag.toLocaleString('pt-BR',{minimumFractionDigits:2})}`).join('<br>')||'—'}</div>
       </div>
-
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px;background:#0f1117;border-radius:8px;margin-bottom:16px">
-        <div><span class="nfe-label">ICMS</span><br>R$ ${d.vICMS.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-        <div><span class="nfe-label">PIS</span><br>R$ ${d.vPIS.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-        <div><span class="nfe-label">COFINS</span><br>R$ ${d.vCOFINS.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-        <div><span class="nfe-label">Frete</span><br>R$ ${d.vFrete.toLocaleString('pt-BR', {minimumFractionDigits:2})}</div>
-        <div><span class="nfe-label">Pagamento</span><br>${d.pagamentos.map(p => `${TIPOS_PAG[p.tPag] || p.tPag}: R$ ${p.vPag.toLocaleString('pt-BR', {minimumFractionDigits:2})}`).join('<br>') || '—'}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#0f1117;border-radius:8px;margin-bottom:16px;font-size:0.82rem">
+        <div><span class="nfe-label">ICMS</span><br>R$ ${d.vICMS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        <div><span class="nfe-label">PIS</span><br>R$ ${d.vPIS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        <div><span class="nfe-label">COFINS</span><br>R$ ${d.vCOFINS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        <div><span class="nfe-label">Frete</span><br>R$ ${d.vFrete.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
       </div>
-
       <div class="modulo-header"><h2>Itens</h2></div>
       <div style="overflow-x:auto">
         <table class="nfe-tabela" style="margin-bottom:16px">
-          <thead>
-            <tr><th>#</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Vl.Unit</th><th>Total</th><th>ICMS%</th><th>ANP</th><th>Tanque</th></tr>
-          </thead>
+          <thead><tr><th>#</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Vl.Unit</th><th>Total</th><th>CST/Alíq</th><th>ANP</th><th>Tanque</th></tr></thead>
           <tbody>
-            ${d.itens.map((it, i) => `
-              <tr class="${it.ehCombustivel ? 'item-combustivel' : ''}">
+            ${d.itens.map((it,i)=>`
+              <tr class="${it.ehCombustivel?'item-combustivel':''}">
                 <td>${i+1}</td>
-                <td><strong>${it.descricao}</strong>${it.codAnp ? `<br><span style="font-size:0.68rem;color:#888">${it.codAnp} — ${it.descAnp}</span>` : ''}</td>
-                <td style="font-size:0.78rem">${it.ncm}</td>
-                <td style="font-size:0.78rem">${it.cfop}</td>
-                <td>${it.quantidade.toLocaleString('pt-BR', {minimumFractionDigits:3})} ${it.unidade}</td>
-                <td>R$ ${it.valorUnitario.toLocaleString('pt-BR', {minimumFractionDigits:4})}</td>
-                <td>R$ ${it.valorTotal.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
-                <td style="font-size:0.78rem">${it.cstIcms} / ${it.aliqIcms}%</td>
-                <td>${it.ehCombustivel ? '<span class="nfe-badge-anp">⛽</span>' : '—'}</td>
-                <td>${it.ehCombustivel ? `
-                  <select id="tanque-item-${i}" style="background:#0f1117;border:1px solid #2a2d3e;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;min-width:120px">
-                    <option value="">Selecione...</option>
-                    ${nfeTanques.map(t => `<option value="${t.id}">${t.numero} — ${t.combustivel}</option>`).join('')}
-                  </select>` : '—'}
-                </td>
+                <td><strong>${it.descricao}</strong>${it.codAnp?`<br><span style="font-size:0.68rem;color:#888">${it.codAnp}</span>`:''}</td>
+                <td style="font-size:0.75rem">${it.ncm}</td>
+                <td style="font-size:0.75rem">${it.cfop}</td>
+                <td>${it.quantidade.toLocaleString('pt-BR',{minimumFractionDigits:3})} ${it.unidade}</td>
+                <td>R$ ${it.valorUnitario.toLocaleString('pt-BR',{minimumFractionDigits:4})}</td>
+                <td>R$ ${it.valorTotal.toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+                <td style="font-size:0.75rem">${it.cstIcms}/${it.aliqIcms}%</td>
+                <td>${it.ehCombustivel?'<span class="nfe-badge-anp">⛽</span>':'—'}</td>
+                <td>${it.ehCombustivel?`<select id="tanque-item-${i}" style="background:#0f1117;border:1px solid #2a2d3e;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;min-width:110px"><option value="">Selecione...</option>${nfeTanques.map(t=>`<option value="${t.id}">${t.numero} — ${t.combustivel}</option>`).join('')}</select>`:'—'}</td>
               </tr>
             `).join('')}
           </tbody>
         </table>
       </div>
-
       <div style="background:#0f1117;border:1px solid #f97316;border-radius:8px;padding:10px;margin-bottom:16px;font-size:0.82rem;color:#f97316">
-        ⚠️ Vincule cada combustível ao tanque. O estoque será atualizado automaticamente ao confirmar.
+        ⚠️ Vincule cada combustível ao tanque. O estoque será atualizado automaticamente.
       </div>
       <div class="form-acoes">
-        <button class="btn-salvar" onclick="confirmarNfe()">✅ Confirmar entrada e atualizar estoque</button>
+        <button class="btn-salvar" onclick="confirmarNfe()">✅ Confirmar e atualizar estoque</button>
         <button onclick="cancelarNfe()" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Cancelar</button>
         <span id="nfe-msg" class="form-msg"></span>
       </div>
@@ -549,7 +445,6 @@ function cancelarNfe() {
   nfeXmlDados = null;
   document.getElementById('nfe-preview').style.display = 'none';
   document.getElementById('nfe-importar').style.display = 'none';
-  if (document.getElementById('nfe-xml-file')) document.getElementById('nfe-xml-file').value = '';
 }
 
 async function confirmarNfe() {
@@ -592,8 +487,7 @@ async function confirmarNfe() {
       ncm: it.ncm, cfop: it.cfop, unidade: it.unidade,
       quantidade: it.quantidade, valor_unitario: it.valorUnitario,
       valor_total: it.valorTotal, cod_anp: it.codAnp, desc_anp: it.descAnp,
-      cst_icms: it.cstIcms, aliq_icms: it.aliqIcms,
-      aliq_pis: it.aliqPis, aliq_cofins: it.aliqCofins,
+      cst_icms: it.cstIcms, aliq_icms: it.aliqIcms, aliq_pis: it.aliqPis, aliq_cofins: it.aliqCofins,
     });
     if (it.ehCombustivel && it.tanqueId) {
       const { data: tanque } = await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id', it.tanqueId).single();
@@ -603,18 +497,14 @@ async function confirmarNfe() {
         await sb.from('oct_lmc').insert({
           empresa_id: _empresaId, tanque_id: it.tanqueId,
           data: new Date().toISOString().split('T')[0],
-          saldo_anterior: tanque.estoque_atual, entrada: it.quantidade,
-          saldo_final: novoEstoque,
+          saldo_anterior: tanque.estoque_atual, entrada: it.quantidade, saldo_final: novoEstoque,
           observacoes: `NF-e ${d.numero}/${d.serie} — ${d.emitNome}`,
         });
       }
     }
   }
 
-  // Move da coluna manifestada para importada
-  if (d.manifestadaId) {
-    await sb.from('oct_nfe_manifestadas').update({ status: 'importada' }).eq('id', d.manifestadaId);
-  }
+  if (d.manifestadaId) await sb.from('oct_nfe_manifestadas').update({ status: 'importada' }).eq('id', d.manifestadaId);
 
   msg.textContent = '✅ NF-e importada com sucesso!'; msg.style.color = '#4caf50';
   nfeXmlDados = null;
