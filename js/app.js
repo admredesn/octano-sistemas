@@ -54,13 +54,13 @@ async function renderDashboard(session) {
       <div id="conteudo" class="conteudo"></div>
     </div>
   `;
-
   if (!perfil?.oct_empresas) { abrirModulo('empresa'); }
   else { abrirModulo('tanques'); }
 }
 
 async function abrirModulo(mod) {
-  if (mod === 'empresa') { await moduloEmpresa(); return; }
-  if (mod === 'tanques') { await moduloTanques(); return; }
+  if (mod === 'empresa')  { await moduloEmpresa(); return; }
+  if (mod === 'tanques')  { await moduloTanques(); return; }
+  if (mod === 'nfe')      { await moduloNfe(); return; }
   document.getElementById('conteudo').innerHTML = '<p style="color:#555;padding:40px;text-align:center">Módulo <strong>' + mod + '</strong> em desenvolvimento.</p>';
 }
