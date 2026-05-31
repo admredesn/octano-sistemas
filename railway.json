@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python -m http.server $PORT",
+    "startCommand": "python server.py",
     "restartPolicyType": "ON_FAILURE"
   }
 }
