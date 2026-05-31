@@ -1,9 +1,8 @@
-
 const { createClient } = supabase;
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-async function login(email, senha) {
-  const { data, error } = await sb.auth.signInWithPassword({ email, senha });
+async function login(email, password) {
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
 }
