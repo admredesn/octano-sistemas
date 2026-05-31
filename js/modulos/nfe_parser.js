@@ -1,5 +1,30 @@
 
 // Parser completo de XML NF-e versão 4.00
+
+// Códigos ANP que exigem vínculo com TANQUE (combustíveis automotivos)
+// Série 130xxxxx = combustíveis líquidos (gasolina, etanol, diesel)
+// Série 130302010 = GNV
+// Demais (620xxxxx = lubrificantes, 320xxxxx = outros) NÃO precisam de tanque
+const ANP_COMBUSTIVEL_TANQUE = [
+  '130101001','130101002', // Diesel S500, S10
+  '130201001','130201002', // Etanol hidratado, anidro
+  '130302010',             // GNV
+  '130401001','130401002', // Gasolina comum, aditivada
+  '130401003',             // Gasolina Premium
+  '320102001','320102002', // Gasolina C comum, aditivada (mistura)
+  '320101100',             // ARLA 32
+];
+
+function ehCombustivelTanque(codAnp) {
+  if (!codAnp) return false;
+  const c = String(codAnp).trim();
+  // Combustíveis automotivos começam com 1301, 1302, 1303, 1304 ou são gasolina C (3201)
+  return ANP_COMBUSTIVEL_TANQUE.includes(c) ||
+    c.startsWith('1301') || c.startsWith('1302') ||
+    c.startsWith('1303') || c.startsWith('1304') ||
+    c === '320102001' || c === '320102002' || c === '320101100';
+}
+
 function nfeNs(xml) {
   return xml.documentElement?.namespaceURI || 'http://www.portalfiscal.inf.br/nfe';
 }
@@ -78,7 +103,6 @@ function parseNFe(xml) {
   const fatNum = qv(fat, 'nFat');
   const fatVLiq= qf(fat, 'vLiq');
 
-  // Duplicatas
   const dups = [];
   for (const dup of (nfe.getElementsByTagNameNS ? nfe.getElementsByTagNameNS(ns,'dup') : nfe.getElementsByTagName('dup'))) {
     dups.push({ nDup: qv(dup,'nDup'), dVenc: qv(dup,'dVenc'), vDup: qf(dup,'vDup') });
@@ -96,14 +120,14 @@ function parseNFe(xml) {
   const infCpl  = qv(infAdic, 'infCpl');
 
   // PROTOCOLO
-  const prot    = q(xml, 'infProt');
-  const chNFe   = qv(prot, 'chNFe') || (qv(nfe, 'Id') || '').replace('NFe','');
-  const nProt   = qv(prot, 'nProt');
+  const prot  = q(xml, 'infProt');
+  const chNFe = qv(prot, 'chNFe') || (qv(nfe, 'Id') || '').replace('NFe','');
+  const nProt = qv(prot, 'nProt');
 
   // ITENS
   const dets = nfe.getElementsByTagNameNS ? nfe.getElementsByTagNameNS(ns,'det') : nfe.getElementsByTagName('det');
   const itens = [];
-  let cfopCapa = ''; // pega CFOP do primeiro item
+  let cfopCapa = '';
 
   for (const det of dets) {
     const prod    = q(det, 'prod');
@@ -116,35 +140,54 @@ function parseNFe(xml) {
     const cfopItem = qv(prod, 'CFOP');
     if (!cfopCapa && cfopItem) cfopCapa = cfopItem;
 
-    // ICMS — pega primeiro filho
+    // ICMS
     let cstIcms='', aliqIcms=0, vBCItem=0, vICMSItem=0;
     let qBCMonoRetItem=0, adRemItem=0, vICMSMonoRetItem=0;
-    const icmsChild = icms?.firstElementChild || (icms?.children?.[0]);
+    let vBCSTItem=0, vICMSSTItem=0;
+    const icmsChild = icms?.firstElementChild || icms?.children?.[0];
     if (icmsChild) {
-      cstIcms           = qv(icmsChild,'CST') || qv(icmsChild,'CSOSN');
-      aliqIcms          = qf(icmsChild,'pICMS');
-      vBCItem           = qf(icmsChild,'vBC');
-      vICMSItem         = qf(icmsChild,'vICMS');
-      qBCMonoRetItem    = qf(icmsChild,'qBCMonoRet');
-      adRemItem         = qf(icmsChild,'adRemICMSRet');
-      vICMSMonoRetItem  = qf(icmsChild,'vICMSMonoRet');
+      cstIcms          = qv(icmsChild,'CST') || qv(icmsChild,'CSOSN');
+      aliqIcms         = qf(icmsChild,'pICMS');
+      vBCItem          = qf(icmsChild,'vBC');
+      vICMSItem        = qf(icmsChild,'vICMS');
+      qBCMonoRetItem   = qf(icmsChild,'qBCMonoRet');
+      adRemItem        = qf(icmsChild,'adRemICMSRet');
+      vICMSMonoRetItem = qf(icmsChild,'vICMSMonoRet');
+      vBCSTItem        = qf(icmsChild,'vBCSTRet') || qf(icmsChild,'vBCST');
+      vICMSSTItem      = qf(icmsChild,'vICMSSTRet') || qf(icmsChild,'vST');
     }
 
     // PIS
-    let cstPis='', aliqPis=0, vPisItem=0;
+    let cstPis='', aliqPis=0, vPisItem=0, vBCPisItem=0;
     const pisChild = pis?.firstElementChild || pis?.children?.[0];
-    if (pisChild) { cstPis=qv(pisChild,'CST'); aliqPis=qf(pisChild,'pPIS'); vPisItem=qf(pisChild,'vPIS'); }
+    if (pisChild) {
+      cstPis    = qv(pisChild,'CST');
+      aliqPis   = qf(pisChild,'pPIS');
+      vPisItem  = qf(pisChild,'vPIS');
+      vBCPisItem= qf(pisChild,'vBC');
+    }
 
     // COFINS
-    let cstCofins='', aliqCofins=0, vCofinsItem=0;
+    let cstCofins='', aliqCofins=0, vCofinsItem=0, vBCCofinsItem=0;
     const cofinsChild = cofins?.firstElementChild || cofins?.children?.[0];
-    if (cofinsChild) { cstCofins=qv(cofinsChild,'CST'); aliqCofins=qf(cofinsChild,'pCOFINS'); vCofinsItem=qf(cofinsChild,'vCOFINS'); }
+    if (cofinsChild) {
+      cstCofins     = qv(cofinsChild,'CST');
+      aliqCofins    = qf(cofinsChild,'pCOFINS');
+      vCofinsItem   = qf(cofinsChild,'vCOFINS');
+      vBCCofinsItem = qf(cofinsChild,'vBC');
+    }
 
     // ANP
     const codAnp  = qv(comb, 'cProdANP');
     const descAnp = qv(comb, 'descANP');
     const pBio    = qf(comb, 'pBio');
     const ufCons  = qv(comb, 'UFCons');
+
+    // Determina tipo do produto
+    const temAnp          = !!codAnp;
+    const precisaTanque   = ehCombustivelTanque(codAnp);
+    const ehLubrificante  = temAnp && !precisaTanque;
+    const tipoItem        = precisaTanque ? 'combustivel' : (ehLubrificante ? 'lubrificante' : 'mercadoria');
 
     itens.push({
       nItem: det.getAttribute('nItem') || String(itens.length+1),
@@ -153,13 +196,23 @@ function parseNFe(xml) {
       cfop: cfopItem, unidade: qv(prod,'uCom'),
       quantidade: qf(prod,'qCom'), valorUnitario: qf(prod,'vUnCom'), valorTotal: qf(prod,'vProd'),
       vDesc: qf(prod,'vDesc'),
+      // ICMS
       cstIcms, aliqIcms, vBCItem, vICMSItem,
+      vBCSTItem, vICMSSTItem,
+      // ICMS Monofásico
       qBCMonoRetItem, adRemItem, vICMSMonoRetItem,
       ehMonofasico: vICMSMonoRetItem > 0,
-      cstPis, aliqPis, vPisItem,
-      cstCofins, aliqCofins, vCofinsItem,
+      // PIS/COFINS
+      cstPis, aliqPis, vPisItem, vBCPisItem,
+      cstCofins, aliqCofins, vCofinsItem, vBCCofinsItem,
+      // ANP
       codAnp, descAnp, pBio, ufCons,
-      ehCombustivel: !!codAnp,
+      // Tipo do produto
+      temAnp,
+      precisaTanque,    // true = combustível automotivo (gasolina, diesel, etanol, GNV)
+      ehLubrificante,   // true = lubrificante/óleo (tem ANP mas NÃO precisa tanque)
+      ehCombustivel: precisaTanque, // compatibilidade com código anterior
+      tipoItem,         // 'combustivel' | 'lubrificante' | 'mercadoria'
       tanqueId: null,
     });
   }
@@ -167,7 +220,7 @@ function parseNFe(xml) {
   return {
     chNFe, nProt,
     numero, serie, natOp, dhEmi, tpNF, finNFe, mod,
-    cfopCapa, // CFOP da capa = CFOP do primeiro item
+    cfopCapa,
     emitCnpj, emitNome, emitFant, emitIE, emitCRT, emitEnd, emitMun, emitUF,
     destCnpj, destNome, destIE,
     vBC, vICMS, vBCST, vST, vProd, vFrete, vDesc, vIPI, vPIS, vCOFINS, vNF,
