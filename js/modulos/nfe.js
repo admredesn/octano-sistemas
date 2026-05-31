@@ -147,12 +147,11 @@ async function moduloNfe() {
                     <div>
                       <div class="nfe-card-numero">NF-e ${n.numero||'—'}/${n.serie||'—'}</div>
                       <div class="nfe-card-emit">${n.oct_pessoas?.nome||'—'}</div>
-                      <div style="font-size:0.7rem;color:#555">${n.emissao?new Date(n.emissao+'T12:00:00').toLocaleDateString('pt-BR'):'—'}</div>
+                      <div style="font-size:0.7rem;color:#555">${n.emissao?new Date(n.emissao+'T12:00:00').toLocaleDateString('pt-BR'):'—'}${n.cfop?` · CFOP ${n.cfop}`:''}</div>
                     </div>
                     <div style="text-align:right">
                       <div style="color:#4caf50;font-weight:600;font-size:0.88rem">R$ ${Number(n.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
                       <span class="nfe-status ${n.status}">${n.status}</span>
-                      <div style="font-size:0.68rem;color:#555;margin-top:2px">🔍 ver detalhes</div>
                     </div>
                   </div>
                 </div>`).join('')}
@@ -181,9 +180,7 @@ async function abrirDetalheNfe(id) {
   const itens = nfe.oct_nfe_entrada_itens || [];
   const pags  = nfe.forma_pagamento || [];
   const dups  = nfe.duplicatas || [];
-
-  // Recalcula ICMS Monofásico dos itens
-  const totalMonoRet = itens.reduce((s,it) => s + Number(it.v_icms_mono_ret||0), 0);
+  const cfopDesc = cfopDescricao(nfe.cfop);
 
   div.innerHTML = `
     <div style="background:#13151f;border:1px solid #f97316;border-radius:12px;overflow:hidden">
@@ -216,7 +213,11 @@ async function abrirDetalheNfe(id) {
           <div class="form-group"><label>Data Entrada</label><input id="edit-entrada" type="date" value="${nfe.entrada||''}" /></div>
           <div class="form-group span2"><label>Fornecedor</label><input type="text" value="${nfe.oct_pessoas?.nome||'—'}" disabled style="opacity:0.6" /></div>
           <div class="form-group span2"><label>Natureza da Operação</label><input id="edit-natureza" type="text" value="${nfe.natureza||''}" /></div>
-          <div class="form-group"><label>CFOP</label><input id="edit-cfop" type="text" value="${nfe.cfop||''}" /></div>
+          <div class="form-group">
+            <label>CFOP</label>
+            <input id="edit-cfop" type="text" value="${nfe.cfop||''}" oninput="atualizarDescCfop(this.value)" />
+            <span id="cfop-desc" style="font-size:0.75rem;color:#60a5fa;margin-top:3px;display:block">${cfopDesc}</span>
+          </div>
           <div class="form-group"><label>Valor Produtos</label><input type="text" value="R$ ${Number(nfe.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}" disabled style="opacity:0.6" /></div>
           <div class="form-group"><label>Valor Total NF-e</label><input id="edit-valor-total" type="number" step="0.01" value="${nfe.valor_total||0}" /></div>
           <div class="form-group"><label>Valor Frete</label><input id="edit-frete" type="number" step="0.01" value="${nfe.valor_frete||0}" /></div>
@@ -230,7 +231,7 @@ async function abrirDetalheNfe(id) {
             </select>
           </div>
           <div class="form-group span2"><label>Chave NF-e</label><input id="edit-chave" type="text" value="${nfe.chave_nfe||''}" style="font-size:0.72rem;font-family:monospace" /></div>
-          ${nfe.n_prot ? `<div class="form-group span2"><label>Protocolo Autorização</label><input type="text" value="${nfe.n_prot}" disabled style="opacity:0.6;font-family:monospace;font-size:0.82rem" /></div>` : ''}
+          ${nfe.n_prot ? `<div class="form-group span2"><label>Protocolo</label><input type="text" value="${nfe.n_prot}" disabled style="opacity:0.6;font-family:monospace;font-size:0.82rem" /></div>` : ''}
         </div>
       </div>
 
@@ -238,31 +239,28 @@ async function abrirDetalheNfe(id) {
       <div id="aba-itens" class="nfe-aba-conteudo" style="display:none;padding:20px">
         <div style="overflow-x:auto">
           <table class="nfe-tabela">
-            <thead>
-              <tr><th>#</th><th>Cód.</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Un</th><th>Vl.Unit</th><th>Vl.Total</th><th>ANP</th></tr>
-            </thead>
+            <thead><tr><th>#</th><th>Cód.</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Un</th><th>Vl.Unit</th><th>Total</th><th>ANP</th></tr></thead>
             <tbody>
               ${itens.map((it,i) => `
                 <tr class="${it.cod_anp?'item-combustivel':''}">
                   <td>${i+1}</td>
                   <td style="font-size:0.75rem;font-family:monospace">${it.codigo||'—'}</td>
-                  <td>
-                    <strong>${it.descricao||'—'}</strong>
-                    ${it.cod_anp?`<br><span style="font-size:0.68rem;color:#888">ANP: ${it.cod_anp} — ${it.desc_anp||''}</span>`:''}
-                  </td>
+                  <td><strong>${it.descricao||'—'}</strong>${it.cod_anp?`<br><span style="font-size:0.68rem;color:#888">ANP: ${it.cod_anp} — ${it.desc_anp||''}</span>`:''}</td>
                   <td style="font-size:0.75rem">${it.ncm||'—'}</td>
-                  <td style="font-size:0.75rem">${it.cfop||'—'}</td>
+                  <td style="font-size:0.75rem">
+                    ${it.cfop||'—'}
+                    ${it.cfop ? `<br><span style="font-size:0.65rem;color:#60a5fa">${cfopDescricao(it.cfop)}</span>` : ''}
+                  </td>
                   <td>${Number(it.quantidade||0).toLocaleString('pt-BR',{minimumFractionDigits:3})}</td>
                   <td style="font-size:0.75rem">${it.unidade||'—'}</td>
                   <td>R$ ${Number(it.valor_unitario||0).toLocaleString('pt-BR',{minimumFractionDigits:4})}</td>
                   <td><strong>R$ ${Number(it.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
                   <td>${it.cod_anp?'<span class="nfe-badge-anp">⛽</span>':'—'}</td>
-                </tr>
-              `).join('')}
+                </tr>`).join('')}
             </tbody>
             <tfoot>
               <tr style="background:#1e2235">
-                <td colspan="8" style="text-align:right;font-weight:600;padding:8px 10px">Total Produtos:</td>
+                <td colspan="8" style="text-align:right;font-weight:600;padding:8px 10px">Total:</td>
                 <td style="font-weight:700;color:#f97316;padding:8px 10px">R$ ${itens.reduce((s,it)=>s+Number(it.valor_total||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
                 <td></td>
               </tr>
@@ -274,47 +272,34 @@ async function abrirDetalheNfe(id) {
       <!-- TRIBUTAÇÃO -->
       <div id="aba-tributacao" class="nfe-aba-conteudo" style="display:none;padding:20px">
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
-          <div style="background:#0f1117;border-radius:8px;padding:12px">
-            <div class="nfe-label">Base ICMS</div>
-            <div style="font-size:1.1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_icms||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-          </div>
-          <div style="background:#0f1117;border-radius:8px;padding:12px">
-            <div class="nfe-label">Valor PIS</div>
-            <div style="font-size:1.1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_pis||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-          </div>
-          <div style="background:#0f1117;border-radius:8px;padding:12px">
-            <div class="nfe-label">Valor COFINS</div>
-            <div style="font-size:1.1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_cofins||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-          </div>
+          <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Base ICMS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_icms||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
+          <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Valor PIS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_pis||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
+          <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Valor COFINS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_cofins||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
           ${nfe.v_icms_mono_ret ? `
           <div style="background:#1a2a1a;border:1px solid #2a5a2a;border-radius:8px;padding:12px;grid-column:span 3">
             <div class="nfe-label">⛽ ICMS Monofásico Retido (Combustíveis)</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
               <div><div class="nfe-label">Qtd BC Mono Ret</div><div style="font-weight:600">${Number(nfe.q_bc_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} L</div></div>
               <div><div class="nfe-label">Valor ICMS Mono Ret</div><div style="font-weight:600;color:#4caf50">R$ ${Number(nfe.v_icms_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
             </div>
           </div>` : ''}
         </div>
-
-        <div class="modulo-header"><h2>Tributação por item</h2></div>
+        <div class="modulo-header"><h2>Por item</h2></div>
         <div style="overflow-x:auto">
           <table class="nfe-tabela">
-            <thead>
-              <tr><th>Descrição</th><th>CST ICMS</th><th>Alíq ICMS</th><th>ICMS Mono Ret</th><th>CST PIS</th><th>Alíq PIS</th><th>CST COFINS</th><th>Alíq COFINS</th></tr>
-            </thead>
+            <thead><tr><th>Descrição</th><th>CST ICMS</th><th>Alíq ICMS</th><th>ICMS Mono Ret</th><th>CST PIS</th><th>Alíq PIS</th><th>CST COFINS</th><th>Alíq COFINS</th></tr></thead>
             <tbody>
-              ${itens.map(it => `
+              ${itens.map(it=>`
                 <tr class="${it.cod_anp?'item-combustivel':''}">
                   <td>${it.descricao}</td>
                   <td>${it.cst_icms||'—'}</td>
                   <td>${it.aliq_icms||0}%</td>
-                  <td>${it.v_icms_mono_ret ? `<span style="color:#4caf50">R$ ${Number(it.v_icms_mono_ret).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>` : '—'}</td>
+                  <td>${it.v_icms_mono_ret?`<span style="color:#4caf50">R$ ${Number(it.v_icms_mono_ret).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:'—'}</td>
                   <td>${it.cst_pis||'—'}</td>
                   <td>${it.aliq_pis||0}%</td>
                   <td>${it.cst_cofins||'—'}</td>
                   <td>${it.aliq_cofins||0}%</td>
-                </tr>
-              `).join('')}
+                </tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -322,28 +307,18 @@ async function abrirDetalheNfe(id) {
 
       <!-- PAGAMENTO -->
       <div id="aba-pagamento" class="nfe-aba-conteudo" style="display:none;padding:20px">
-        ${pags.length === 0
-          ? `<p style="color:#555;text-align:center;padding:20px">Sem informações de pagamento</p>`
-          : `<table class="nfe-tabela" style="margin-bottom:16px">
-              <thead><tr><th>Condição</th><th>Forma</th><th>Descrição</th><th>Valor</th></tr></thead>
-              <tbody>
-                ${pags.map(p=>`
-                  <tr>
-                    <td>${p.indPag==='0'?'À Vista':'A Prazo'}</td>
-                    <td>${TIPOS_PAG[p.tPag]||p.tPag||'—'}</td>
-                    <td>${p.xPag||'—'}</td>
-                    <td><strong>R$ ${Number(p.vPag||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
-                  </tr>
-                `).join('')}
-              </tbody>
-              <tfoot><tr style="background:#1e2235"><td colspan="3" style="font-weight:600;padding:8px 10px">Total:</td><td style="font-weight:700;color:#f97316;padding:8px 10px">R$ ${pags.reduce((s,p)=>s+Number(p.vPag||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr></tfoot>
-            </table>`}
-        ${dups.length > 0 ? `
-          <div class="modulo-header"><h2>Duplicatas / Vencimentos</h2></div>
+        ${pags.length===0 ? `<p style="color:#555;text-align:center;padding:20px">Sem informações de pagamento</p>` : `
+          <table class="nfe-tabela" style="margin-bottom:16px">
+            <thead><tr><th>Condição</th><th>Forma</th><th>Descrição</th><th>Valor</th></tr></thead>
+            <tbody>${pags.map(p=>`<tr><td>${p.indPag==='0'?'À Vista':'A Prazo'}</td><td>${TIPOS_PAG[p.tPag]||p.tPag||'—'}</td><td>${p.xPag||'—'}</td><td><strong>R$ ${Number(p.vPag||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td></tr>`).join('')}</tbody>
+            <tfoot><tr style="background:#1e2235"><td colspan="3" style="font-weight:600;padding:8px 10px">Total:</td><td style="font-weight:700;color:#f97316;padding:8px 10px">R$ ${pags.reduce((s,p)=>s+Number(p.vPag||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr></tfoot>
+          </table>`}
+        ${dups.length>0?`
+          <div class="modulo-header"><h2>Duplicatas</h2></div>
           <table class="nfe-tabela">
-            <thead><tr><th>Nº Dup.</th><th>Vencimento</th><th>Valor</th></tr></thead>
+            <thead><tr><th>Nº</th><th>Vencimento</th><th>Valor</th></tr></thead>
             <tbody>${dups.map(d=>`<tr><td>${d.nDup||'—'}</td><td>${d.dVenc?new Date(d.dVenc+'T12:00:00').toLocaleDateString('pt-BR'):'—'}</td><td>R$ ${Number(d.vDup||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr>`).join('')}</tbody>
-          </table>` : ''}
+          </table>`:''}
       </div>
 
       <!-- TRANSPORTE -->
@@ -356,7 +331,7 @@ async function abrirDetalheNfe(id) {
 
       <!-- OBS -->
       <div id="aba-obs" class="nfe-aba-conteudo" style="display:none;padding:20px">
-        ${nfe.inf_cpl ? `<div style="background:#0f1117;border-radius:8px;padding:14px;margin-bottom:16px;font-size:0.8rem;color:#888;line-height:1.6"><div class="nfe-label" style="margin-bottom:8px">Informações Adicionais do XML</div>${nfe.inf_cpl}</div>` : ''}
+        ${nfe.inf_cpl?`<div style="background:#0f1117;border-radius:8px;padding:14px;margin-bottom:16px;font-size:0.78rem;color:#888;line-height:1.6"><div class="nfe-label" style="margin-bottom:8px">Informações Adicionais (XML)</div>${nfe.inf_cpl.substring(0,800)}${nfe.inf_cpl.length>800?'...':''}</div>`:''}
         <div class="form-group">
           <label>Observações internas</label>
           <textarea id="edit-obs" rows="4" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.9rem;resize:vertical">${nfe.observacoes||''}</textarea>
@@ -373,51 +348,56 @@ async function abrirDetalheNfe(id) {
   `;
 }
 
+function atualizarDescCfop(valor) {
+  const desc = cfopDescricao(valor);
+  const el = document.getElementById('cfop-desc');
+  if (el) el.textContent = desc;
+}
+
 function mostrarAba(id) {
-  document.querySelectorAll('.nfe-aba-conteudo').forEach(el => el.style.display = 'none');
-  document.querySelectorAll('.nfe-aba').forEach(el => el.classList.remove('ativo'));
-  document.getElementById(id).style.display = 'block';
-  document.getElementById('btn-' + id).classList.add('ativo');
+  document.querySelectorAll('.nfe-aba-conteudo').forEach(el=>el.style.display='none');
+  document.querySelectorAll('.nfe-aba').forEach(el=>el.classList.remove('ativo'));
+  document.getElementById(id).style.display='block';
+  document.getElementById('btn-'+id).classList.add('ativo');
 }
 
-function fecharDetalheNfe() { document.getElementById('nfe-detalhe').style.display = 'none'; }
+function fecharDetalheNfe(){document.getElementById('nfe-detalhe').style.display='none';}
 
-async function salvarEdicaoNfe(id) {
-  const msg = document.getElementById('nfe-detalhe-msg');
-  msg.textContent = 'Salvando...'; msg.style.color = '#aaa';
-  const { error } = await sb.from('oct_nfe_entrada').update({
-    numero:         document.getElementById('edit-numero').value,
-    serie:          document.getElementById('edit-serie').value,
-    emissao:        document.getElementById('edit-emissao').value || null,
-    entrada:        document.getElementById('edit-entrada').value || null,
-    natureza:       document.getElementById('edit-natureza').value,
-    cfop:           document.getElementById('edit-cfop').value,
-    valor_total:    parseFloat(document.getElementById('edit-valor-total').value) || 0,
-    valor_frete:    parseFloat(document.getElementById('edit-frete').value) || 0,
-    valor_desconto: parseFloat(document.getElementById('edit-desconto').value) || 0,
-    chave_nfe:      document.getElementById('edit-chave').value || null,
-    status:         document.getElementById('edit-status').value,
-    observacoes:    document.getElementById('edit-obs')?.value || null,
-  }).eq('id', id);
-  if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
-  msg.textContent = '✅ Salvo!'; msg.style.color = '#4caf50';
-  setTimeout(() => moduloNfe(), 1200);
+async function salvarEdicaoNfe(id){
+  const msg=document.getElementById('nfe-detalhe-msg');
+  msg.textContent='Salvando...';msg.style.color='#aaa';
+  const{error}=await sb.from('oct_nfe_entrada').update({
+    numero:document.getElementById('edit-numero').value,
+    serie:document.getElementById('edit-serie').value,
+    emissao:document.getElementById('edit-emissao').value||null,
+    entrada:document.getElementById('edit-entrada').value||null,
+    natureza:document.getElementById('edit-natureza').value,
+    cfop:document.getElementById('edit-cfop').value,
+    valor_total:parseFloat(document.getElementById('edit-valor-total').value)||0,
+    valor_frete:parseFloat(document.getElementById('edit-frete').value)||0,
+    valor_desconto:parseFloat(document.getElementById('edit-desconto').value)||0,
+    chave_nfe:document.getElementById('edit-chave').value||null,
+    status:document.getElementById('edit-status').value,
+    observacoes:document.getElementById('edit-obs')?.value||null,
+  }).eq('id',id);
+  if(error){msg.textContent='Erro: '+error.message;msg.style.color='#f44';return;}
+  msg.textContent='✅ Salvo!';msg.style.color='#4caf50';
+  setTimeout(()=>moduloNfe(),1200);
 }
 
-async function confirmarNfeImportada(id) {
-  await sb.from('oct_nfe_entrada').update({ status: 'confirmada' }).eq('id', id);
-  document.getElementById('nfe-detalhe-msg').textContent = '✅ Confirmada!';
-  document.getElementById('nfe-detalhe-msg').style.color = '#4caf50';
-  setTimeout(() => moduloNfe(), 1000);
+async function confirmarNfeImportada(id){
+  await sb.from('oct_nfe_entrada').update({status:'confirmada'}).eq('id',id);
+  document.getElementById('nfe-detalhe-msg').textContent='✅ Confirmada!';
+  document.getElementById('nfe-detalhe-msg').style.color='#4caf50';
+  setTimeout(()=>moduloNfe(),1000);
 }
 
 // ─── MANIFESTAÇÃO ────────────────────────────────────────────────────────────
+function abrirManifestar(){const p=document.getElementById('nfe-manifestar-painel');p.style.display=p.style.display==='none'?'block':'none';}
+function fecharManifestar(){document.getElementById('nfe-manifestar-painel').style.display='none';}
+function limparSenhaSessao(){setCertSenha(null);moduloNfe().then(()=>abrirManifestar());}
 
-function abrirManifestar() { const p=document.getElementById('nfe-manifestar-painel'); p.style.display=p.style.display==='none'?'block':'none'; }
-function fecharManifestar() { document.getElementById('nfe-manifestar-painel').style.display='none'; }
-function limparSenhaSessao() { setCertSenha(null); moduloNfe().then(()=>abrirManifestar()); }
-
-async function executarManifestar() {
+async function executarManifestar(){
   const msg=document.getElementById('manifest-msg');
   const erroDiv=document.getElementById('manifest-erro-sefaz');
   const ambiente=document.getElementById('manifest-ambiente').value;
@@ -426,10 +406,9 @@ async function executarManifestar() {
   erroDiv.style.display='none';
   if(!senha){msg.textContent='Informe a senha.';msg.style.color='#f44';return;}
   setCertSenha(senha);msg.textContent='🔄 Consultando SEFAZ...';msg.style.color='#888';
-  try {
-    const {data:certBlob}=await sb.storage.from('octano-certs').download(_empresa.cert_path);
-    const buf=await certBlob.arrayBuffer();
-    const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
+  try{
+    const{data:cb}=await sb.storage.from('octano-certs').download(_empresa.cert_path);
+    const buf=await cb.arrayBuffer();const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
     const cnpj=_empresa.cnpj?.replace(/\D/g,'');
     const resp=await fetch(`${SEFAZ_URL}/manifestar`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cnpj,cert_base64:b64,cert_senha:senha,ambiente,ultimo_nsu:nsu})});
     const dados=await resp.json();
@@ -441,10 +420,10 @@ async function executarManifestar() {
     if(dados.ultimo_nsu)document.getElementById('manifest-nsu').value=dados.ultimo_nsu;
     msg.textContent=`✅ ${salvas} NF-e(s) salvas!`;msg.style.color='#4caf50';
     setTimeout(()=>moduloNfe(),1000);
-  } catch(e){msg.textContent='❌ '+e.message;msg.style.color='#f44';}
+  }catch(e){msg.textContent='❌ '+e.message;msg.style.color='#f44';}
 }
 
-async function importarDoManifestado(id) {
+async function importarDoManifestado(id){
   const{data:n}=await sb.from('oct_nfe_manifestadas').select('*').eq('id',id).single();
   if(!n?.xml){alert('XML não disponível. Use "Baixar XML" primeiro.');return;}
   const{data:tanques}=await sb.from('oct_tanques').select('*').eq('empresa_id',_empresaId).order('numero');
@@ -454,7 +433,7 @@ async function importarDoManifestado(id) {
   await processarXmlNfe(xml,`NF-e_${n.numero||n.nsu}.xml`,id);
 }
 
-async function baixarXmlManifestado(id,nsu) {
+async function baixarXmlManifestado(id,nsu){
   const senha=getCertSenha();const ambiente=document.getElementById('manifest-ambiente')?.value||'producao';
   if(!senha){alert('Informe a senha no painel de manifestação.');return;}
   try{
@@ -468,7 +447,7 @@ async function baixarXmlManifestado(id,nsu) {
   }catch(e){alert('Erro: '+e.message);}
 }
 
-async function cienciaManifestado(chave) {
+async function cienciaManifestado(chave){
   const senha=getCertSenha();const ambiente=document.getElementById('manifest-ambiente')?.value||'producao';
   if(!senha){alert('Informe a senha no painel de manifestação.');return;}
   try{
@@ -486,51 +465,47 @@ function abrirImportarNfe(){const a=document.getElementById('nfe-importar');a.st
 function lerXmlNfe(input){if(!input.files.length)return;lerXmlNfeFile(input.files[0]);}
 function lerXmlNfeFile(file){const r=new FileReader();r.onload=async(e)=>{try{const parser=new DOMParser();const xml=parser.parseFromString(e.target.result,'text/xml');const{data:tanques}=await sb.from('oct_tanques').select('*').eq('empresa_id',_empresaId).order('numero');nfeTanques=tanques||[];await processarXmlNfe(xml,file.name,null);}catch(err){alert('Erro: '+err.message);}};r.readAsText(file,'UTF-8');}
 
-async function processarXmlNfe(xml, nomeArquivo, manifestadaId) {
-  // Usa o parser completo
-  const d = parseNFe(xml);
-  const xmlString = new XMLSerializer().serializeToString(xml);
-  nfeXmlDados = { ...d, nomeArquivo, manifestadaId, xmlString };
+async function processarXmlNfe(xml, nomeArquivo, manifestadaId){
+  const d=parseNFe(xml);
+  const xmlString=new XMLSerializer().serializeToString(xml);
+  nfeXmlDados={...d,nomeArquivo,manifestadaId,xmlString};
   renderPreviewNfe();
 }
 
-function renderPreviewNfe() {
-  const d = nfeXmlDados;
-  document.getElementById('nfe-importar').style.display = 'none';
-  document.getElementById('nfe-detalhe').style.display = 'none';
-  const preview = document.getElementById('nfe-preview');
-  preview.style.display = 'block';
-  preview.scrollIntoView({ behavior: 'smooth' });
+function renderPreviewNfe(){
+  const d=nfeXmlDados;
+  document.getElementById('nfe-importar').style.display='none';
+  document.getElementById('nfe-detalhe').style.display='none';
+  const preview=document.getElementById('nfe-preview');
+  preview.style.display='block';
+  preview.scrollIntoView({behavior:'smooth'});
 
-  const combItens = d.itens.filter(it => it.ehCombustivel);
+  const cfopDesc=cfopDescricao(d.cfopCapa||d.itens[0]?.cfop);
 
-  preview.innerHTML = `
+  preview.innerHTML=`
     <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:20px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <h3 style="color:#f97316">📄 NF-e ${d.numero}/${d.serie} — ${d.emitNome}</h3>
         <button onclick="cancelarNfe()" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">✕</button>
       </div>
-
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
         <div><span class="nfe-label">Nº/Série</span><br><strong>${d.numero}/${d.serie}</strong></div>
         <div><span class="nfe-label">Emissão</span><br><strong>${d.dhEmi?new Date(d.dhEmi+'T12:00:00').toLocaleDateString('pt-BR'):'-'}</strong></div>
         <div><span class="nfe-label">Total NF-e</span><br><strong style="color:#f97316;font-size:1.1rem">R$ ${d.vNF.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
         <div style="grid-column:span 2"><span class="nfe-label">Fornecedor</span><br><strong>${d.emitNome}</strong><br><span style="font-size:0.72rem;color:#888">${d.emitCnpj} | IE: ${d.emitIE}</span></div>
-        <div><span class="nfe-label">Pagamento</span><br>${d.pagamentos.map(p=>`${p.xPag||TIPOS_PAG[p.tPag]||p.tPag}: R$ ${p.vPag.toLocaleString('pt-BR',{minimumFractionDigits:2})}`).join('<br>')||'—'}</div>
+        <div>
+          <span class="nfe-label">CFOP</span><br>
+          <strong>${d.cfopCapa||d.itens[0]?.cfop||'—'}</strong>
+          ${cfopDesc?`<br><span style="font-size:0.72rem;color:#60a5fa">${cfopDesc}</span>`:''}
+        </div>
       </div>
-
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#0f1117;border-radius:8px;margin-bottom:16px;font-size:0.82rem">
         <div><span class="nfe-label">ICMS BC</span><br>R$ ${d.vBC.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-        <div><span class="nfe-label">ICMS Valor</span><br>R$ ${d.vICMS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         <div><span class="nfe-label">PIS</span><br>R$ ${d.vPIS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         <div><span class="nfe-label">COFINS</span><br>R$ ${d.vCOFINS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-        ${d.vICMSMonoRet > 0 ? `
-        <div style="grid-column:span 4;background:#1a2a1a;border-radius:6px;padding:8px;border:1px solid #2a5a2a">
-          <span class="nfe-label">⛽ ICMS Monofásico Retido</span>
-          <span style="margin-left:12px;color:#4caf50;font-weight:600">R$ ${d.vICMSMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:2})} (${d.qBCMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:3})} L)</span>
-        </div>` : ''}
+        <div><span class="nfe-label">Frete</span><br>R$ ${d.vFrete.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        ${d.vICMSMonoRet>0?`<div style="grid-column:span 4;background:#1a2a1a;border-radius:6px;padding:8px;border:1px solid #2a5a2a"><span class="nfe-label">⛽ ICMS Monofásico Retido</span><span style="margin-left:12px;color:#4caf50;font-weight:600">R$ ${d.vICMSMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:2})} (${d.qBCMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:3})} L)</span></div>`:''}
       </div>
-
       <div class="modulo-header"><h2>Itens (${d.itens.length})</h2></div>
       <div style="overflow-x:auto;margin-bottom:16px">
         <table class="nfe-tabela">
@@ -539,104 +514,49 @@ function renderPreviewNfe() {
             ${d.itens.map((it,i)=>`
               <tr class="${it.ehCombustivel?'item-combustivel':''}">
                 <td>${i+1}</td>
-                <td>
-                  <strong>${it.descricao}</strong>
-                  ${it.codAnp?`<br><span style="font-size:0.68rem;color:#4caf50">⛽ ANP: ${it.codAnp} — ${it.descAnp}</span>`:''}
-                </td>
-                <td style="font-size:0.75rem">${it.ncm}<br>${it.cfop}</td>
+                <td><strong>${it.descricao}</strong>${it.codAnp?`<br><span style="font-size:0.68rem;color:#4caf50">⛽ ${it.codAnp} — ${it.descAnp}</span>`:''}</td>
+                <td style="font-size:0.75rem">${it.ncm}<br><strong>${it.cfop}</strong>${cfopDescricao(it.cfop)?`<br><span style="font-size:0.65rem;color:#60a5fa">${cfopDescricao(it.cfop)}</span>`:''}</td>
                 <td>${it.quantidade.toLocaleString('pt-BR',{minimumFractionDigits:3})} ${it.unidade}</td>
                 <td>R$ ${it.valorUnitario.toLocaleString('pt-BR',{minimumFractionDigits:4})}</td>
                 <td><strong>R$ ${it.valorTotal.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
-                <td style="font-size:0.75rem">
-                  CST: ${it.cstIcms}
-                  ${it.vICMSMonoRetItem>0?`<br><span style="color:#4caf50">Mono: R$ ${it.vICMSMonoRetItem.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:''}
-                </td>
+                <td style="font-size:0.75rem">CST:${it.cstIcms}${it.vICMSMonoRetItem>0?`<br><span style="color:#4caf50">Mono: R$ ${it.vICMSMonoRetItem.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:''}</td>
                 <td>${it.ehCombustivel?`<select id="tanque-item-${i}" style="background:#0f1117;border:1px solid #2a2d3e;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;min-width:120px"><option value="">Selecione...</option>${nfeTanques.map(t=>`<option value="${t.id}">${t.numero} — ${t.combustivel}</option>`).join('')}</select>`:'—'}</td>
-              </tr>
-            `).join('')}
+              </tr>`).join('')}
           </tbody>
         </table>
       </div>
-
-      ${combItens.length > 0 ? `<div style="background:#0f1117;border:1px solid #f97316;border-radius:8px;padding:10px;margin-bottom:16px;font-size:0.82rem;color:#f97316">⚠️ Vincule cada combustível ao tanque correspondente. O estoque será atualizado automaticamente.</div>` : ''}
-
+      ${d.itens.some(it=>it.ehCombustivel)?`<div style="background:#0f1117;border:1px solid #f97316;border-radius:8px;padding:10px;margin-bottom:16px;font-size:0.82rem;color:#f97316">⚠️ Vincule cada combustível ao tanque correspondente.</div>`:''}
       <div class="form-acoes">
         <button class="btn-salvar" onclick="confirmarNfe()">✅ Confirmar e atualizar estoque</button>
         <button onclick="cancelarNfe()" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Cancelar</button>
         <span id="nfe-msg" class="form-msg"></span>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 function cancelarNfe(){nfeXmlDados=null;document.getElementById('nfe-preview').style.display='none';document.getElementById('nfe-importar').style.display='none';}
 
-async function confirmarNfe() {
+async function confirmarNfe(){
   const msg=document.getElementById('nfe-msg');
   msg.textContent='Salvando...';msg.style.color='#aaa';
   const d=nfeXmlDados;
-
-  for(let i=0;i<d.itens.length;i++){
-    if(d.itens[i].ehCombustivel){
-      const sel=document.getElementById(`tanque-item-${i}`);
-      if(!sel?.value){msg.textContent=`Vincule o tanque: ${d.itens[i].descricao}`;msg.style.color='#f44';return;}
-      d.itens[i].tanqueId=sel.value;
-    }
-  }
-
+  for(let i=0;i<d.itens.length;i++){if(d.itens[i].ehCombustivel){const sel=document.getElementById(`tanque-item-${i}`);if(!sel?.value){msg.textContent=`Vincule o tanque: ${d.itens[i].descricao}`;msg.style.color='#f44';return;}d.itens[i].tanqueId=sel.value;}}
   let fornecedorId=null;
-  if(d.emitCnpj){
-    const{data:forn}=await sb.from('oct_pessoas').select('id').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();
-    if(forn){fornecedorId=forn.id;}
-    else{
-      const{data:nf}=await sb.from('oct_pessoas').insert({empresa_id:_empresaId,nome:d.emitNome,tipo:'fornecedor',documento:d.emitCnpj,ie:d.emitIE}).select().single();
-      fornecedorId=nf?.id;
-    }
-  }
-
+  if(d.emitCnpj){const{data:forn}=await sb.from('oct_pessoas').select('id').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();if(forn){fornecedorId=forn.id;}else{const{data:nf}=await sb.from('oct_pessoas').insert({empresa_id:_empresaId,nome:d.emitNome,tipo:'fornecedor',documento:d.emitCnpj,ie:d.emitIE}).select().single();fornecedorId=nf?.id;}}
   const{data:nfe,error:nfeErr}=await sb.from('oct_nfe_entrada').insert({
-    empresa_id:_empresaId,numero:d.numero,serie:d.serie,
-    chave_nfe:d.chNFe||null,emissao:d.dhEmi,
-    entrada:new Date().toISOString().split('T')[0],
-    fornecedor_id:fornecedorId,natureza:d.natOp,cfop:d.itens[0]?.cfop||null,
-    valor_total:d.vNF,valor_icms:d.vICMS,valor_pis:d.vPIS,
-    valor_cofins:d.vCOFINS,valor_frete:d.vFrete,
-    valor_desconto:d.vDesc,status:'importada',
-    forma_pagamento:d.pagamentos,
-    duplicatas:d.dups,
-    xml_completo:d.xmlString,
-    n_prot:d.nProt,
-    q_bc_mono_ret:d.qBCMonoRet||null,
-    v_icms_mono_ret:d.vICMSMonoRet||null,
-    transp_nome:d.transpNome||null,
-    mod_frete:d.modFrete||null,
-    inf_cpl:d.infCpl||null,
+    empresa_id:_empresaId,numero:d.numero,serie:d.serie,chave_nfe:d.chNFe||null,emissao:d.dhEmi,
+    entrada:new Date().toISOString().split('T')[0],fornecedor_id:fornecedorId,natureza:d.natOp,
+    cfop:d.cfopCapa||d.itens[0]?.cfop||null,
+    valor_total:d.vNF,valor_icms:d.vICMS,valor_pis:d.vPIS,valor_cofins:d.vCOFINS,valor_frete:d.vFrete,valor_desconto:d.vDesc,
+    status:'importada',forma_pagamento:d.pagamentos,duplicatas:d.dups,xml_completo:d.xmlString,
+    n_prot:d.nProt,q_bc_mono_ret:d.qBCMonoRet||null,v_icms_mono_ret:d.vICMSMonoRet||null,
+    transp_nome:d.transpNome||null,mod_frete:d.modFrete||null,inf_cpl:d.infCpl||null,
   }).select().single();
-
   if(nfeErr){msg.textContent='Erro: '+nfeErr.message;msg.style.color='#f44';return;}
-
   for(const it of d.itens){
-    await sb.from('oct_nfe_entrada_itens').insert({
-      nfe_id:nfe.id,codigo:it.codigo,descricao:it.descricao,
-      ncm:it.ncm,cest:it.cest,cfop:it.cfop,unidade:it.unidade,
-      quantidade:it.quantidade,valor_unitario:it.valorUnitario,valor_total:it.valorTotal,
-      cod_anp:it.codAnp,desc_anp:it.descAnp,perc_bio:it.pBio||0,
-      cst_icms:it.cstIcms,aliq_icms:it.aliqIcms,
-      v_icms_mono_ret:it.vICMSMonoRetItem||null,
-      q_bc_mono_ret:it.qBCMonoRetItem||null,
-      cst_pis:it.cstPis,aliq_pis:it.aliqPis,
-      cst_cofins:it.cstCofins,aliq_cofins:it.aliqCofins,
-    });
-    if(it.ehCombustivel&&it.tanqueId){
-      const{data:tanque}=await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id',it.tanqueId).single();
-      if(tanque){
-        const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(it.quantidade),Number(tanque.capacidade));
-        await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);
-        await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:it.quantidade,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
-      }
-    }
+    await sb.from('oct_nfe_entrada_itens').insert({nfe_id:nfe.id,codigo:it.codigo,descricao:it.descricao,ncm:it.ncm,cest:it.cest,cfop:it.cfop,unidade:it.unidade,quantidade:it.quantidade,valor_unitario:it.valorUnitario,valor_total:it.valorTotal,cod_anp:it.codAnp,desc_anp:it.descAnp,perc_bio:it.pBio||0,cst_icms:it.cstIcms,aliq_icms:it.aliqIcms,v_icms_mono_ret:it.vICMSMonoRetItem||null,q_bc_mono_ret:it.qBCMonoRetItem||null,cst_pis:it.cstPis,aliq_pis:it.aliqPis,cst_cofins:it.cstCofins,aliq_cofins:it.aliqCofins});
+    if(it.ehCombustivel&&it.tanqueId){const{data:tanque}=await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id',it.tanqueId).single();if(tanque){const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(it.quantidade),Number(tanque.capacidade));await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:it.quantidade,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});}}
   }
-
   if(d.manifestadaId)await sb.from('oct_nfe_manifestadas').update({status:'importada'}).eq('id',d.manifestadaId);
   msg.textContent='✅ NF-e importada!';msg.style.color='#4caf50';
   nfeXmlDados=null;
