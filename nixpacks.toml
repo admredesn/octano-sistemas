@@ -2,4 +2,4 @@
 cmds = []
 
 [start]
-cmd = "python -m http.server 8080"
+cmd = "python -m http.server $PORT"
