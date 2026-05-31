@@ -2,84 +2,55 @@
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
 body { background: #0f1117; color: #e0e0e0; }
 
-/* LOGIN */
-.login-container {
-  display: flex; align-items: center; justify-content: center;
-  height: 100vh; background: #0f1117;
-}
-.login-box {
-  background: #1a1d2e; padding: 40px; border-radius: 12px;
-  width: 340px; display: flex; flex-direction: column; gap: 14px;
-  box-shadow: 0 0 30px rgba(0,0,0,0.5);
-}
+.login-container { display: flex; align-items: center; justify-content: center; height: 100vh; background: #0f1117; }
+.login-box { background: #1a1d2e; padding: 40px; border-radius: 12px; width: 340px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
 .login-logo h1 { color: #f97316; font-size: 2rem; letter-spacing: 4px; }
 .login-logo span { color: #888; font-size: 0.8rem; letter-spacing: 6px; }
-.login-box input {
-  padding: 10px 14px; border-radius: 6px; border: 1px solid #333;
-  background: #0f1117; color: #fff; font-size: 0.95rem;
-}
-.login-box button {
-  padding: 11px; border-radius: 6px; border: none;
-  background: #f97316; color: #fff; font-size: 1rem;
-  cursor: pointer; font-weight: bold;
-}
+.login-box input { padding: 10px 14px; border-radius: 6px; border: 1px solid #333; background: #0f1117; color: #fff; font-size: 0.95rem; }
+.login-box button { padding: 11px; border-radius: 6px; border: none; background: #f97316; color: #fff; font-size: 1rem; cursor: pointer; font-weight: bold; }
 .login-box button:hover { background: #ea6f0f; }
 .erro { color: #f44; font-size: 0.85rem; }
 
-/* DASHBOARD */
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  background: #1a1d2e; padding: 10px 20px; border-bottom: 2px solid #f97316;
-}
+.topbar { display: flex; align-items: center; justify-content: space-between; background: #1a1d2e; padding: 10px 20px; border-bottom: 2px solid #f97316; }
 .topbar .logo { color: #f97316; font-weight: bold; font-size: 1.1rem; letter-spacing: 2px; }
-.topbar .empresa-info { color: #ccc; font-size: 0.9rem; }
+.topbar .empresa-info { color: #ccc; font-size: 0.9rem; cursor: pointer; }
 .topbar .empresa-info:hover { color: #f97316; }
 .topbar .usuario { color: #aaa; font-size: 0.85rem; display: flex; align-items: center; gap: 10px; }
-.topbar .usuario button {
-  padding: 4px 10px; border-radius: 4px;
-  border: 1px solid #555; background: transparent; color: #aaa; cursor: pointer;
-}
+.topbar .usuario button { padding: 4px 10px; border-radius: 4px; border: 1px solid #555; background: transparent; color: #aaa; cursor: pointer; }
 
-.toolbar {
-  display: flex; gap: 4px; padding: 8px 20px;
-  background: #13151f; border-bottom: 1px solid #2a2d3e; flex-wrap: wrap;
-}
-.toolbar-item {
-  padding: 6px 14px; border-radius: 6px; cursor: pointer;
-  font-size: 0.85rem; display: flex; align-items: center; gap: 6px;
-}
+.toolbar { display: flex; gap: 4px; padding: 8px 20px; background: #13151f; border-bottom: 1px solid #2a2d3e; flex-wrap: wrap; }
+.toolbar-item { padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
 .toolbar-item.ativo { background: #1e2235; color: #fff; }
 .toolbar-item.ativo:hover { background: #f97316; color: #fff; }
 .toolbar-item.breve { background: #1a1d2e; color: #555; cursor: default; }
 .toolbar-item.breve small { font-size: 0.65rem; color: #f97316; margin-left: 4px; }
 
-.conteudo { padding: 24px; }
-
-/* MODULOS */
+.conteudo { padding: 24px; overflow-y: auto; }
 .modulo-container { max-width: 860px; }
 .modulo-header { margin-bottom: 16px; border-bottom: 1px solid #2a2d3e; padding-bottom: 8px; }
 .modulo-header h2 { font-size: 1rem; color: #f97316; font-weight: 600; }
 
-.form-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px;
-}
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
 .form-group { display: flex; flex-direction: column; gap: 5px; }
 .form-group.span2 { grid-column: span 2; }
 .form-group label { font-size: 0.78rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-.form-group input, .form-group select {
-  padding: 8px 12px; border-radius: 6px; border: 1px solid #2a2d3e;
-  background: #13151f; color: #e0e0e0; font-size: 0.9rem;
-}
-.form-group input:focus, .form-group select:focus {
-  outline: none; border-color: #f97316;
-}
+.form-group input, .form-group select { padding: 8px 12px; border-radius: 6px; border: 1px solid #2a2d3e; background: #13151f; color: #e0e0e0; font-size: 0.9rem; transition: border-color 0.2s; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #f97316; }
 .form-group select option { background: #1a1d2e; }
 
 .form-acoes { margin-top: 20px; display: flex; align-items: center; gap: 16px; }
-.btn-salvar {
-  padding: 10px 28px; border-radius: 6px; border: none;
-  background: #f97316; color: #fff; font-size: 0.95rem;
-  cursor: pointer; font-weight: bold;
-}
+.btn-salvar { padding: 10px 28px; border-radius: 6px; border: none; background: #f97316; color: #fff; font-size: 0.95rem; cursor: pointer; font-weight: bold; }
 .btn-salvar:hover { background: #ea6f0f; }
 .form-msg { font-size: 0.9rem; }
+
+/* CERTIFICADO */
+.cert-box { background: #13151f; border: 1px solid #2a2d3e; border-radius: 10px; padding: 20px; margin-bottom: 10px; }
+.cert-atual { display: flex; align-items: center; gap: 14px; background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+.cert-icone { font-size: 2rem; }
+.cert-nome { font-weight: 600; color: #4caf50; font-size: 0.95rem; }
+.cert-validade { font-size: 0.8rem; color: #888; margin-top: 3px; }
+.btn-remover-cert { margin-left: auto; padding: 6px 12px; border-radius: 6px; border: 1px solid #f44; background: transparent; color: #f44; cursor: pointer; font-size: 0.8rem; }
+.cert-vazio { color: #555; font-size: 0.9rem; margin-bottom: 14px; }
+.cert-drop { border: 2px dashed #2a2d3e; border-radius: 8px; padding: 28px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+.cert-drop:hover { border-color: #f97316; }
+.cert-drop p { margin-top: 8px; color: #888; font-size: 0.9rem; }
