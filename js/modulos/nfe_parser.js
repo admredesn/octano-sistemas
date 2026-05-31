@@ -1,20 +1,13 @@
 
 // Parser completo de XML NF-e versão 4.00
-// Suporta ICMS normal, ICMS Monofásico (combustíveis), ICMSST, etc.
-
 function nfeNs(xml) {
-  // Retorna namespace correto
-  const root = xml.documentElement;
-  return root.namespaceURI || 'http://www.portalfiscal.inf.br/nfe';
+  return xml.documentElement?.namespaceURI || 'http://www.portalfiscal.inf.br/nfe';
 }
 
 function q(el, tag) {
-  // Busca tag com ou sem namespace
   if (!el) return null;
   const ns = nfeNs(el.ownerDocument || el);
-  let found = el.getElementsByTagNameNS(ns, tag)[0];
-  if (!found) found = el.getElementsByTagName(tag)[0];
-  return found || null;
+  return el.getElementsByTagNameNS(ns, tag)[0] || el.getElementsByTagName(tag)[0] || null;
 }
 
 function qv(el, tag, def = '') {
@@ -28,106 +21,89 @@ function qf(el, tag, def = 0) {
 
 function parseNFe(xml) {
   const nfe = q(xml, 'infNFe') || xml;
+  const ns  = nfeNs(xml);
 
-  // ─── IDE ────────────────────────────────────────────────────────────────
-  const ide = q(nfe, 'ide');
-  const numero    = qv(ide, 'nNF');
-  const serie     = qv(ide, 'serie');
-  const natOp     = qv(ide, 'natOp');
-  const dhEmi     = qv(ide, 'dhEmi').substring(0, 10);
-  const dhEntSai  = qv(ide, 'dhSaiEnt').substring(0, 10) || dhEmi;
-  const tpNF      = qv(ide, 'tpNF'); // 0=entrada 1=saída
-  const finNFe    = qv(ide, 'finNFe');
-  const mod       = qv(ide, 'mod');
+  // IDE
+  const ide     = q(nfe, 'ide');
+  const numero  = qv(ide, 'nNF');
+  const serie   = qv(ide, 'serie');
+  const natOp   = qv(ide, 'natOp');
+  const dhEmi   = qv(ide, 'dhEmi').substring(0, 10);
+  const mod     = qv(ide, 'mod');
+  const finNFe  = qv(ide, 'finNFe');
+  const tpNF    = qv(ide, 'tpNF');
 
-  // ─── EMIT ───────────────────────────────────────────────────────────────
-  const emit = q(nfe, 'emit');
-  const emitCnpj  = qv(emit, 'CNPJ') || qv(emit, 'CPF');
-  const emitNome  = qv(emit, 'xNome');
-  const emitFant  = qv(emit, 'xFant');
-  const emitIE    = qv(emit, 'IE');
-  const emitCRT   = qv(emit, 'CRT');
+  // EMIT
+  const emit     = q(nfe, 'emit');
+  const emitCnpj = qv(emit, 'CNPJ') || qv(emit, 'CPF');
+  const emitNome = qv(emit, 'xNome');
+  const emitFant = qv(emit, 'xFant');
+  const emitIE   = qv(emit, 'IE');
+  const emitCRT  = qv(emit, 'CRT');
   const enderEmit = q(emit, 'enderEmit');
-  const emitEnd   = [qv(enderEmit,'xLgr'), qv(enderEmit,'nro'), qv(enderEmit,'xBairro')].filter(Boolean).join(', ');
-  const emitMun   = qv(enderEmit, 'xMun');
-  const emitUF    = qv(enderEmit, 'UF');
+  const emitEnd  = [qv(enderEmit,'xLgr'),qv(enderEmit,'nro'),qv(enderEmit,'xBairro')].filter(Boolean).join(', ');
+  const emitMun  = qv(enderEmit, 'xMun');
+  const emitUF   = qv(enderEmit, 'UF');
 
-  // ─── DEST ───────────────────────────────────────────────────────────────
-  const dest = q(nfe, 'dest');
-  const destCnpj  = qv(dest, 'CNPJ') || qv(dest, 'CPF');
-  const destNome  = qv(dest, 'xNome');
-  const destIE    = qv(dest, 'IE');
+  // DEST
+  const dest     = q(nfe, 'dest');
+  const destCnpj = qv(dest, 'CNPJ') || qv(dest, 'CPF');
+  const destNome = qv(dest, 'xNome');
+  const destIE   = qv(dest, 'IE');
 
-  // ─── TOTAL ──────────────────────────────────────────────────────────────
-  const tot    = q(nfe, 'ICMSTot');
-  const vBC    = qf(tot, 'vBC');
-  const vICMS  = qf(tot, 'vICMS');
-  const vBCST  = qf(tot, 'vBCST');
-  const vST    = qf(tot, 'vST');
-  const vProd  = qf(tot, 'vProd');
-  const vFrete = qf(tot, 'vFrete');
-  const vSeg   = qf(tot, 'vSeg');
-  const vDesc  = qf(tot, 'vDesc');
-  const vIPI   = qf(tot, 'vIPI');
-  const vPIS   = qf(tot, 'vPIS');
-  const vCOFINS= qf(tot, 'vCOFINS');
-  const vNF    = qf(tot, 'vNF');
-  // ICMS Monofásico (combustíveis)
-  const qBCMonoRet   = qf(tot, 'qBCMonoRet');
-  const vICMSMonoRet = qf(tot, 'vICMSMonoRet');
+  // TOTAL
+  const tot         = q(nfe, 'ICMSTot');
+  const vBC         = qf(tot, 'vBC');
+  const vICMS       = qf(tot, 'vICMS');
+  const vBCST       = qf(tot, 'vBCST');
+  const vST         = qf(tot, 'vST');
+  const vProd       = qf(tot, 'vProd');
+  const vFrete      = qf(tot, 'vFrete');
+  const vDesc       = qf(tot, 'vDesc');
+  const vIPI        = qf(tot, 'vIPI');
+  const vPIS        = qf(tot, 'vPIS');
+  const vCOFINS     = qf(tot, 'vCOFINS');
+  const vNF         = qf(tot, 'vNF');
+  const qBCMonoRet  = qf(tot, 'qBCMonoRet');
+  const vICMSMonoRet= qf(tot, 'vICMSMonoRet');
 
-  // ─── TRANSPORTE ─────────────────────────────────────────────────────────
-  const transp = q(nfe, 'transp');
+  // TRANSPORTE
+  const transp     = q(nfe, 'transp');
   const modFrete   = qv(transp, 'modFrete');
   const transpNome = qv(q(transp, 'transporta'), 'xNome');
 
-  // ─── COBRANÇA ───────────────────────────────────────────────────────────
-  const cobr  = q(nfe, 'cobr');
-  const fat   = q(cobr, 'fat');
-  const fatNum  = qv(fat, 'nFat');
-  const fatVOrig = qf(fat, 'vOrig');
-  const fatVLiq  = qf(fat, 'vLiq');
+  // COBRANÇA
+  const cobr   = q(nfe, 'cobr');
+  const fat    = q(cobr, 'fat');
+  const fatNum = qv(fat, 'nFat');
+  const fatVLiq= qf(fat, 'vLiq');
 
   // Duplicatas
   const dups = [];
-  const dupEls = nfe.getElementsByTagName ? nfe.getElementsByTagName('dup') : [];
-  for (const dup of dupEls) {
-    dups.push({
-      nDup: qv(dup, 'nDup'),
-      dVenc: qv(dup, 'dVenc'),
-      vDup: qf(dup, 'vDup'),
-    });
+  for (const dup of (nfe.getElementsByTagNameNS ? nfe.getElementsByTagNameNS(ns,'dup') : nfe.getElementsByTagName('dup'))) {
+    dups.push({ nDup: qv(dup,'nDup'), dVenc: qv(dup,'dVenc'), vDup: qf(dup,'vDup') });
   }
 
-  // ─── PAGAMENTO ──────────────────────────────────────────────────────────
+  // PAGAMENTO
   const pagamentos = [];
   const pagEl = q(nfe, 'pag');
-  const detPags = pagEl ? (pagEl.getElementsByTagName ? pagEl.getElementsByTagName('detPag') : []) : [];
-  for (const p of detPags) {
-    pagamentos.push({
-      indPag: qv(p, 'indPag'), // 0=à vista 1=a prazo
-      tPag:   qv(p, 'tPag'),
-      xPag:   qv(p, 'xPag'),
-      vPag:   qf(p, 'vPag'),
-    });
+  for (const p of (pagEl?.getElementsByTagNameNS ? pagEl.getElementsByTagNameNS(ns,'detPag') : pagEl?.getElementsByTagName('detPag') || [])) {
+    pagamentos.push({ indPag: qv(p,'indPag'), tPag: qv(p,'tPag'), xPag: qv(p,'xPag'), vPag: qf(p,'vPag') });
   }
 
-  // ─── INFO ADICIONAL ─────────────────────────────────────────────────────
+  // INFO ADICIONAL
   const infAdic = q(nfe, 'infAdic');
   const infCpl  = qv(infAdic, 'infCpl');
 
-  // ─── PROTOCOLO ──────────────────────────────────────────────────────────
+  // PROTOCOLO
   const prot    = q(xml, 'infProt');
-  const chNFe   = qv(prot, 'chNFe') || qv(nfe, 'Id').replace('NFe','');
+  const chNFe   = qv(prot, 'chNFe') || (qv(nfe, 'Id') || '').replace('NFe','');
   const nProt   = qv(prot, 'nProt');
-  const dhRecbto= qv(prot, 'dhRecbto').substring(0, 10);
-  const cStat   = qv(prot, 'cStat');
-  const xMotivo = qv(prot, 'xMotivo');
 
-  // ─── ITENS ──────────────────────────────────────────────────────────────
-  const ns = nfeNs(xml);
-  const dets = xml.getElementsByTagNameNS ? xml.getElementsByTagNameNS(ns, 'det') : xml.getElementsByTagName('det');
+  // ITENS
+  const dets = nfe.getElementsByTagNameNS ? nfe.getElementsByTagNameNS(ns,'det') : nfe.getElementsByTagName('det');
   const itens = [];
+  let cfopCapa = ''; // pega CFOP do primeiro item
 
   for (const det of dets) {
     const prod    = q(det, 'prod');
@@ -137,75 +113,51 @@ function parseNFe(xml) {
     const cofins  = q(imposto, 'COFINS');
     const comb    = q(prod, 'comb');
 
-    // CST ICMS — pode estar em vários elementos filho
-    let cstIcms = '', aliqIcms = 0, vBCItem = 0, vICMSItem = 0;
-    let qBCMonoRetItem = 0, adRemItem = 0, vICMSMonoRetItem = 0;
-    let icmsElem = null;
-    if (icms) {
-      // Pega primeiro filho do ICMS
-      for (const child of icms.children || []) {
-        icmsElem = child;
-        break;
-      }
-      if (!icmsElem && icms.firstElementChild) icmsElem = icms.firstElementChild;
-    }
-    if (icmsElem) {
-      cstIcms          = qv(icmsElem, 'CST') || qv(icmsElem, 'CSOSN');
-      aliqIcms         = qf(icmsElem, 'pICMS');
-      vBCItem          = qf(icmsElem, 'vBC');
-      vICMSItem        = qf(icmsElem, 'vICMS');
-      // Monofásico
-      qBCMonoRetItem   = qf(icmsElem, 'qBCMonoRet');
-      adRemItem        = qf(icmsElem, 'adRemICMSRet');
-      vICMSMonoRetItem = qf(icmsElem, 'vICMSMonoRet');
+    const cfopItem = qv(prod, 'CFOP');
+    if (!cfopCapa && cfopItem) cfopCapa = cfopItem;
+
+    // ICMS — pega primeiro filho
+    let cstIcms='', aliqIcms=0, vBCItem=0, vICMSItem=0;
+    let qBCMonoRetItem=0, adRemItem=0, vICMSMonoRetItem=0;
+    const icmsChild = icms?.firstElementChild || (icms?.children?.[0]);
+    if (icmsChild) {
+      cstIcms           = qv(icmsChild,'CST') || qv(icmsChild,'CSOSN');
+      aliqIcms          = qf(icmsChild,'pICMS');
+      vBCItem           = qf(icmsChild,'vBC');
+      vICMSItem         = qf(icmsChild,'vICMS');
+      qBCMonoRetItem    = qf(icmsChild,'qBCMonoRet');
+      adRemItem         = qf(icmsChild,'adRemICMSRet');
+      vICMSMonoRetItem  = qf(icmsChild,'vICMSMonoRet');
     }
 
     // PIS
-    let cstPis = '', aliqPis = 0, vPisItem = 0;
-    const pisElem = pis?.firstElementChild || (pis ? pis.children?.[0] : null);
-    if (pisElem) {
-      cstPis   = qv(pisElem, 'CST');
-      aliqPis  = qf(pisElem, 'pPIS');
-      vPisItem = qf(pisElem, 'vPIS');
-    }
+    let cstPis='', aliqPis=0, vPisItem=0;
+    const pisChild = pis?.firstElementChild || pis?.children?.[0];
+    if (pisChild) { cstPis=qv(pisChild,'CST'); aliqPis=qf(pisChild,'pPIS'); vPisItem=qf(pisChild,'vPIS'); }
 
     // COFINS
-    let cstCofins = '', aliqCofins = 0, vCofinsItem = 0;
-    const cofinsElem = cofins?.firstElementChild || (cofins ? cofins.children?.[0] : null);
-    if (cofinsElem) {
-      cstCofins   = qv(cofinsElem, 'CST');
-      aliqCofins  = qf(cofinsElem, 'pCOFINS');
-      vCofinsItem = qf(cofinsElem, 'vCOFINS');
-    }
+    let cstCofins='', aliqCofins=0, vCofinsItem=0;
+    const cofinsChild = cofins?.firstElementChild || cofins?.children?.[0];
+    if (cofinsChild) { cstCofins=qv(cofinsChild,'CST'); aliqCofins=qf(cofinsChild,'pCOFINS'); vCofinsItem=qf(cofinsChild,'vCOFINS'); }
 
-    // Combustível ANP
+    // ANP
     const codAnp  = qv(comb, 'cProdANP');
     const descAnp = qv(comb, 'descANP');
     const pBio    = qf(comb, 'pBio');
     const ufCons  = qv(comb, 'UFCons');
 
     itens.push({
-      nItem:         det.getAttribute('nItem') || String(itens.length + 1),
-      codigo:        qv(prod, 'cProd'),
-      ean:           qv(prod, 'cEAN'),
-      descricao:     qv(prod, 'xProd'),
-      ncm:           qv(prod, 'NCM'),
-      cest:          qv(prod, 'CEST'),
-      cfop:          qv(prod, 'CFOP'),
-      unidade:       qv(prod, 'uCom'),
-      quantidade:    qf(prod, 'qCom'),
-      valorUnitario: qf(prod, 'vUnCom'),
-      valorTotal:    qf(prod, 'vProd'),
-      vDesc:         qf(prod, 'vDesc'),
-      // ICMS
+      nItem: det.getAttribute('nItem') || String(itens.length+1),
+      codigo: qv(prod,'cProd'), ean: qv(prod,'cEAN'),
+      descricao: qv(prod,'xProd'), ncm: qv(prod,'NCM'), cest: qv(prod,'CEST'),
+      cfop: cfopItem, unidade: qv(prod,'uCom'),
+      quantidade: qf(prod,'qCom'), valorUnitario: qf(prod,'vUnCom'), valorTotal: qf(prod,'vProd'),
+      vDesc: qf(prod,'vDesc'),
       cstIcms, aliqIcms, vBCItem, vICMSItem,
-      // ICMS Monofásico
       qBCMonoRetItem, adRemItem, vICMSMonoRetItem,
-      ehMonofasico:  vICMSMonoRetItem > 0,
-      // PIS/COFINS
+      ehMonofasico: vICMSMonoRetItem > 0,
       cstPis, aliqPis, vPisItem,
       cstCofins, aliqCofins, vCofinsItem,
-      // Combustível
       codAnp, descAnp, pBio, ufCons,
       ehCombustivel: !!codAnp,
       tanqueId: null,
@@ -213,28 +165,16 @@ function parseNFe(xml) {
   }
 
   return {
-    // Identificação
-    chNFe, nProt, dhRecbto, cStat, xMotivo,
-    numero, serie, natOp, dhEmi, dhEntSai, tpNF, finNFe, mod,
-    // Emitente
-    emitCnpj, emitNome, emitFant, emitIE, emitCRT,
-    emitEnd, emitMun, emitUF,
-    // Destinatário
+    chNFe, nProt,
+    numero, serie, natOp, dhEmi, tpNF, finNFe, mod,
+    cfopCapa, // CFOP da capa = CFOP do primeiro item
+    emitCnpj, emitNome, emitFant, emitIE, emitCRT, emitEnd, emitMun, emitUF,
     destCnpj, destNome, destIE,
-    // Totais
-    vBC, vICMS, vBCST, vST, vProd, vFrete, vSeg, vDesc, vIPI,
-    vPIS, vCOFINS, vNF,
-    // ICMS Monofásico (combustíveis)
+    vBC, vICMS, vBCST, vST, vProd, vFrete, vDesc, vIPI, vPIS, vCOFINS, vNF,
     qBCMonoRet, vICMSMonoRet,
-    // Transporte
     modFrete, transpNome,
-    // Cobrança
-    fatNum, fatVOrig, fatVLiq, dups,
-    // Pagamento
-    pagamentos,
-    // Info adicional
-    infCpl,
-    // Itens
+    fatNum, fatVLiq, dups,
+    pagamentos, infCpl,
     itens,
   };
 }
