@@ -1,5 +1,5 @@
-[phases.build]
-cmds = []
+[phases.setup]
+nixPkgs = ["python3"]
 
 [start]
-cmd = "python -m http.server $PORT"
+cmd = "python3 server.py"
