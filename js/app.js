@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', async () => {
   const session = await getSession();
   if (!session) {
@@ -14,7 +13,7 @@ function renderLogin() {
       <div class="login-box">
         <div class="login-logo">
           <h1>OCTANO</h1>
-          <span>SISTEMAS</span>
+          <span>S I S T E M A S</span>
         </div>
         <input type="email" id="email" placeholder="E-mail" />
         <input type="password" id="senha" placeholder="Senha" />
@@ -27,9 +26,9 @@ function renderLogin() {
 
 async function fazerLogin() {
   const email = document.getElementById('email').value;
-  const senha = document.getElementById('senha').value;
+  const password = document.getElementById('senha').value;
   try {
-    await login(email, senha);
+    await login(email, password);
     location.reload();
   } catch (e) {
     document.getElementById('login-erro').textContent = 'Usuário ou senha inválidos.';
@@ -40,7 +39,7 @@ async function renderDashboard(session) {
   const { data: perfil } = await sb
     .from('oct_perfis')
     .select('*, oct_empresas(*)')
-    .eq('user_id', session.user.id)
+    .eq('id', session.user.id)
     .single();
 
   document.getElementById('app').innerHTML = `
@@ -48,7 +47,7 @@ async function renderDashboard(session) {
       <div class="topbar">
         <div class="logo">OCTANO SISTEMAS</div>
         <div class="empresa-info">
-          ${perfil?.oct_empresas?.nome_fantasia || 'Empresa'}
+          ${perfil?.oct_empresas?.nome_fantasia || 'Configure sua empresa'}
         </div>
         <div class="usuario">
           ${session.user.email}
@@ -79,12 +78,12 @@ async function renderDashboard(session) {
         </div>
       </div>
       <div id="conteudo" class="conteudo">
-        <p>Selecione um módulo acima.</p>
+        <p>Bem-vindo ao Octano Sistemas! Selecione um módulo acima.</p>
       </div>
     </div>
   `;
 }
 
 function abrirModulo(mod) {
-  document.getElementById('conteudo').innerHTML = `<p>Módulo <strong>${mod}</strong> carregando...</p>`;
+  document.getElementById('conteudo').innerHTML = `<p>Módulo <strong>${mod}</strong> em desenvolvimento.</p>`;
 }
