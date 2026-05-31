@@ -1,5 +1,3 @@
-const DOMINIO = '@octano.interno';
-
 document.addEventListener('DOMContentLoaded', async () => {
   const session = await getSession();
   if (!session) {
@@ -17,8 +15,8 @@ function renderLogin() {
           <h1>OCTANO</h1>
           <span>S I S T E M A S</span>
         </div>
-        <input type="text" id="usuario" placeholder="Usuário" autocomplete="username" />
-        <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" />
+        <input type="text" id="usuario" placeholder="Usuário" autocomplete="off" />
+        <input type="password" id="senha" placeholder="Senha" />
         <button onclick="fazerLogin()">Entrar</button>
         <p id="login-erro" class="erro"></p>
       </div>
@@ -35,11 +33,8 @@ function renderLogin() {
 async function fazerLogin() {
   const usuario = document.getElementById('usuario').value.trim();
   const password = document.getElementById('senha').value;
-  if (!usuario || !password) {
-    document.getElementById('login-erro').textContent = 'Preencha usuário e senha.';
-    return;
-  }
-  const email = usuario.includes('@') ? usuario : usuario + DOMINIO;
+  const email = usuario.includes('@') ? usuario : usuario + '@octano.interno';
+  document.getElementById('login-erro').textContent = '';
   try {
     await login(email, password);
     location.reload();
@@ -55,14 +50,15 @@ async function renderDashboard(session) {
     .eq('id', session.user.id)
     .single();
 
-  const nomeUsuario = session.user.email.replace(DOMINIO, '');
+  const nomeUsuario = session.user.email.split('@')[0];
+  const nomeEmpresa = perfil?.oct_empresas?.nome_fantasia || perfil?.oct_empresas?.nome || 'Configure sua empresa';
 
   document.getElementById('app').innerHTML = `
     <div class="dashboard">
       <div class="topbar">
         <div class="logo">OCTANO SISTEMAS</div>
-        <div class="empresa-info">
-          ${perfil?.oct_empresas?.nome_fantasia || 'Configure sua empresa'}
+        <div class="empresa-info" onclick="abrirModulo('empresa')" style="cursor:pointer" title="Configurar empresa">
+          🏢 ${nomeEmpresa}
         </div>
         <div class="usuario">
           ${nomeUsuario}
@@ -70,35 +66,28 @@ async function renderDashboard(session) {
         </div>
       </div>
       <div class="toolbar">
-        <div class="toolbar-item ativo" onclick="abrirModulo('caixa')">
-          <span>🗂</span> F.Caixa
-        </div>
-        <div class="toolbar-item ativo" onclick="abrirModulo('nfe')">
-          <span>📄</span> NF-e
-        </div>
-        <div class="toolbar-item ativo" onclick="abrirModulo('tanques')">
-          <span>⛽</span> Tanques
-        </div>
-        <div class="toolbar-item ativo" onclick="abrirModulo('pessoas')">
-          <span>👤</span> Pessoas
-        </div>
-        <div class="toolbar-item ativo" onclick="abrirModulo('produtos')">
-          <span>📦</span> Produtos
-        </div>
-        <div class="toolbar-item breve">
-          <span>💰</span> Despesas <small>BREVE</small>
-        </div>
-        <div class="toolbar-item breve">
-          <span>📊</span> DRE <small>BREVE</small>
-        </div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('empresa')">⚙️ Empresa</div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('caixa')">🗂 F.Caixa</div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('nfe')">📄 NF-e</div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('tanques')">⛽ Tanques</div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('pessoas')">👤 Pessoas</div>
+        <div class="toolbar-item ativo" onclick="abrirModulo('produtos')">📦 Produtos</div>
+        <div class="toolbar-item breve">💰 Despesas <small>BREVE</small></div>
+        <div class="toolbar-item breve">📊 DRE <small>BREVE</small></div>
       </div>
       <div id="conteudo" class="conteudo">
         <p>Bem-vindo ao Octano Sistemas! Selecione um módulo acima.</p>
       </div>
     </div>
   `;
+
+  // Abre empresa automaticamente se nao configurada
+  if (!perfil?.oct_empresas) {
+    abrirModulo('empresa');
+  }
 }
 
-function abrirModulo(mod) {
-  document.getElementById('conteudo').innerHTML = `<p>Módulo <strong>${mod}</strong> em desenvolvimento.</p>`;
+async function abrirModulo(mod) {
+  if (mod === 'empresa') { await moduloEmpresa(); return; }
+  document.getElementById('conteudo').innerHTML = '<p>Módulo <strong>' + mod + '</strong> em desenvolvimento.</p>';
 }
