@@ -1,191 +1,90 @@
 
-const CFOP_TABELA = {
-  // Entradas estaduais (1xxx)
-  '1101': 'Compra p/ industrialização',
-  '1102': 'Compra p/ comercialização',
-  '1111': 'Compra p/ industrialização de prod. sob. encom. do destinatário',
-  '1116': 'Compra p/ industrialização originada de encomenda',
-  '1120': 'Compra p/ industrialização em regime de drawback',
-  '1122': 'Compra p/ comercialização em regime de drawback',
-  '1151': 'Transferência p/ industrialização',
-  '1152': 'Transferência p/ comercialização',
-  '1201': 'Devolução de venda p/ industrialização',
-  '1202': 'Devolução de venda p/ comercialização',
-  '1251': 'Compra de energia elétrica p/ distribuição ou comercialização',
-  '1252': 'Compra de energia elétrica p/ uso e consumo',
-  '1301': 'Aquisição de serviço de comunicação p/ geração de demanda',
-  '1302': 'Aquisição de serviço de comunicação p/ uso e consumo',
-  '1351': 'Aquisição de serviço de transporte p/ execução de serviço',
-  '1352': 'Aquisição de serviço de transporte p/ uso e consumo',
-  '1401': 'Compra p/ industrialização em operação com mercadoria sujeita ao ST',
-  '1403': 'Compra p/ comercialização em operação com mercadoria sujeita ao ST',
-  '1407': 'Compra de mercadoria p/ uso e consumo cuja op. é com substituição tributária',
-  '1408': 'Transferência p/ comercialização em operação com mercadoria sujeita ao ST',
-  '1411': 'Devolução de venda de mercadoria sujeita ao ST',
-  '1501': 'Entrada de mercadoria recebida com end. de armazém geral',
-  '1502': 'Transmissão de propriedade de mercadoria depositada em armazém geral',
-  '1503': 'Entrada de mercadoria recebida com end. de depósito fechado',
-  '1504': 'Retorno de mercadoria remetida p/ armazém geral',
-  '1505': 'Retorno simbólico de mercadoria remetida p/ armazém geral',
-  '1506': 'Retorno de mercadoria remetida p/ depósito fechado',
-  '1507': 'Retorno simbólico de mercadoria remetida p/ depósito fechado',
-  '1551': 'Compra de bem p/ o ativo imobilizado',
-  '1552': 'Transferência de bem do ativo imobilizado',
-  '1553': 'Devolução de venda de bem do ativo imobilizado',
-  '1554': 'Retorno de bem do ativo imobilizado remetido p/ uso fora do estab.',
-  '1555': 'Entrada de bem do ativo imobilizado adquirido p/ arrendamento mercantil',
-  '1556': 'Compra de material p/ uso e consumo',
-  '1557': 'Transferência de material p/ uso e consumo',
-  '1601': 'Recebimento, p/ compensação, de créditos ICMS uso e consumo',
-  '1603': 'Ressarcimento de ICMS retido por substituição tributária',
-  '1604': 'Lançamento do crédito relativo à compra de bem p/ o ativo imobilizado',
-  '1605': 'Recebimento, p/ compensação, de créditos de ICMS',
-  '1651': 'Compra de combustível ou lubrificante p/ industrialização',
-  '1652': 'Compra de combustível ou lubrificante p/ comercialização',
-  '1653': 'Compra de combustível ou lubrificante p/ uso e consumo',
-  '1658': 'Transferência de combustível ou lubrificante p/ industrialização',
-  '1659': 'Transferência de combustível ou lubrificante p/ comercialização',
-  '1660': 'Devolução de venda de combustível ou lubrificante destinado à industrialização',
-  '1661': 'Devolução de venda de combustível ou lubrificante destinado à comercialização',
-  '1662': 'Devolução de venda de combustível ou lubrificante destinado a uso e consumo',
-  '1663': 'Entrada de combustível ou lubrificante p/ armazenagem',
-  '1664': 'Retorno de combustível ou lubrificante remetido p/ armazenagem',
-  '1901': 'Entrada para industrialização por encomenda',
-  '1902': 'Retorno de mercadoria remetida p/ industrialização por encomenda',
-  '1903': 'Entrada de mercadoria remetida p/ industrialização e não aplicada no referido processo',
-  '1904': 'Retorno de remessa p/ venda fora do estabelecimento',
-  '1905': 'Entrada de mercadoria recebida p/ depósito em depósito fechado',
-  '1906': 'Retorno de mercadoria remetida p/ depósito em depósito fechado',
-  '1907': 'Retorno simbólico de mercadoria remetida p/ depósito em depósito fechado',
-  '1908': 'Entrada de bem por conta de contrato de comodato',
-  '1909': 'Retorno de bem remetido por conta de contrato de comodato',
-  '1910': 'Entrada de bonificação, doação ou brinde',
-  '1911': 'Entrada de amostra grátis',
-  '1912': 'Entrada de mercadoria ou bem recebido p/ demonstração',
-  '1913': 'Retorno de mercadoria remetida p/ demonstração',
-  '1914': 'Retorno de mercadoria remetida p/ venda fora do estabelecimento',
-  '1915': 'Entrada de mercadoria ou bem recebido p/ conserto ou reparo',
-  '1916': 'Retorno de mercadoria remetida p/ conserto ou reparo',
-  '1917': 'Entrada de mercadoria recebida em consignação mercantil ou ind.',
-  '1918': 'Devolução de mercadoria remetida em consignação mercantil ou ind.',
-  '1919': 'Devolução simbólica de mercadoria vendida ou utilizada em processo industrial',
-  '1920': 'Entrada de vasilhame ou sacaria',
-  '1921': 'Retorno de vasilhame ou sacaria',
-  '1922': 'Lançamento efetuado a título de simples faturamento decorrente de compra p/ recebimento futuro',
-  '1923': 'Entrada de mercadoria recebida do vendedor remetente em venda à ordem',
-  '1924': 'Entrada p/ industrialização sob encomenda de outra empresa',
-  '1925': 'Retorno de mercadoria remetida p/ industrialização sob encomenda de outra empresa',
-  '1926': 'Lançamento efetuado a título de reclassificação de mercadoria decorrente de formação de kit',
-  '1949': 'Outra entrada de mercadoria ou prestação de serviço não especificada',
+// Cache local de CFOPs carregados do banco
+let _cfopCache = null;
 
-  // Entradas interestaduais (2xxx)
-  '2101': 'Compra p/ industrialização',
-  '2102': 'Compra p/ comercialização',
-  '2111': 'Compra p/ industrialização de prod. sob encomenda do destinatário',
-  '2116': 'Compra p/ industrialização originada de encomenda',
-  '2120': 'Compra p/ industrialização, em regime de drawback',
-  '2122': 'Compra p/ comercialização, em regime de drawback',
-  '2152': 'Transferência p/ comercialização',
-  '2201': 'Devolução de venda de prod. industrializados',
-  '2202': 'Devolução de venda de mercadoria adquirida/recebida de terceiros',
-  '2252': 'Compra de energia elétrica p/ uso e consumo',
-  '2302': 'Aquisição de serviço de comunicação p/ uso e consumo',
-  '2352': 'Aquisição de serviço de transporte p/ uso e consumo',
-  '2401': 'Compra p/ industrialização em operação com mercadoria sujeita ao ST',
-  '2403': 'Compra p/ comercialização em operação com mercadoria sujeita ao ST',
-  '2407': 'Compra de mercadoria p/ uso e consumo cuja op. é com substituição tributária',
-  '2411': 'Devolução de venda de mercadoria sujeita ao ST',
-  '2501': 'Entrada de mercadoria recebida com end. de armazém geral',
-  '2551': 'Compra de bem p/ o ativo imobilizado',
-  '2552': 'Transferência de bem do ativo imobilizado',
-  '2556': 'Compra de material p/ uso e consumo',
-  '2651': 'Compra de combustível ou lubrificante p/ industrialização',
-  '2652': 'Compra de combustível ou lubrificante p/ comercialização',
-  '2653': 'Compra de combustível ou lubrificante p/ uso e consumo',
-  '2658': 'Transferência de combustível ou lubrificante p/ industrialização',
-  '2659': 'Transferência de combustível ou lubrificante p/ comercialização',
-  '2660': 'Devolução de venda de combustível ou lubrificante destinado à industrialização',
-  '2661': 'Devolução de venda de combustível ou lubrificante destinado à comercialização',
-  '2662': 'Devolução de venda de combustível ou lubrificante destinado a uso e consumo',
-  '2663': 'Entrada de combustível ou lubrificante p/ armazenagem',
-  '2664': 'Retorno de combustível ou lubrificante remetido p/ armazenagem',
-  '2949': 'Outra entrada de mercadoria ou prestação de serviço não especificada',
-
-  // Saídas estaduais (5xxx) — referência
-  '5101': 'Venda de prod. industrializados',
-  '5102': 'Venda de mercadoria adquirida/recebida de terceiros',
-  '5103': 'Venda de prod. industrializados, sujeitos ao ST',
-  '5104': 'Venda de mercadoria sujeita ao ST',
-  '5201': 'Devolução de compra p/ industrialização',
-  '5202': 'Devolução de compra p/ comercialização',
-  '5251': 'Venda de energia elétrica p/ distribuição ou comercialização',
-  '5252': 'Venda de energia elétrica p/ estabelecimento industrial',
-  '5253': 'Venda de energia elétrica p/ estabelecimento comercial',
-  '5255': 'Venda de energia elétrica p/ uso e consumo',
-  '5301': 'Prestação de serviço de comunicação p/ geração de demanda',
-  '5302': 'Prestação de serviço de comunicação p/ uso e consumo',
-  '5351': 'Prestação de serviço de transporte p/ execução de serviço',
-  '5352': 'Prestação de serviço de transporte a estabelecimento industrial',
-  '5353': 'Prestação de serviço de transporte a estabelecimento comercial',
-  '5355': 'Prestação de serviço de transporte a estabelecimento de produtor rural',
-  '5356': 'Prestação de serviço de transporte a estabelecimento de geradora de energia elétrica',
-  '5360': 'Prestação de serviço de transporte a contribuinte do ICMS',
-  '5651': 'Venda de combustível ou lubrificante de produção do estabelecimento',
-  '5652': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros',
-  '5653': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros destinado à comercialização',
-  '5655': 'Remessa de combustível ou lubrificante adquirido/recebido de terceiros p/ venda fora do estabelecimento',
-  '5656': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros destinado a consumidor ou usuário final',
-  '5657': 'Remessa de combustível ou lubrificante adquirido/recebido de terceiros p/ venda a consumidor final',
-  '5658': 'Transferência de combustível ou lubrificante',
-  '5659': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros destinado à indústria',
-  '5660': 'Devolução de compra de combustível ou lubrificante adquirido/recebido p/ industrialização',
-  '5661': 'Devolução de compra de combustível ou lubrificante adquirido/recebido p/ comercialização',
-  '5662': 'Devolução de compra de combustível ou lubrificante adquirido/recebido p/ uso e consumo',
-  '5663': 'Remessa p/ armazenagem de combustível ou lubrificante',
-  '5664': 'Retorno de combustível ou lubrificante recebido p/ armazenagem',
-  '5901': 'Remessa p/ industrialização por encomenda',
-  '5902': 'Retorno de mercadoria utilizada na industrialização por encomenda',
-  '5903': 'Retorno de mercadoria recebida p/ industrialização e não aplicada no referido processo',
-  '5904': 'Remessa p/ venda fora do estabelecimento',
-  '5905': 'Remessa p/ depósito fechado',
-  '5906': 'Retorno de mercadoria depositada em depósito fechado',
-  '5907': 'Retorno simbólico de mercadoria depositada em depósito fechado',
-  '5908': 'Remessa de bem por conta de contrato de comodato',
-  '5909': 'Retorno de bem recebido por conta de contrato de comodato',
-  '5910': 'Remessa em bonificação, doação ou brinde',
-  '5911': 'Remessa de amostra grátis',
-  '5912': 'Remessa de mercadoria ou bem p/ demonstração',
-  '5913': 'Retorno de mercadoria recebida p/ demonstração',
-  '5914': 'Remessa de mercadoria ou bem p/ exposição ou feira',
-  '5915': 'Remessa de mercadoria ou bem p/ conserto ou reparo',
-  '5916': 'Retorno de mercadoria ou bem recebido p/ conserto ou reparo',
-  '5917': 'Remessa de mercadoria em consignação mercantil ou industrial',
-  '5918': 'Devolução de mercadoria recebida em consignação mercantil ou industrial',
-  '5919': 'Devolução simbólica de mercadoria vendida ou utilizada em processo industrial',
-  '5920': 'Remessa de vasilhame ou sacaria',
-  '5921': 'Retorno de vasilhame ou sacaria',
-  '5922': 'Lançamento efetuado a título de simples faturamento decorrente de venda p/ entrega futura',
-  '5923': 'Remessa de mercadoria por conta e ordem de terceiros, em venda à ordem',
-  '5924': 'Remessa p/ industrialização por conta e ordem do adquirente da mercadoria',
-  '5925': 'Retorno de mercadoria recebida p/ industrialização por conta e ordem do adquirente',
-  '5926': 'Lançamento efetuado a título de reclassificação de mercadoria',
-  '5949': 'Outra saída de mercadoria ou prestação de serviço não especificada',
-
-  // Saídas interestaduais (6xxx)
-  '6101': 'Venda de prod. industrializados',
-  '6102': 'Venda de mercadoria adquirida/recebida de terceiros',
-  '6108': 'Venda de mercadoria com destino à Zona Franca de Manaus',
-  '6201': 'Devolução de compra p/ industrialização',
-  '6202': 'Devolução de compra p/ comercialização',
-  '6651': 'Venda de combustível ou lubrificante de produção do estabelecimento',
-  '6652': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros',
-  '6653': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros destinado à comercialização',
-  '6655': 'Remessa de combustível ou lubrificante adquirido/recebido de terceiros p/ venda fora do estabelecimento',
-  '6656': 'Venda de combustível ou lubrificante adquirido/recebido de terceiros destinado a consumidor ou usuário final',
-  '6949': 'Outra saída de mercadoria ou prestação de serviço não especificada',
-};
+async function carregarCfops() {
+  if (_cfopCache) return _cfopCache;
+  const { data } = await sb.from('oct_cfop').select('codigo,descricao,tipo').eq('ativo', true).order('codigo');
+  _cfopCache = data || [];
+  return _cfopCache;
+}
 
 function cfopDescricao(codigo) {
-  if (!codigo) return '';
-  return CFOP_TABELA[String(codigo).trim()] || '';
+  if (!codigo || !_cfopCache) return '';
+  const found = _cfopCache.find(c => c.codigo === String(codigo).trim());
+  return found?.descricao || '';
+}
+
+// Campo CFOP com busca/autocomplete
+function renderCfopInput(id, value, onchange) {
+  const desc = value ? cfopDescricao(value) : '';
+  return `
+    <div style="position:relative">
+      <input id="${id}" type="text" value="${value||''}"
+        placeholder="Ex: 1652"
+        oninput="buscarCfop('${id}', this.value)"
+        onchange="${onchange||''}"
+        autocomplete="off"
+        style="width:100%" />
+      <span id="${id}-desc" style="font-size:0.75rem;color:#60a5fa;margin-top:3px;display:block">${desc}</span>
+      <div id="${id}-lista" style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a1d2e;border:1px solid #2a4a6a;border-radius:6px;max-height:200px;overflow-y:auto;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5)"></div>
+    </div>
+  `;
+}
+
+async function buscarCfop(inputId, valor) {
+  const lista = document.getElementById(inputId + '-lista');
+  const desc  = document.getElementById(inputId + '-desc');
+  if (!lista) return;
+
+  const cfops = await carregarCfops();
+  const termo = valor.toLowerCase().trim();
+
+  if (!termo) { lista.style.display = 'none'; if (desc) desc.textContent = ''; return; }
+
+  // Busca por código ou descrição
+  const resultados = cfops.filter(c =>
+    c.codigo.startsWith(termo) || c.descricao.toLowerCase().includes(termo)
+  ).slice(0, 12);
+
+  if (resultados.length === 0) {
+    lista.style.display = 'none';
+    if (desc) desc.textContent = '';
+    // Verifica match exato
+    const exato = cfops.find(c => c.codigo === termo);
+    if (exato && desc) desc.textContent = exato.descricao;
+    return;
+  }
+
+  lista.style.display = 'block';
+  lista.innerHTML = resultados.map(c => `
+    <div onclick="selecionarCfop('${inputId}', '${c.codigo}', '${c.descricao.replace(/'/g,"&#39;")}')"
+      style="padding:8px 12px;cursor:pointer;font-size:0.82rem;border-bottom:1px solid #2a2d3e;display:flex;gap:10px;align-items:center"
+      onmouseover="this.style.background='#2a2d3e'" onmouseout="this.style.background='transparent'">
+      <span style="color:#f97316;font-weight:600;min-width:40px">${c.codigo}</span>
+      <span style="color:#ccc">${c.descricao}</span>
+      <span style="margin-left:auto;font-size:0.7rem;color:#555">${c.tipo}</span>
+    </div>
+  `).join('');
+
+  // Fecha ao clicar fora
+  setTimeout(() => {
+    document.addEventListener('click', function fechar(e) {
+      if (!lista.contains(e.target) && e.target.id !== inputId) {
+        lista.style.display = 'none';
+        document.removeEventListener('click', fechar);
+      }
+    });
+  }, 100);
+}
+
+function selecionarCfop(inputId, codigo, descricao) {
+  const input = document.getElementById(inputId);
+  const desc  = document.getElementById(inputId + '-desc');
+  const lista = document.getElementById(inputId + '-lista');
+  if (input) input.value = codigo;
+  if (desc)  desc.textContent = descricao;
+  if (lista) lista.style.display = 'none';
+  // Dispara evento de change
+  input?.dispatchEvent(new Event('change'));
 }
