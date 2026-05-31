@@ -1,3 +1,2 @@
-// Configuração do Supabase
 const SUPABASE_URL = 'https://gnlbkwvoqnncpszmokuv.supabase.co';
-const SUPABASE_ANON_KEY = 'COLE_AQUI_SUA_ANON_KEY';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdubGJrd3ZvcW5uY3Bzem1va3V2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNjQxNDcsImV4cCI6MjA5NTY0MDE0N30.gAPt0FJ1Msk2Jl_pYGEVrGcmlZzwyMJeQE_eanuFSmc';
