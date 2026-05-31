@@ -28,6 +28,9 @@ async function moduloNfe() {
     return;
   }
 
+  // Pré-carrega CFOPs
+  await carregarCfops();
+
   const temCert = !!_empresa?.cert_path;
   const senhaAtual = getCertSenha();
 
@@ -75,7 +78,7 @@ async function moduloNfe() {
             <div class="form-group span2">
               <label>Senha do certificado ${senhaAtual ? '— <span style="color:#4caf50;font-size:0.82rem">✅ salva na sessão</span>' : '*'}</label>
               <div style="display:flex;gap:8px;align-items:center">
-                <input id="manifest-senha" type="password" placeholder="${senhaAtual ? '••••••• (salva)' : 'Senha do certificado'}" style="flex:1" />
+                <input id="manifest-senha" type="password" placeholder="${senhaAtual ? '••••• (salva)' : 'Senha do certificado'}" style="flex:1" />
                 ${senhaAtual ? `<button onclick="limparSenhaSessao()" style="padding:6px 10px;border-radius:5px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem">🔄 Trocar</button>` : ''}
               </div>
             </div>
@@ -142,16 +145,17 @@ async function moduloNfe() {
             ${!importadas || importadas.length === 0
               ? `<div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">Nenhuma NF-e importada ainda</div>`
               : importadas.map(n => `
-                <div class="nfe-card importada" onclick="abrirDetalheNfe('${n.id}')" style="cursor:pointer">
+                <div class="nfe-card importada">
                   <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                    <div>
+                    <div style="cursor:pointer;flex:1" onclick="abrirDetalheNfe('${n.id}')">
                       <div class="nfe-card-numero">NF-e ${n.numero||'—'}/${n.serie||'—'}</div>
                       <div class="nfe-card-emit">${n.oct_pessoas?.nome||'—'}</div>
                       <div style="font-size:0.7rem;color:#555">${n.emissao?new Date(n.emissao+'T12:00:00').toLocaleDateString('pt-BR'):'—'}${n.cfop?` · CFOP ${n.cfop}`:''}</div>
                     </div>
-                    <div style="text-align:right">
+                    <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
                       <div style="color:#4caf50;font-weight:600;font-size:0.88rem">R$ ${Number(n.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
                       <span class="nfe-status ${n.status}">${n.status}</span>
+                      <button onclick="excluirNfe('${n.id}')" style="padding:3px 8px;border-radius:4px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer;font-size:0.72rem">🗑 Excluir</button>
                     </div>
                   </div>
                 </div>`).join('')}
@@ -160,6 +164,19 @@ async function moduloNfe() {
       </div>
     </div>
   `;
+}
+
+// ─── EXCLUIR NF-e ─────────────────────────────────────────────────────────────
+
+async function excluirNfe(id) {
+  if (!confirm('Excluir esta NF-e do sistema?\n\nOs estoques dos tanques NÃO serão revertidos automaticamente.')) return;
+  // Remove vínculos produto
+  await sb.from('oct_produto_nfe').delete().eq('nfe_id', id);
+  // Remove itens
+  await sb.from('oct_nfe_entrada_itens').delete().eq('nfe_id', id);
+  // Remove NF-e
+  await sb.from('oct_nfe_entrada').delete().eq('id', id);
+  moduloNfe();
 }
 
 // ─── DETALHE ─────────────────────────────────────────────────────────────────
@@ -172,7 +189,7 @@ async function abrirDetalheNfe(id) {
 
   const { data: nfe } = await sb
     .from('oct_nfe_entrada')
-    .select('*, oct_pessoas(nome,documento), oct_nfe_entrada_itens(*)')
+    .select('*, oct_pessoas(nome,documento), oct_nfe_entrada_itens(*, oct_produtos(nome,codigo))')
     .eq('id', id).single();
 
   if (!nfe) { div.innerHTML = '<p style="color:#f44">NF-e não encontrada.</p>'; return; }
@@ -215,8 +232,7 @@ async function abrirDetalheNfe(id) {
           <div class="form-group span2"><label>Natureza da Operação</label><input id="edit-natureza" type="text" value="${nfe.natureza||''}" /></div>
           <div class="form-group">
             <label>CFOP</label>
-            <input id="edit-cfop" type="text" value="${nfe.cfop||''}" oninput="atualizarDescCfop(this.value)" />
-            <span id="cfop-desc" style="font-size:0.75rem;color:#60a5fa;margin-top:3px;display:block">${cfopDesc}</span>
+            ${renderCfopInput('edit-cfop', nfe.cfop||'')}
           </div>
           <div class="form-group"><label>Valor Produtos</label><input type="text" value="R$ ${Number(nfe.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}" disabled style="opacity:0.6" /></div>
           <div class="form-group"><label>Valor Total NF-e</label><input id="edit-valor-total" type="number" step="0.01" value="${nfe.valor_total||0}" /></div>
@@ -239,23 +255,24 @@ async function abrirDetalheNfe(id) {
       <div id="aba-itens" class="nfe-aba-conteudo" style="display:none;padding:20px">
         <div style="overflow-x:auto">
           <table class="nfe-tabela">
-            <thead><tr><th>#</th><th>Cód.</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Un</th><th>Vl.Unit</th><th>Total</th><th>ANP</th></tr></thead>
+            <thead><tr><th>#</th><th>Cód.</th><th>Descrição</th><th>NCM</th><th>CFOP</th><th>Qtd</th><th>Un</th><th>Vl.Unit</th><th>Total</th><th>Produto vinculado</th></tr></thead>
             <tbody>
               ${itens.map((it,i) => `
                 <tr class="${it.cod_anp?'item-combustivel':''}">
                   <td>${i+1}</td>
                   <td style="font-size:0.75rem;font-family:monospace">${it.codigo||'—'}</td>
-                  <td><strong>${it.descricao||'—'}</strong>${it.cod_anp?`<br><span style="font-size:0.68rem;color:#888">ANP: ${it.cod_anp} — ${it.desc_anp||''}</span>`:''}</td>
+                  <td><strong>${it.descricao||'—'}</strong>${it.cod_anp?`<br><span style="font-size:0.68rem;color:#888">ANP: ${it.cod_anp}</span>`:''}</td>
                   <td style="font-size:0.75rem">${it.ncm||'—'}</td>
-                  <td style="font-size:0.75rem">
-                    ${it.cfop||'—'}
-                    ${it.cfop ? `<br><span style="font-size:0.65rem;color:#60a5fa">${cfopDescricao(it.cfop)}</span>` : ''}
-                  </td>
+                  <td style="font-size:0.75rem">${it.cfop||'—'}${it.cfop?`<br><span style="font-size:0.65rem;color:#60a5fa">${cfopDescricao(it.cfop)}</span>`:''}</td>
                   <td>${Number(it.quantidade||0).toLocaleString('pt-BR',{minimumFractionDigits:3})}</td>
                   <td style="font-size:0.75rem">${it.unidade||'—'}</td>
                   <td>R$ ${Number(it.valor_unitario||0).toLocaleString('pt-BR',{minimumFractionDigits:4})}</td>
                   <td><strong>R$ ${Number(it.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
-                  <td>${it.cod_anp?'<span class="nfe-badge-anp">⛽</span>':'—'}</td>
+                  <td>
+                    ${it.oct_produtos
+                      ? `<span style="color:#4caf50;font-size:0.82rem">✅ ${it.oct_produtos.nome}</span>`
+                      : `<button onclick="abrirVinculoProduto('${it.id}','${it.descricao.replace(/'/g,"&#39;")}','${it.codigo}')" style="padding:4px 8px;border-radius:4px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer;font-size:0.75rem">🔗 Vincular produto</button>`}
+                  </td>
                 </tr>`).join('')}
             </tbody>
             <tfoot>
@@ -267,6 +284,8 @@ async function abrirDetalheNfe(id) {
             </tfoot>
           </table>
         </div>
+        <!-- Modal vínculo produto -->
+        <div id="modal-vinculo-produto" style="display:none;margin-top:16px;background:#1a1d2e;border:1px solid #2a4a6a;border-radius:10px;padding:20px"></div>
       </div>
 
       <!-- TRIBUTAÇÃO -->
@@ -275,50 +294,24 @@ async function abrirDetalheNfe(id) {
           <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Base ICMS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_icms||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
           <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Valor PIS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_pis||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
           <div style="background:#0f1117;border-radius:8px;padding:12px"><div class="nfe-label">Valor COFINS</div><div style="font-size:1rem;font-weight:600;margin-top:4px">R$ ${Number(nfe.valor_cofins||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
-          ${nfe.v_icms_mono_ret ? `
-          <div style="background:#1a2a1a;border:1px solid #2a5a2a;border-radius:8px;padding:12px;grid-column:span 3">
-            <div class="nfe-label">⛽ ICMS Monofásico Retido (Combustíveis)</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <div><div class="nfe-label">Qtd BC Mono Ret</div><div style="font-weight:600">${Number(nfe.q_bc_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} L</div></div>
-              <div><div class="nfe-label">Valor ICMS Mono Ret</div><div style="font-weight:600;color:#4caf50">R$ ${Number(nfe.v_icms_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
-            </div>
-          </div>` : ''}
+          ${nfe.v_icms_mono_ret ? `<div style="background:#1a2a1a;border:1px solid #2a5a2a;border-radius:8px;padding:12px;grid-column:span 3"><div class="nfe-label">⛽ ICMS Monofásico Retido</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><div><div class="nfe-label">Qtd BC</div><div style="font-weight:600">${Number(nfe.q_bc_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} L</div></div><div><div class="nfe-label">Valor</div><div style="font-weight:600;color:#4caf50">R$ ${Number(nfe.v_icms_mono_ret||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div></div></div>` : ''}
         </div>
         <div class="modulo-header"><h2>Por item</h2></div>
-        <div style="overflow-x:auto">
-          <table class="nfe-tabela">
-            <thead><tr><th>Descrição</th><th>CST ICMS</th><th>Alíq ICMS</th><th>ICMS Mono Ret</th><th>CST PIS</th><th>Alíq PIS</th><th>CST COFINS</th><th>Alíq COFINS</th></tr></thead>
-            <tbody>
-              ${itens.map(it=>`
-                <tr class="${it.cod_anp?'item-combustivel':''}">
-                  <td>${it.descricao}</td>
-                  <td>${it.cst_icms||'—'}</td>
-                  <td>${it.aliq_icms||0}%</td>
-                  <td>${it.v_icms_mono_ret?`<span style="color:#4caf50">R$ ${Number(it.v_icms_mono_ret).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:'—'}</td>
-                  <td>${it.cst_pis||'—'}</td>
-                  <td>${it.aliq_pis||0}%</td>
-                  <td>${it.cst_cofins||'—'}</td>
-                  <td>${it.aliq_cofins||0}%</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
+        <table class="nfe-tabela">
+          <thead><tr><th>Descrição</th><th>CST ICMS</th><th>Alíq ICMS</th><th>ICMS Mono</th><th>CST PIS</th><th>Alíq PIS</th><th>CST COFINS</th><th>Alíq COFINS</th></tr></thead>
+          <tbody>${itens.map(it=>`<tr class="${it.cod_anp?'item-combustivel':''}"><td>${it.descricao}</td><td>${it.cst_icms||'—'}</td><td>${it.aliq_icms||0}%</td><td>${it.v_icms_mono_ret?`<span style="color:#4caf50">R$ ${Number(it.v_icms_mono_ret).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:'—'}</td><td>${it.cst_pis||'—'}</td><td>${it.aliq_pis||0}%</td><td>${it.cst_cofins||'—'}</td><td>${it.aliq_cofins||0}%</td></tr>`).join('')}</tbody>
+        </table>
       </div>
 
       <!-- PAGAMENTO -->
       <div id="aba-pagamento" class="nfe-aba-conteudo" style="display:none;padding:20px">
-        ${pags.length===0 ? `<p style="color:#555;text-align:center;padding:20px">Sem informações de pagamento</p>` : `
+        ${pags.length===0?`<p style="color:#555;text-align:center;padding:20px">Sem informações de pagamento</p>`:`
           <table class="nfe-tabela" style="margin-bottom:16px">
             <thead><tr><th>Condição</th><th>Forma</th><th>Descrição</th><th>Valor</th></tr></thead>
             <tbody>${pags.map(p=>`<tr><td>${p.indPag==='0'?'À Vista':'A Prazo'}</td><td>${TIPOS_PAG[p.tPag]||p.tPag||'—'}</td><td>${p.xPag||'—'}</td><td><strong>R$ ${Number(p.vPag||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td></tr>`).join('')}</tbody>
             <tfoot><tr style="background:#1e2235"><td colspan="3" style="font-weight:600;padding:8px 10px">Total:</td><td style="font-weight:700;color:#f97316;padding:8px 10px">R$ ${pags.reduce((s,p)=>s+Number(p.vPag||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr></tfoot>
           </table>`}
-        ${dups.length>0?`
-          <div class="modulo-header"><h2>Duplicatas</h2></div>
-          <table class="nfe-tabela">
-            <thead><tr><th>Nº</th><th>Vencimento</th><th>Valor</th></tr></thead>
-            <tbody>${dups.map(d=>`<tr><td>${d.nDup||'—'}</td><td>${d.dVenc?new Date(d.dVenc+'T12:00:00').toLocaleDateString('pt-BR'):'—'}</td><td>R$ ${Number(d.vDup||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr>`).join('')}</tbody>
-          </table>`:''}
+        ${dups.length>0?`<div class="modulo-header"><h2>Duplicatas</h2></div><table class="nfe-tabela"><thead><tr><th>Nº</th><th>Vencimento</th><th>Valor</th></tr></thead><tbody>${dups.map(d=>`<tr><td>${d.nDup||'—'}</td><td>${d.dVenc?new Date(d.dVenc+'T12:00:00').toLocaleDateString('pt-BR'):'—'}</td><td>R$ ${Number(d.vDup||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td></tr>`).join('')}</tbody></table>`:''}
       </div>
 
       <!-- TRANSPORTE -->
@@ -331,30 +324,174 @@ async function abrirDetalheNfe(id) {
 
       <!-- OBS -->
       <div id="aba-obs" class="nfe-aba-conteudo" style="display:none;padding:20px">
-        ${nfe.inf_cpl?`<div style="background:#0f1117;border-radius:8px;padding:14px;margin-bottom:16px;font-size:0.78rem;color:#888;line-height:1.6"><div class="nfe-label" style="margin-bottom:8px">Informações Adicionais (XML)</div>${nfe.inf_cpl.substring(0,800)}${nfe.inf_cpl.length>800?'...':''}</div>`:''}
-        <div class="form-group">
-          <label>Observações internas</label>
-          <textarea id="edit-obs" rows="4" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.9rem;resize:vertical">${nfe.observacoes||''}</textarea>
-        </div>
+        ${nfe.inf_cpl?`<div style="background:#0f1117;border-radius:8px;padding:14px;margin-bottom:16px;font-size:0.78rem;color:#888;line-height:1.6"><div class="nfe-label" style="margin-bottom:8px">Informações Adicionais (XML)</div>${nfe.inf_cpl.substring(0,600)}...</div>`:''}
+        <div class="form-group"><label>Observações internas</label><textarea id="edit-obs" rows="4" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.9rem;resize:vertical">${nfe.observacoes||''}</textarea></div>
       </div>
 
       <div style="padding:14px 20px;border-top:1px solid #2a2d3e;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button onclick="salvarEdicaoNfe('${id}')" class="btn-salvar">💾 Salvar</button>
         <button onclick="fecharDetalheNfe()" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Fechar</button>
         <button onclick="confirmarNfeImportada('${id}')" style="padding:10px 20px;border-radius:6px;border:1px solid #2a5a2a;background:transparent;color:#4caf50;cursor:pointer">✅ Confirmar NF-e</button>
+        <button onclick="excluirNfe('${id}')" style="padding:10px 20px;border-radius:6px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer">🗑 Excluir</button>
         <span id="nfe-detalhe-msg" class="form-msg"></span>
       </div>
     </div>
   `;
 }
 
-function atualizarDescCfop(valor) {
-  const desc = cfopDescricao(valor);
-  const el = document.getElementById('cfop-desc');
-  if (el) el.textContent = desc;
+// ─── VÍNCULO PRODUTO ──────────────────────────────────────────────────────────
+
+async function abrirVinculoProduto(itemId, descricao, codigo) {
+  const modal = document.getElementById('modal-vinculo-produto');
+  modal.style.display = 'block';
+  modal.innerHTML = '<p style="color:#888">Carregando...</p>';
+  modal.scrollIntoView({ behavior: 'smooth' });
+
+  // Busca produtos existentes
+  const { data: produtos } = await sb
+    .from('oct_produtos').select('id,nome,codigo,unidade')
+    .eq('empresa_id', _empresaId).order('nome').limit(100);
+
+  modal.innerHTML = `
+    <h4 style="color:#60a5fa;margin-bottom:16px">🔗 Vincular item: <strong>${descricao}</strong></h4>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+      <!-- Associar existente -->
+      <div>
+        <div class="modulo-header"><h2>Associar a produto existente</h2></div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Buscar produto</label>
+          <input id="busca-produto" type="text" placeholder="Digite o nome ou código..."
+            oninput="filtrarProdutos(this.value)"
+            style="width:100%" />
+        </div>
+        <div id="lista-produtos-vinculo" style="max-height:200px;overflow-y:auto">
+          ${produtos && produtos.length > 0
+            ? produtos.map(p => `
+              <div class="produto-item" onclick="vincularProdutoExistente('${itemId}','${p.id}','${p.nome.replace(/'/g,"&#39;")}')"
+                style="padding:8px 12px;cursor:pointer;border-radius:6px;border:1px solid #2a2d3e;margin-bottom:6px;transition:all 0.2s"
+                onmouseover="this.style.borderColor='#f97316'" onmouseout="this.style.borderColor='#2a2d3e'">
+                <div style="font-weight:600;font-size:0.85rem">${p.nome}</div>
+                <div style="font-size:0.72rem;color:#888">${p.codigo||'—'} · ${p.unidade||'un'}</div>
+              </div>`).join('')
+            : '<p style="color:#555;text-align:center;padding:20px">Nenhum produto cadastrado</p>'}
+        </div>
+      </div>
+
+      <!-- Cadastrar novo -->
+      <div>
+        <div class="modulo-header"><h2>Cadastrar novo produto</h2></div>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>Nome *</label>
+          <input id="novo-prod-nome" type="text" value="${descricao}" />
+        </div>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>Código</label>
+          <input id="novo-prod-codigo" type="text" value="${codigo}" />
+        </div>
+        <div class="form-grid" style="margin-bottom:10px">
+          <div class="form-group">
+            <label>Unidade</label>
+            <select id="novo-prod-unidade">
+              <option value="un">UN</option>
+              <option value="LTS">LTS</option>
+              <option value="kg">KG</option>
+              <option value="cx">CX</option>
+              <option value="pc">PC</option>
+              <option value="m">M</option>
+              <option value="L">L</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Categoria</label>
+            <select id="novo-prod-categoria">
+              <option value="combustivel">Combustível</option>
+              <option value="lubrificante">Lubrificante</option>
+              <option value="servico">Serviço</option>
+              <option value="mercadoria">Mercadoria</option>
+              <option value="material">Material</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="cadastrarNovoProduto('${itemId}')" class="btn-salvar" style="width:100%">+ Cadastrar e vincular</button>
+        <span id="novo-prod-msg" style="font-size:0.82rem;margin-top:6px;display:block"></span>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <button onclick="document.getElementById('modal-vinculo-produto').style.display='none'"
+        style="padding:8px 16px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">
+        Cancelar
+      </button>
+    </div>
+  `;
+
+  // Guarda os produtos para filtro
+  modal._produtos = produtos || [];
 }
 
-function mostrarAba(id) {
+function filtrarProdutos(termo) {
+  const modal = document.getElementById('modal-vinculo-produto');
+  const lista = document.getElementById('lista-produtos-vinculo');
+  if (!modal._produtos || !lista) return;
+
+  const filtrado = modal._produtos.filter(p =>
+    p.nome.toLowerCase().includes(termo.toLowerCase()) ||
+    (p.codigo||'').toLowerCase().includes(termo.toLowerCase())
+  );
+
+  lista.innerHTML = filtrado.length === 0
+    ? '<p style="color:#555;text-align:center;padding:16px">Nenhum produto encontrado</p>'
+    : filtrado.map(p => `
+      <div onclick="vincularProdutoExistente('${p.id_item}','${p.id}','${p.nome.replace(/'/g,"&#39;")}')"
+        style="padding:8px 12px;cursor:pointer;border-radius:6px;border:1px solid #2a2d3e;margin-bottom:6px"
+        onmouseover="this.style.borderColor='#f97316'" onmouseout="this.style.borderColor='#2a2d3e'">
+        <div style="font-weight:600;font-size:0.85rem">${p.nome}</div>
+        <div style="font-size:0.72rem;color:#888">${p.codigo||'—'} · ${p.unidade||'un'}</div>
+      </div>`).join('');
+}
+
+async function vincularProdutoExistente(itemId, produtoId, produtoNome) {
+  await sb.from('oct_nfe_entrada_itens').update({ produto_id: produtoId }).eq('id', itemId);
+
+  // Salva vínculo na tabela oct_produto_nfe
+  const { data: item } = await sb.from('oct_nfe_entrada_itens').select('nfe_id').eq('id', itemId).single();
+  if (item) {
+    await sb.from('oct_produto_nfe').upsert({
+      produto_id: produtoId, nfe_id: item.nfe_id,
+      nfe_item_id: itemId, empresa_id: _empresaId,
+    }, { onConflict: 'nfe_item_id' });
+  }
+
+  document.getElementById('modal-vinculo-produto').style.display = 'none';
+  // Atualiza a célula na tabela
+  const btn = document.querySelector(`button[onclick*="${itemId}"]`);
+  if (btn) btn.closest('td').innerHTML = `<span style="color:#4caf50;font-size:0.82rem">✅ ${produtoNome}</span>`;
+}
+
+async function cadastrarNovoProduto(itemId) {
+  const nome = document.getElementById('novo-prod-nome').value.trim();
+  const msg  = document.getElementById('novo-prod-msg');
+  if (!nome) { msg.textContent = 'Nome é obrigatório.'; msg.style.color = '#f44'; return; }
+
+  msg.textContent = 'Cadastrando...'; msg.style.color = '#888';
+
+  const { data: novo, error } = await sb.from('oct_produtos').insert({
+    empresa_id: _empresaId,
+    nome,
+    codigo: document.getElementById('novo-prod-codigo').value.trim() || null,
+    unidade: document.getElementById('novo-prod-unidade').value,
+    categoria: document.getElementById('novo-prod-categoria').value,
+  }).select().single();
+
+  if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
+
+  await vincularProdutoExistente(itemId, novo.id, novo.nome);
+  msg.textContent = '✅ Produto cadastrado e vinculado!'; msg.style.color = '#4caf50';
+}
+
+function mostrarAba(id){
   document.querySelectorAll('.nfe-aba-conteudo').forEach(el=>el.style.display='none');
   document.querySelectorAll('.nfe-aba').forEach(el=>el.classList.remove('ativo'));
   document.getElementById(id).style.display='block';
@@ -393,6 +530,7 @@ async function confirmarNfeImportada(id){
 }
 
 // ─── MANIFESTAÇÃO ────────────────────────────────────────────────────────────
+
 function abrirManifestar(){const p=document.getElementById('nfe-manifestar-painel');p.style.display=p.style.display==='none'?'block':'none';}
 function fecharManifestar(){document.getElementById('nfe-manifestar-painel').style.display='none';}
 function limparSenhaSessao(){setCertSenha(null);moduloNfe().then(()=>abrirManifestar());}
@@ -465,10 +603,15 @@ function abrirImportarNfe(){const a=document.getElementById('nfe-importar');a.st
 function lerXmlNfe(input){if(!input.files.length)return;lerXmlNfeFile(input.files[0]);}
 function lerXmlNfeFile(file){const r=new FileReader();r.onload=async(e)=>{try{const parser=new DOMParser();const xml=parser.parseFromString(e.target.result,'text/xml');const{data:tanques}=await sb.from('oct_tanques').select('*').eq('empresa_id',_empresaId).order('numero');nfeTanques=tanques||[];await processarXmlNfe(xml,file.name,null);}catch(err){alert('Erro: '+err.message);}};r.readAsText(file,'UTF-8');}
 
-async function processarXmlNfe(xml, nomeArquivo, manifestadaId){
+async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   const d=parseNFe(xml);
   const xmlString=new XMLSerializer().serializeToString(xml);
   nfeXmlDados={...d,nomeArquivo,manifestadaId,xmlString};
+
+  // Busca fornecedor existente pelo CNPJ
+  const{data:fornExist}=await sb.from('oct_pessoas').select('id,nome').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();
+  nfeXmlDados.fornecedorExistente = fornExist || null;
+
   renderPreviewNfe();
 }
 
@@ -488,49 +631,103 @@ function renderPreviewNfe(){
         <h3 style="color:#f97316">📄 NF-e ${d.numero}/${d.serie} — ${d.emitNome}</h3>
         <button onclick="cancelarNfe()" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">✕</button>
       </div>
+
+      <!-- RESUMO -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
         <div><span class="nfe-label">Nº/Série</span><br><strong>${d.numero}/${d.serie}</strong></div>
         <div><span class="nfe-label">Emissão</span><br><strong>${d.dhEmi?new Date(d.dhEmi+'T12:00:00').toLocaleDateString('pt-BR'):'-'}</strong></div>
-        <div><span class="nfe-label">Total NF-e</span><br><strong style="color:#f97316;font-size:1.1rem">R$ ${d.vNF.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
-        <div style="grid-column:span 2"><span class="nfe-label">Fornecedor</span><br><strong>${d.emitNome}</strong><br><span style="font-size:0.72rem;color:#888">${d.emitCnpj} | IE: ${d.emitIE}</span></div>
-        <div>
-          <span class="nfe-label">CFOP</span><br>
-          <strong>${d.cfopCapa||d.itens[0]?.cfop||'—'}</strong>
-          ${cfopDesc?`<br><span style="font-size:0.72rem;color:#60a5fa">${cfopDesc}</span>`:''}
-        </div>
+        <div><span class="nfe-label">Total</span><br><strong style="color:#f97316;font-size:1.1rem">R$ ${d.vNF.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
+        <div style="grid-column:span 2"><span class="nfe-label">Fornecedor</span><br><strong>${d.emitNome}</strong><br><span style="font-size:0.72rem;color:#888">${d.emitCnpj}</span></div>
+        <div><span class="nfe-label">CFOP</span><br><strong>${d.cfopCapa||d.itens[0]?.cfop||'—'}</strong>${cfopDesc?`<br><span style="font-size:0.72rem;color:#60a5fa">${cfopDesc}</span>`:''}</div>
       </div>
+
+      <!-- FORNECEDOR -->
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:14px;margin-bottom:16px">
+        <div class="nfe-label" style="margin-bottom:10px">👤 Fornecedor</div>
+        ${d.fornecedorExistente
+          ? `<div style="display:flex;align-items:center;gap:10px">
+              <span style="color:#4caf50">✅ Fornecedor já cadastrado: <strong>${d.fornecedorExistente.nome}</strong></span>
+              <input type="hidden" id="forn-id" value="${d.fornecedorExistente.id}" />
+              <button onclick="trocarFornecedor()" style="padding:4px 10px;border-radius:4px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem">Trocar</button>
+            </div>`
+          : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="form-group">
+                <label>Nome do fornecedor *</label>
+                <input id="forn-nome" type="text" value="${d.emitNome}" />
+              </div>
+              <div class="form-group">
+                <label>CNPJ</label>
+                <input id="forn-cnpj" type="text" value="${d.emitCnpj}" disabled style="opacity:0.6" />
+              </div>
+              <div class="form-group">
+                <label>IE</label>
+                <input id="forn-ie" type="text" value="${d.emitIE||''}" />
+              </div>
+              <div class="form-group">
+                <label>Cidade/UF</label>
+                <input type="text" value="${d.emitMun||''} / ${d.emitUF||''}" disabled style="opacity:0.6" />
+              </div>
+            </div>`}
+      </div>
+
+      <!-- TRIBUTAÇÃO RESUMO -->
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#0f1117;border-radius:8px;margin-bottom:16px;font-size:0.82rem">
         <div><span class="nfe-label">ICMS BC</span><br>R$ ${d.vBC.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         <div><span class="nfe-label">PIS</span><br>R$ ${d.vPIS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         <div><span class="nfe-label">COFINS</span><br>R$ ${d.vCOFINS.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         <div><span class="nfe-label">Frete</span><br>R$ ${d.vFrete.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-        ${d.vICMSMonoRet>0?`<div style="grid-column:span 4;background:#1a2a1a;border-radius:6px;padding:8px;border:1px solid #2a5a2a"><span class="nfe-label">⛽ ICMS Monofásico Retido</span><span style="margin-left:12px;color:#4caf50;font-weight:600">R$ ${d.vICMSMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:2})} (${d.qBCMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:3})} L)</span></div>`:''}
+        ${d.vICMSMonoRet>0?`<div style="grid-column:span 4;background:#1a2a1a;border-radius:6px;padding:8px;border:1px solid #2a5a2a"><span class="nfe-label">⛽ ICMS Mono Ret</span><span style="margin-left:12px;color:#4caf50;font-weight:600">R$ ${d.vICMSMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:2})} (${d.qBCMonoRet.toLocaleString('pt-BR',{minimumFractionDigits:3})} L)</span></div>`:''}
       </div>
-      <div class="modulo-header"><h2>Itens (${d.itens.length})</h2></div>
+
+      <!-- ITENS COM VÍNCULO PRODUTO -->
+      <div class="modulo-header"><h2>Itens — vincule cada produto</h2></div>
       <div style="overflow-x:auto;margin-bottom:16px">
         <table class="nfe-tabela">
-          <thead><tr><th>#</th><th>Descrição</th><th>NCM/CFOP</th><th>Qtd</th><th>Vl.Unit</th><th>Total</th><th>ICMS</th><th>Tanque</th></tr></thead>
+          <thead><tr><th>#</th><th>Descrição</th><th>NCM/CFOP</th><th>Qtd</th><th>Vl.Unit</th><th>Total</th><th>ICMS</th><th>Tanque</th><th>Produto do sistema</th></tr></thead>
           <tbody>
             ${d.itens.map((it,i)=>`
               <tr class="${it.ehCombustivel?'item-combustivel':''}">
                 <td>${i+1}</td>
-                <td><strong>${it.descricao}</strong>${it.codAnp?`<br><span style="font-size:0.68rem;color:#4caf50">⛽ ${it.codAnp} — ${it.descAnp}</span>`:''}</td>
+                <td><strong>${it.descricao}</strong>${it.codAnp?`<br><span style="font-size:0.68rem;color:#4caf50">⛽ ${it.codAnp}</span>`:''}</td>
                 <td style="font-size:0.75rem">${it.ncm}<br><strong>${it.cfop}</strong>${cfopDescricao(it.cfop)?`<br><span style="font-size:0.65rem;color:#60a5fa">${cfopDescricao(it.cfop)}</span>`:''}</td>
                 <td>${it.quantidade.toLocaleString('pt-BR',{minimumFractionDigits:3})} ${it.unidade}</td>
                 <td>R$ ${it.valorUnitario.toLocaleString('pt-BR',{minimumFractionDigits:4})}</td>
                 <td><strong>R$ ${it.valorTotal.toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
-                <td style="font-size:0.75rem">CST:${it.cstIcms}${it.vICMSMonoRetItem>0?`<br><span style="color:#4caf50">Mono: R$ ${it.vICMSMonoRetItem.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:''}</td>
-                <td>${it.ehCombustivel?`<select id="tanque-item-${i}" style="background:#0f1117;border:1px solid #2a2d3e;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;min-width:120px"><option value="">Selecione...</option>${nfeTanques.map(t=>`<option value="${t.id}">${t.numero} — ${t.combustivel}</option>`).join('')}</select>`:'—'}</td>
+                <td style="font-size:0.75rem">CST:${it.cstIcms}${it.vICMSMonoRetItem>0?`<br><span style="color:#4caf50">R$ ${it.vICMSMonoRetItem.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>`:''}</td>
+                <td>${it.ehCombustivel?`<select id="tanque-item-${i}" style="background:#0f1117;border:1px solid #2a2d3e;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;min-width:110px"><option value="">Selecione...</option>${nfeTanques.map(t=>`<option value="${t.id}">${t.numero} — ${t.combustivel}</option>`).join('')}</select>`:'—'}</td>
+                <td>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <input id="prod-nome-${i}" type="text" value="${it.descricao}"
+                      placeholder="Nome no sistema"
+                      style="padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem;width:140px" />
+                    <select id="prod-acao-${i}" style="padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.75rem">
+                      <option value="novo">Cadastrar novo</option>
+                      <option value="ignorar">Não vincular</option>
+                    </select>
+                  </div>
+                </td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>
+
       ${d.itens.some(it=>it.ehCombustivel)?`<div style="background:#0f1117;border:1px solid #f97316;border-radius:8px;padding:10px;margin-bottom:16px;font-size:0.82rem;color:#f97316">⚠️ Vincule cada combustível ao tanque correspondente.</div>`:''}
+
       <div class="form-acoes">
-        <button class="btn-salvar" onclick="confirmarNfe()">✅ Confirmar e atualizar estoque</button>
+        <button class="btn-salvar" onclick="confirmarNfe()">✅ Confirmar e importar</button>
         <button onclick="cancelarNfe()" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Cancelar</button>
         <span id="nfe-msg" class="form-msg"></span>
       </div>
+    </div>
+  `;
+}
+
+function trocarFornecedor() {
+  const area = document.querySelector('#nfe-preview [style*="forn-id"]')?.closest('div');
+  if (area) area.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label>Nome *</label><input id="forn-nome" type="text" value="${nfeXmlDados.emitNome}" /></div>
+      <div class="form-group"><label>IE</label><input id="forn-ie" type="text" value="${nfeXmlDados.emitIE||''}" /></div>
     </div>`;
 }
 
@@ -540,25 +737,102 @@ async function confirmarNfe(){
   const msg=document.getElementById('nfe-msg');
   msg.textContent='Salvando...';msg.style.color='#aaa';
   const d=nfeXmlDados;
-  for(let i=0;i<d.itens.length;i++){if(d.itens[i].ehCombustivel){const sel=document.getElementById(`tanque-item-${i}`);if(!sel?.value){msg.textContent=`Vincule o tanque: ${d.itens[i].descricao}`;msg.style.color='#f44';return;}d.itens[i].tanqueId=sel.value;}}
-  let fornecedorId=null;
-  if(d.emitCnpj){const{data:forn}=await sb.from('oct_pessoas').select('id').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();if(forn){fornecedorId=forn.id;}else{const{data:nf}=await sb.from('oct_pessoas').insert({empresa_id:_empresaId,nome:d.emitNome,tipo:'fornecedor',documento:d.emitCnpj,ie:d.emitIE}).select().single();fornecedorId=nf?.id;}}
+
+  // Valida tanques
+  for(let i=0;i<d.itens.length;i++){
+    if(d.itens[i].ehCombustivel){
+      const sel=document.getElementById(`tanque-item-${i}`);
+      if(!sel?.value){msg.textContent=`Vincule o tanque: ${d.itens[i].descricao}`;msg.style.color='#f44';return;}
+      d.itens[i].tanqueId=sel.value;
+    }
+  }
+
+  // Fornecedor
+  let fornecedorId = null;
+  const fornIdEl = document.getElementById('forn-id');
+  if (fornIdEl) {
+    fornecedorId = fornIdEl.value;
+  } else if (d.emitCnpj) {
+    const nomeEl = document.getElementById('forn-nome');
+    const ieEl   = document.getElementById('forn-ie');
+    const{data:forn}=await sb.from('oct_pessoas').select('id').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();
+    if(forn){fornecedorId=forn.id;}
+    else{
+      const{data:nf}=await sb.from('oct_pessoas').insert({
+        empresa_id:_empresaId,
+        nome: nomeEl?.value || d.emitNome,
+        tipo:'fornecedor',documento:d.emitCnpj,
+        ie: ieEl?.value || d.emitIE,
+        cidade:d.emitMun,uf:d.emitUF,
+      }).select().single();
+      fornecedorId=nf?.id;
+    }
+  }
+
+  // Salva NF-e
   const{data:nfe,error:nfeErr}=await sb.from('oct_nfe_entrada').insert({
     empresa_id:_empresaId,numero:d.numero,serie:d.serie,chave_nfe:d.chNFe||null,emissao:d.dhEmi,
     entrada:new Date().toISOString().split('T')[0],fornecedor_id:fornecedorId,natureza:d.natOp,
     cfop:d.cfopCapa||d.itens[0]?.cfop||null,
-    valor_total:d.vNF,valor_icms:d.vICMS,valor_pis:d.vPIS,valor_cofins:d.vCOFINS,valor_frete:d.vFrete,valor_desconto:d.vDesc,
-    status:'importada',forma_pagamento:d.pagamentos,duplicatas:d.dups,xml_completo:d.xmlString,
+    valor_total:d.vNF,valor_icms:d.vICMS,valor_pis:d.vPIS,valor_cofins:d.vCOFINS,
+    valor_frete:d.vFrete,valor_desconto:d.vDesc,status:'importada',
+    forma_pagamento:d.pagamentos,duplicatas:d.dups,xml_completo:d.xmlString,
     n_prot:d.nProt,q_bc_mono_ret:d.qBCMonoRet||null,v_icms_mono_ret:d.vICMSMonoRet||null,
     transp_nome:d.transpNome||null,mod_frete:d.modFrete||null,inf_cpl:d.infCpl||null,
   }).select().single();
-  if(nfeErr){msg.textContent='Erro: '+nfeErr.message;msg.style.color='#f44';return;}
-  for(const it of d.itens){
-    await sb.from('oct_nfe_entrada_itens').insert({nfe_id:nfe.id,codigo:it.codigo,descricao:it.descricao,ncm:it.ncm,cest:it.cest,cfop:it.cfop,unidade:it.unidade,quantidade:it.quantidade,valor_unitario:it.valorUnitario,valor_total:it.valorTotal,cod_anp:it.codAnp,desc_anp:it.descAnp,perc_bio:it.pBio||0,cst_icms:it.cstIcms,aliq_icms:it.aliqIcms,v_icms_mono_ret:it.vICMSMonoRetItem||null,q_bc_mono_ret:it.qBCMonoRetItem||null,cst_pis:it.cstPis,aliq_pis:it.aliqPis,cst_cofins:it.cstCofins,aliq_cofins:it.aliqCofins});
-    if(it.ehCombustivel&&it.tanqueId){const{data:tanque}=await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id',it.tanqueId).single();if(tanque){const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(it.quantidade),Number(tanque.capacidade));await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:it.quantidade,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});}}
+
+  if(nfeErr){msg.textContent='Erro NF-e: '+nfeErr.message;msg.style.color='#f44';return;}
+
+  // Salva itens + produtos
+  for(let i=0;i<d.itens.length;i++){
+    const it=d.itens[i];
+    const acao=document.getElementById(`prod-acao-${i}`)?.value||'ignorar';
+    const nomeProd=document.getElementById(`prod-nome-${i}`)?.value||it.descricao;
+
+    let produtoId=null;
+    if(acao==='novo'){
+      const{data:np}=await sb.from('oct_produtos').insert({
+        empresa_id:_empresaId,nome:nomeProd,codigo:it.codigo||null,
+        unidade:it.unidade||'un',
+        categoria:it.ehCombustivel?'combustivel':'mercadoria',
+        ncm:it.ncm||null,cfop:it.cfop||null,
+        preco_custo:it.valorUnitario,
+        tanque_id:it.tanqueId||null,
+      }).select().single();
+      produtoId=np?.id||null;
+    }
+
+    const{data:itemSalvo}=await sb.from('oct_nfe_entrada_itens').insert({
+      nfe_id:nfe.id,codigo:it.codigo,descricao:it.descricao,
+      ncm:it.ncm,cest:it.cest,cfop:it.cfop,unidade:it.unidade,
+      quantidade:it.quantidade,valor_unitario:it.valorUnitario,valor_total:it.valorTotal,
+      cod_anp:it.codAnp,desc_anp:it.descAnp,perc_bio:it.pBio||0,
+      cst_icms:it.cstIcms,aliq_icms:it.aliqIcms,
+      v_icms_mono_ret:it.vICMSMonoRetItem||null,q_bc_mono_ret:it.qBCMonoRetItem||null,
+      cst_pis:it.cstPis,aliq_pis:it.aliqPis,cst_cofins:it.cstCofins,aliq_cofins:it.aliqCofins,
+      produto_id:produtoId,
+    }).select().single();
+
+    // Vínculo produto-nfe
+    if(produtoId&&itemSalvo){
+      await sb.from('oct_produto_nfe').insert({
+        produto_id:produtoId,nfe_id:nfe.id,nfe_item_id:itemSalvo.id,empresa_id:_empresaId
+      });
+    }
+
+    // Atualiza tanque
+    if(it.ehCombustivel&&it.tanqueId){
+      const{data:tanque}=await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id',it.tanqueId).single();
+      if(tanque){
+        const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(it.quantidade),Number(tanque.capacidade));
+        await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);
+        await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:it.quantidade,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
+      }
+    }
   }
+
   if(d.manifestadaId)await sb.from('oct_nfe_manifestadas').update({status:'importada'}).eq('id',d.manifestadaId);
-  msg.textContent='✅ NF-e importada!';msg.style.color='#4caf50';
+  msg.textContent='✅ NF-e importada com sucesso!';msg.style.color='#4caf50';
   nfeXmlDados=null;
-  setTimeout(()=>moduloNfe(),1200);
+  setTimeout(()=>moduloNfe(),1500);
 }
