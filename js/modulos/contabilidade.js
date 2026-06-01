@@ -1,6 +1,13 @@
 // ============================================================
 // MODULO CONTABILIDADE — Plano de Contas + SPED Fiscal + PIS/COFINS
 // ============================================================
+// NOTA: a logica fiscal (CST, CFOP, monofasico, apuracao M/E) NAO foi
+// alterada nesta revisao. Apenas correcoes tecnicas seguras:
+//   1) Contadores do Bloco 9 (9900/9990/9999) gerados dinamicamente.
+//   2) .toFixed(2) no valor de ICMS do C190 (SPED Fiscal).
+//   3) COD_MUN do 0000 Fiscal: usa codigo IBGE se existir; nunca o nome.
+// Validar sempre no PVA da Receita antes de transmitir.
+// ============================================================
 async function moduloContabilidade(subaba) {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
@@ -113,6 +120,33 @@ async function excluirPlanoContab(id, eId) {
   await sb.from('oct_plano_contas').update({ ativo: false }).eq('id', id);
   moduloContabilidade('plano');
 }
+
+// ============================================================
+// UTILITARIO: monta o Bloco 9 (9900/9990/9999) contando os registros
+// efetivamente gerados. Substitui os contadores fixos.
+//   linhas:  array {n,txt} ja gerado dos blocos 0..H (incluindo 9001)
+//   L:       o mesmo helper usado para empilhar linhas
+// A contagem do proprio 9900 ja considera a auto-referencia
+// (9900|9900, 9900|9990, 9900|9999), conforme regra do SPED.
+// ============================================================
+function montarBloco9(linhas, L) {
+  // 1) conta o que ja existe (todos os registros antes do bloco 9, + 9001)
+  const contagem = {};
+  linhas.forEach(l => {
+    const reg = l.txt.split('|')[1];
+    if (reg) contagem[reg] = (contagem[reg] || 0) + 1;
+  });
+  const tiposExistentes = Object.keys(contagem).sort();
+  // 2) numero de linhas 9900 = um por tipo existente + 3 (9900,9990,9999)
+  const qtd9900 = tiposExistentes.length + 3;
+  // 3) emite uma linha 9900 para cada tipo ja existente
+  tiposExistentes.forEach(reg => L('|9900|' + reg + '|' + contagem[reg] + '|'));
+  // 4) emite as auto-referencias do proprio bloco 9
+  L('|9900|9900|' + qtd9900 + '|');
+  L('|9900|9990|1|');
+  L('|9900|9999|1|');
+}
+
 async function renderSpedFiscal(empresaId, empresa) {
   const div = document.getElementById('contab-conteudo');
   const anoAtual = new Date().getFullYear();
@@ -168,12 +202,15 @@ async function gerarSpedFiscal() {
   const ie = empresa?.ie || '0';
   const nome = empresa?.nome || empresa?.nome_fantasia || 'EMPRESA';
   const uf = empresa?.uf || 'MG';
-  const mun = empresa?.cidade || '';
+  // COD_MUN: o layout do SPED espera o codigo IBGE do municipio (7 digitos),
+  // NAO o nome. Usa o campo de codigo se existir; senao deixa vazio.
+  // (Enviar o nome onde se espera codigo numerico e rejeitado pelo PVA.)
+  const codMun = empresa?.cod_municipio || empresa?.codigo_ibge || empresa?.cod_mun || '';
   const linhas = [];
   let nLinha = 1;
   const L = (txt) => { linhas.push({ n: nLinha++, txt }); };
   // BLOCO 0
-  L('|0000|010|0|'+dtIniFmt+'|'+dtFimFmt+'|'+nome+'|'+cnpj+'||'+ie+'||'+uf+'|'+mun+'|0|0|2|');
+  L('|0000|010|0|'+dtIniFmt+'|'+dtFimFmt+'|'+nome+'|'+cnpj+'||'+ie+'||'+uf+'|'+codMun+'|0|0|2|');
   L('|0001|0|');
   L('|0100|'+nome+'|'+cnpj+'|||'+ie+'||||||||');
   L('|0150|001|'+nome+'|'+cnpj+'||'+ie+'||||');
@@ -197,7 +234,7 @@ async function gerarSpedFiscal() {
     (nfe.oct_nfe_entrada_itens || []).forEach(it => {
       L('|C170|'+(it.n_item||'1')+'|'+it.codigo+'|'+it.descricao+'|'+Number(it.quantidade||0).toFixed(3)+'|'+(it.unidade||'UN')+'|'+Number(it.valor_unitario||0).toFixed(4)+'|'+Number(it.valor_total||0).toFixed(2)+'|0|'+(it.cfop||'2652')+'|'+(it.ncm||'')+'|||'+Number(it.aliq_icms||0).toFixed(2)+'|'+Number(it.valor_total*Number(it.aliq_icms||0)/100).toFixed(2)+'|0|0|0|0|0|0|0|0|0|0|0|0|0|');
     });
-    L('|C190|'+nfe.cfop+'|'+(nfe.valor_icms||0)+'|'+Number(nfe.valor_total||0).toFixed(2)+'|0|0|0|');
+    L('|C190|'+nfe.cfop+'|'+Number(nfe.valor_icms||0).toFixed(2)+'|'+Number(nfe.valor_total||0).toFixed(2)+'|0|0|0|');
   });
   L('|C990|'+(nLinha - c0)+'|');
   // BLOCO E - Apuracao ICMS
@@ -218,27 +255,12 @@ async function gerarSpedFiscal() {
     hItem++;
   });
   L('|H990|'+(nLinha - h0)+'|');
-  // BLOCO 9 - Encerramento
+  // BLOCO 9 - Encerramento (contadores dinamicos)
   const t9 = nLinha;
   L('|9001|0|');
-  L('|9900|0000|1|');
-  L('|9900|0001|1|');
-  L('|9900|0100|1|');
-  L('|9900|0150|1|');
-  L('|9900|0190|2|');
-  L('|9900|0200|'+prods.length+'|');
-  L('|9900|0990|1|');
-  L('|9900|C001|1|');
-  L('|9900|C100|'+nfes.length+'|');
-  L('|9900|C990|1|');
-  L('|9900|E001|1|');
-  L('|9900|E110|1|');
-  L('|9900|H001|1|');
-  L('|9900|H990|1|');
-  L('|9900|9001|1|');
-  L('|9900|9990|1|');
-  L('|9900|9999|1|');
-  L('|9990|'+(nLinha - t9)+'|');
+  montarBloco9(linhas, L);            // gera todos os 9900 a partir da contagem real
+  // 9990 = total de registros do bloco 9, incluindo o proprio 9990 e o 9999 (+2)
+  L('|9990|'+(nLinha - t9 + 2)+'|');
   L('|9999|'+nLinha+'|');
   const txtCompleto = linhas.map(l => l.txt).join('\n');
   window._spedFiscalTxt = txtCompleto;
@@ -359,13 +381,12 @@ async function gerarSpedPisCofins() {
     L('|P100|'+dtIniFmt+'|'+dtFimFmt+'|'+(it.cod_anp||'')+'|'+(it.desc_anp||'')+'|'+Number(it.quantidade||0).toFixed(3)+'|0|0|0|');
   });
   L('|P990|'+(nL - p0)+'|');
-  // BLOCO 9
+  // BLOCO 9 (contadores dinamicos)
   const t9 = nL;
   L('|9001|0|');
-  L('|9900|0000|1|');L('|9900|C001|1|');L('|9900|C100|'+nfes.length+'|');L('|9900|C990|1|');
-  L('|9900|M001|1|');L('|9900|M200|1|');L('|9900|M600|1|');L('|9900|M990|1|');
-  L('|9900|P001|1|');L('|9900|P990|1|');L('|9900|9001|1|');L('|9900|9990|1|');L('|9900|9999|1|');
-  L('|9990|'+(nL - t9)+'|');
+  montarBloco9(linhas, L);
+  // 9990 = total de registros do bloco 9, incluindo o proprio 9990 e o 9999 (+2)
+  L('|9990|'+(nL - t9 + 2)+'|');
   L('|9999|'+nL+'|');
   const txt = linhas.map(l => l.txt).join('\n');
   window._spedPisTxt = txt;
