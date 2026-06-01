@@ -22,7 +22,7 @@ var tE=movs.reduce(function(s,l){return s+Number(l.entrada||0);},0);
 var tS=movs.reduce(function(s,l){return s+Number(l.saida||0);},0);
 var perc=t.capacidade?Math.round(Number(t.estoque_atual)/Number(t.capacidade)*100):0;
 var corT=cor(t.combustivel);
-cards+="<div style='background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:14px;cursor:pointer' onclick='filtrarTanqueLmc("+'"'+'"'+t.id+'"'+'"'+")'>"+
+cards+="<div style='background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:14px;cursor:pointer' onclick=\"filtrarTanqueLmc('"+t.id+"')\">"+
 "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>"+
 "<span style='font-weight:700;color:"+corT+"'>T"+t.numero+"</span>"+
 "<span style='font-size:0.7rem;padding:2px 8px;border-radius:10px;background:#1e2235;color:"+corT+"'>"+t.combustivel+"</span></div>"+
@@ -93,7 +93,7 @@ rows+="<tr>"+
 "<td style='color:#f44;font-weight:600'>"+(sai>0?"- "+f(sai)+" L":"--")+"</td>"+
 "<td style='font-weight:700'>"+f(l.saldo_final)+" L</td>"+
 "<td style='font-size:0.75rem;color:#888'>"+(l.observacoes||"--")+"</td>"+
-"<td><button onclick='excluirLmc(""+l.id+"",""+l.tanque_id+"","+ent+","+sai+")' style='padding:2px 8px;border-radius:3px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer;font-size:0.7rem'>X</button></td>"+
+"<td><button onclick=\"excluirLmc('"+l.id+"','"+l.tanque_id+"',"+ent+","+sai+")\" style='padding:2px 8px;border-radius:3px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer;font-size:0.7rem'>X</button></td>"+
 "</tr>";
 });
 div.innerHTML="<div style='overflow-x:auto'><table class='nfe-tabela' style='min-width:900px'>"+
@@ -117,7 +117,7 @@ tanques.forEach(function(t){tOpts+="<option value='"+t.id+"'>T"+t.numero+" - "+t
 div.innerHTML="<div style='background:#13151f;border:1px solid #2a4a6a;border-radius:10px;padding:20px'>"+
 "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:16px'>"+
 "<h3 style='color:#60a5fa'>+ Novo lancamento LMC</h3>"+
-"<button onclick='document.getElementById("form-lmc").style.display="none"' style='background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem'>X</button></div>"+
+"<button onclick=\"document.getElementById('form-lmc').style.display='none'\" style='background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem'>X</button></div>"+
 "<div class='form-grid' style='max-width:700px'>"+
 "<div class='form-group'><label>Data *</label><input id='lmc-data' type='date' value='"+hoje+"' /></div>"+
 "<div class='form-group'><label>Tanque *</label><select id='lmc-tanque'>"+tOpts+"</select></div>"+
@@ -129,7 +129,7 @@ div.innerHTML="<div style='background:#13151f;border:1px solid #2a4a6a;border-ra
 "<div class='form-group span2'><label>Observacoes</label><input id='lmc-obs' type='text' placeholder='Ex: NF-e 12345...' /></div>"+
 "</div><div class='form-acoes'>"+
 "<button onclick='salvarLmc()' class='btn-salvar'>Salvar</button>"+
-"<button onclick='document.getElementById("form-lmc").style.display="none"' style='padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer'>Cancelar</button>"+
+"<button onclick=\"document.getElementById('form-lmc').style.display='none'\" style='padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer'>Cancelar</button>"+
 "<span id='lmc-msg' class='form-msg'></span></div></div>";
 }
 
