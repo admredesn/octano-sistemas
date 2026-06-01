@@ -1,0 +1,1 @@
+// Fix temporario — patch aplicado inline no nfe.js
