@@ -4,99 +4,62 @@ async function moduloProdutos() {
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
 
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
+  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(nome)').eq('id', session.user.id).single();
   const empresaId = perfil?.empresa_id;
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
+  window._produtosEmpresaId = empresaId;
 
   const { data: produtos } = await sb
     .from('oct_produtos').select('*, oct_tanques(numero,combustivel)')
     .eq('empresa_id', empresaId).eq('ativo', true)
     .order('nome');
 
-  conteudo.innerHTML = `
-    <div style="max-width:1100px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
-        <div class="modulo-header" style="margin-bottom:0;border:none"><h2>📦 Produtos</h2></div>
-        <button onclick="abrirFormProduto(null,'${empresaId}')" class="btn-salvar">+ Novo Produto</button>
-      </div>
-
-      <!-- FORM CADASTRO/EDIÇÃO -->
-      <div id="form-produto" style="display:none;margin-bottom:20px"></div>
-
-      <!-- DETALHE PRODUTO -->
-      <div id="detalhe-produto" style="display:none;margin-bottom:20px"></div>
-
-      <!-- FILTROS -->
-      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-        <input id="busca-produto-txt" type="text" placeholder="🔍 Buscar por nome ou código..."
-          oninput="filtrarListaProdutos(this.value)"
-          style="flex:1;min-width:200px;padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0" />
-        <select id="filtro-categoria" onchange="filtrarListaProdutos(document.getElementById('busca-produto-txt').value)"
-          style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">
-          <option value="">Todas categorias</option>
-          <option value="combustivel">Combustível</option>
-          <option value="lubrificante">Lubrificante</option>
-          <option value="mercadoria">Mercadoria</option>
-          <option value="material">Material</option>
-          <option value="servico">Serviço</option>
-        </select>
-      </div>
-
-      <!-- LISTA -->
-      <div id="lista-produtos-grid">
-        ${!produtos || produtos.length === 0
-          ? `<div style="text-align:center;padding:60px;color:#555;border:2px dashed #2a2d3e;border-radius:12px">
-              <div style="font-size:2rem;margin-bottom:12px">📦</div>
-              <p>Nenhum produto cadastrado ainda.</p>
-              <p style="font-size:0.82rem;margin-top:6px">Importe uma NF-e para cadastrar produtos automaticamente.</p>
-            </div>`
-          : renderListaProdutos(produtos)}
-      </div>
-    </div>
-  `;
-
-  // Guarda produtos para filtro
   window._todosProdutos = produtos || [];
-}
 
-function renderListaProdutos(produtos) {
-  const CORES_CAT = {
-    combustivel: '#4caf50', lubrificante: '#fbbf24',
-    mercadoria: '#60a5fa', material: '#a78bfa', servico: '#f97316'
-  };
-  return `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">
-      ${produtos.map(p => `
-        <div class="prod-card" onclick="abrirDetalheProduto('${p.id}')" style="cursor:pointer">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-            <div>
-              <div style="font-weight:600;font-size:0.95rem">${p.nome}</div>
-              <div style="font-size:0.75rem;color:#888;margin-top:2px">${p.codigo||'—'} · ${p.unidade||'un'}</div>
-            </div>
-            <span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:#1e2235;color:${CORES_CAT[p.categoria]||'#888'};border:1px solid ${CORES_CAT[p.categoria]||'#444'}22;white-space:nowrap">${p.categoria||'—'}</span>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82rem">
-            <div><span class="nfe-label">Custo</span><br><strong>R$ ${Number(p.preco_custo||0).toLocaleString('pt-BR',{minimumFractionDigits:4})}</strong></div>
-            <div><span class="nfe-label">Venda</span><br><strong style="color:#f97316">R$ ${Number(p.preco_venda||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
-            <div><span class="nfe-label">Estoque</span><br><strong>${Number(p.estoque_atual||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} ${p.unidade||'un'}</strong></div>
-            <div><span class="nfe-label">NCM</span><br>${p.ncm||'—'}</div>
-          </div>
-          ${p.oct_tanques ? `<div style="margin-top:8px;font-size:0.75rem;color:#4caf50">⛽ Tanque ${p.oct_tanques.numero} — ${p.oct_tanques.combustivel}</div>` : ''}
-        </div>
-      `).join('')}
-    </div>
+  // containers: janela do grid + areas para form/detalhe que ficam acima
+  conteudo.innerHTML = `
+    <div id="form-produto" style="display:none;margin-bottom:16px"></div>
+    <div id="detalhe-produto" style="display:none;margin-bottom:16px"></div>
+    <div id="grid-produtos"></div>
   `;
+
+  const CORES_CAT = { combustivel:'#4caf50', lubrificante:'#fbbf24', mercadoria:'#60a5fa', material:'#a78bfa', servico:'#f97316' };
+  const badge = (cat) => {
+    const c = CORES_CAT[cat] || '#888';
+    return `<span class="og-badge" style="background:#1e2235;color:${c}">${cat||'—'}</span>`;
+  };
+
+  octanoGrid({
+    montarEm: 'grid-produtos',
+    titulo: 'Produtos',
+    aoFechar: "navegarPara('empresa')",
+    rodapeDireita: perfil?.oct_empresas?.nome || '',
+    dados: window._todosProdutos,
+    acoes: [
+      { rotulo: 'Novo Produto', ico: '＋', onClick: `abrirFormProduto(null,'${empresaId}')` },
+    ],
+    colunas: [
+      { campo: 'nome', titulo: 'Nome', largura: '220px' },
+      { campo: 'codigo', titulo: 'Código', largura: '110px', render: (v)=> v||'—' },
+      { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v) },
+      { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
+      { campo: 'preco_custo', titulo: 'Custo', tipo: 'numero', casas: 4, align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
+      { campo: 'preco_venda', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
+      { campo: 'estoque_atual', titulo: 'Estoque', align: 'right', largura: '110px', valor:(p)=>p.estoque_atual, render: (v,p)=> Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:3})+' '+(p.unidade||'un') },
+      { campo: 'ncm', titulo: 'NCM', largura: '90px', render: (v)=> v||'—' },
+      { titulo: 'Tanque', largura: '150px', valor: (p)=> p.oct_tanques ? ('T'+p.oct_tanques.numero+' '+p.oct_tanques.combustivel) : '', render: (v)=> v ? `<span style="color:#4caf50">⛽ ${v}</span>` : '—' },
+    ],
+    aoClicarLinha: (p) => abrirDetalheProduto(p.id),
+  });
 }
 
+// mantida por compatibilidade (nao mais usada pela tela em grid)
 function filtrarListaProdutos(termo) {
   const cat = document.getElementById('filtro-categoria')?.value || '';
   let lista = window._todosProdutos || [];
   if (termo) lista = lista.filter(p => p.nome.toLowerCase().includes(termo.toLowerCase()) || (p.codigo||'').toLowerCase().includes(termo.toLowerCase()));
   if (cat)   lista = lista.filter(p => p.categoria === cat);
-  const grid = document.getElementById('lista-produtos-grid');
-  if (grid) grid.innerHTML = lista.length === 0
-    ? '<p style="color:#555;text-align:center;padding:30px">Nenhum produto encontrado.</p>'
-    : renderListaProdutos(lista);
+  return lista;
 }
 
 async function abrirDetalheProduto(id) {
@@ -112,7 +75,6 @@ async function abrirDetalheProduto(id) {
     .select('*, oct_tanques(numero,combustivel)')
     .eq('id', id).single();
 
-  // NF-es vinculadas
   const { data: nfes } = await sb
     .from('oct_produto_nfe')
     .select('*, oct_nfe_entrada(numero,serie,emissao,valor_total,oct_pessoas(nome))')
@@ -134,7 +96,6 @@ async function abrirDetalheProduto(id) {
       </div>
 
       <div style="padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px">
-        <!-- DADOS -->
         <div>
           <div class="modulo-header"><h2>Dados do produto</h2></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:0.85rem">
@@ -152,7 +113,6 @@ async function abrirDetalheProduto(id) {
           </div>
         </div>
 
-        <!-- NF-es vinculadas -->
         <div>
           <div class="modulo-header"><h2>NF-es vinculadas (${nfes?.length||0})</h2></div>
           ${!nfes || nfes.length === 0
