@@ -1,6 +1,4 @@
 
-// sb é declarado no auth.js ou config.js — não redeclarar aqui
-
 const MODULOS = [
   { id: 'empresa',      label: 'Empresa',    breve: false },
   { id: 'fcaixa',       label: 'F.Caixa',    breve: false },
@@ -48,11 +46,26 @@ async function fazerLogout(){
 }
 
 async function renderApp(session){
-  const { data: perfil } = await sb.from('oct_perfis')
-    .select('oct_empresas(nome_fantasia,razao_social)')
-    .eq('id', session.user.id).single();
-  const empresa = perfil?.oct_empresas;
-  const nomeEmpresa = empresa?.nome_fantasia || empresa?.razao_social || 'Minha Empresa';
+  // Busca perfil com empresa
+  const { data: perfil } = await sb
+    .from('oct_perfis')
+    .select('empresa_id, oct_empresas(nome_fantasia, razao_social)')
+    .eq('id', session.user.id)
+    .single();
+
+  let nomeEmpresa = 'OCTANO SISTEMAS';
+  if(perfil?.oct_empresas){
+    nomeEmpresa = perfil.oct_empresas.nome_fantasia || perfil.oct_empresas.razao_social || nomeEmpresa;
+  } else if(perfil?.empresa_id){
+    // Fallback: busca direta na tabela
+    const { data: emp } = await sb
+      .from('oct_empresas')
+      .select('nome_fantasia, razao_social')
+      .eq('id', perfil.empresa_id)
+      .single();
+    if(emp) nomeEmpresa = emp.nome_fantasia || emp.razao_social || nomeEmpresa;
+  }
+
   document.getElementById('app').innerHTML =
     '<div class="topbar">' +
       '<div class="logo">OCTANO SISTEMAS</div>' +
@@ -62,11 +75,13 @@ async function renderApp(session){
     '</div>' +
     '<div class="toolbar" id="toolbar"></div>' +
     '<div class="conteudo" id="conteudo"></div>';
+
   renderToolbar();
+
   if(!document.getElementById('style-extra')){
     const s = document.createElement('style');
     s.id = 'style-extra';
-    s.textContent = '.prod-card{background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;transition:all 0.2s;}.prod-card:hover{border-color:#f97316;transform:translateY(-2px);}';
+    s.textContent = '.prod-card{background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;transition:all 0.2s;cursor:pointer;}.prod-card:hover{border-color:#f97316;transform:translateY(-2px);box-shadow:0 4px 20px rgba(249,115,22,0.1);}';
     document.head.appendChild(s);
   }
 }
@@ -77,8 +92,9 @@ function renderToolbar(){
   const ICONES = {empresa:'⚙️',fcaixa:'📋',nfe:'📄',tanques:'⛽',pessoas:'👥',produtos:'📦',contas_pagar:'💳',despesas:'💰',dre:'📊'};
   toolbar.innerHTML = MODULOS.map(m =>
     '<div class="toolbar-item ' + (m.id===_moduloAtual?'ativo':'') + ' ' + (m.breve?'breve':'') + '" ' +
-    'id="tab-' + m.id + '" onclick="' + (m.breve?'':('navegarPara(\''+m.id+'\')')) + '">' +
-    (ICONES[m.id]||'') + ' ' + m.label + (m.breve?' <small>BREVE</small>':'') + '</div>'
+    'id="tab-' + m.id + '" onclick="' + (m.breve ? '' : "navegarPara('" + m.id + "')") + '">' +
+    (ICONES[m.id]||'') + ' ' + m.label + (m.breve?' <small>BREVE</small>':'') +
+    '</div>'
   ).join('');
 }
 
@@ -97,7 +113,8 @@ function navegarPara(modulo){
     case 'pessoas':      moduloPessoas();     break;
     case 'produtos':     moduloProdutos();    break;
     case 'contas_pagar': moduloContasPagar(); break;
-    default: conteudo.innerHTML = '<p style="color:#888;padding:24px">Módulo <strong>'+modulo+'</strong> em breve.</p>';
+    default:
+      conteudo.innerHTML = '<p style="color:#888;padding:24px">Módulo <strong>'+modulo+'</strong> em breve.</p>';
   }
 }
 
