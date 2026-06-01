@@ -183,14 +183,25 @@ async function moduloNfe() {
 // ─── EXCLUIR ─────────────────────────────────────────────────────────────────
 
 async function excluirNfe(id) {
-  if (!confirm('Excluir esta NF-e?\n\nOs estoques dos tanques NÃO serão revertidos automaticamente.')) return;
+  if (!confirm('Excluir esta NF-e do sistema?\n\nOs estoques dos tanques NAO serao revertidos automaticamente.')) return;
+
+  // Fecha detalhe se aberto
+  const det = document.getElementById('nfe-detalhe');
+  if (det) det.style.display = 'none';
+
+  // Remove vínculos e itens primeiro
   await sb.from('oct_produto_nfe').delete().eq('nfe_id', id);
   await sb.from('oct_nfe_entrada_itens').delete().eq('nfe_id', id);
-  await sb.from('oct_nfe_entrada').delete().eq('id', id);
+  const { error } = await sb.from('oct_nfe_entrada').delete().eq('id', id);
+
+  if (error) {
+    alert('Erro ao excluir: ' + error.message);
+    return;
+  }
+
+  // Recarrega o módulo completo para atualizar a lista
   moduloNfe();
 }
-
-// ─── DETALHE ─────────────────────────────────────────────────────────────────
 
 async function abrirDetalheNfe(id) {
   const div = document.getElementById('nfe-detalhe');
