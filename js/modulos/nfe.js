@@ -738,6 +738,10 @@ async function confirmarNfe(){
   await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups);
 
 
+  // Lança contas a pagar automaticamente
+  await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups);
+
+
 
   for(let i=0;i<d.itens.length;i++){
     const it=d.itens[i];
