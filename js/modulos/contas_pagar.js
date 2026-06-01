@@ -9,7 +9,6 @@ async function moduloContasPagar() {
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
 
   const hoje = new Date().toISOString().split('T')[0];
-  const mes = hoje.substring(0, 7);
 
   const { data: contas } = await sb
     .from('oct_contas_pagar')
@@ -20,8 +19,6 @@ async function moduloContasPagar() {
   const abertas  = (contas||[]).filter(c => c.status === 'aberto');
   const vencidas = abertas.filter(c => c.vencimento < hoje);
   const hoje30   = abertas.filter(c => c.vencimento >= hoje && c.vencimento <= new Date(Date.now()+30*864e5).toISOString().split('T')[0]);
-  const pagas    = (contas||[]).filter(c => c.status === 'pago');
-
   const totalAberto  = abertas.reduce((s,c)=>s+Number(c.valor),0);
   const totalVencido = vencidas.reduce((s,c)=>s+Number(c.valor),0);
   const total30      = hoje30.reduce((s,c)=>s+Number(c.valor),0);
@@ -32,8 +29,6 @@ async function moduloContasPagar() {
         <div class="modulo-header" style="margin-bottom:0;border:none"><h2>💳 Contas a Pagar</h2></div>
         <button onclick="abrirFormConta('','${empresaId}')" class="btn-salvar">+ Lançar manualmente</button>
       </div>
-
-      <!-- CARDS RESUMO -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
         <div style="background:#3a1a1a;border:1px solid #5a2a2a;border-radius:10px;padding:16px">
           <div class="nfe-label">🔴 Vencidas</div>
@@ -51,11 +46,7 @@ async function moduloContasPagar() {
           <div style="font-size:0.78rem;color:#888;margin-top:4px">${abertas.length} conta(s)</div>
         </div>
       </div>
-
-      <!-- FORM -->
       <div id="form-conta" style="display:none;margin-bottom:20px"></div>
-
-      <!-- FILTROS -->
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
         <select id="filtro-status-conta" onchange="renderContas()" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">
           <option value="aberto">Em aberto</option>
@@ -67,7 +58,6 @@ async function moduloContasPagar() {
           oninput="renderContas()"
           style="flex:1;min-width:200px;padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0" />
       </div>
-
       <div id="tabela-contas"></div>
     </div>
   `;
@@ -83,9 +73,9 @@ function renderContas() {
   const hoje   = new Date().toISOString().split('T')[0];
   let lista = window._todasContas || [];
 
-  if (status === 'aberto')  lista = lista.filter(c => c.status === 'aberto' && c.vencimento >= hoje);
+  if (status === 'aberto')   lista = lista.filter(c => c.status === 'aberto' && c.vencimento >= hoje);
   else if (status === 'vencido') lista = lista.filter(c => c.status === 'aberto' && c.vencimento < hoje);
-  else if (status === 'pago') lista = lista.filter(c => c.status === 'pago');
+  else if (status === 'pago')    lista = lista.filter(c => c.status === 'pago');
 
   if (busca) lista = lista.filter(c =>
     c.descricao?.toLowerCase().includes(busca) ||
@@ -96,17 +86,14 @@ function renderContas() {
   if (!div) return;
 
   if (lista.length === 0) {
-    div.innerHTML = `<div style="text-align:center;padding:40px;color:#555;border:2px dashed #2a2d3e;border-radius:10px">Nenhuma conta encontrada.</div>`;
+    div.innerHTML = '<div style="text-align:center;padding:40px;color:#555;border:2px dashed #2a2d3e;border-radius:10px">Nenhuma conta encontrada.</div>';
     return;
   }
 
   div.innerHTML = `
     <table class="nfe-tabela">
       <thead>
-        <tr>
-          <th>Descrição</th><th>Fornecedor</th><th>NF-e</th>
-          <th>Vencimento</th><th>Valor</th><th>Status</th><th>Ações</th>
-        </tr>
+        <tr><th>Descrição</th><th>Fornecedor</th><th>NF-e</th><th>Vencimento</th><th>Valor</th><th>Status</th><th>Ações</th></tr>
       </thead>
       <tbody>
         ${lista.map(c => {
@@ -115,20 +102,18 @@ function renderContas() {
           const proxima = c.status === 'aberto' && !vencida && venc <= new Date(Date.now()+7*864e5).toISOString().split('T')[0];
           return `
             <tr style="${vencida?'background:#1a0a0a':proxima?'background:#1a1500':''}">
-              <td><strong>${c.descricao||'—'}</strong>${c.n_documento?`<br><span style="font-size:0.72rem;color:#555">Doc: ${c.n_documento}</span>`:''}</td>
+              <td><strong>${c.descricao||'—'}</strong>${c.n_documento?'<br><span style="font-size:0.72rem;color:#555">Doc: '+c.n_documento+'</span>':''}</td>
               <td style="font-size:0.82rem">${c.oct_pessoas?.nome||'—'}</td>
-              <td style="font-size:0.75rem">${c.oct_nfe_entrada?`NF-e ${c.oct_nfe_entrada.numero}/${c.oct_nfe_entrada.serie}`:'—'}</td>
+              <td style="font-size:0.75rem">${c.oct_nfe_entrada?'NF-e '+c.oct_nfe_entrada.numero+'/'+c.oct_nfe_entrada.serie:'—'}</td>
               <td>
                 <strong style="color:${vencida?'#f44':proxima?'#fbbf24':'#e0e0e0'}">${new Date(venc+'T12:00:00').toLocaleDateString('pt-BR')}</strong>
-                ${vencida?`<br><span style="font-size:0.7rem;color:#f44">● vencida</span>`:proxima?`<br><span style="font-size:0.7rem;color:#fbbf24">● vence em breve</span>`:''}
+                ${vencida?'<br><span style="font-size:0.7rem;color:#f44">● vencida</span>':proxima?'<br><span style="font-size:0.7rem;color:#fbbf24">● vence em breve</span>':''}
               </td>
               <td><strong>R$ ${Number(c.valor||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></td>
-              <td>
-                <span class="nfe-status ${c.status==='pago'?'confirmada':vencida?'cancelada':'importada'}">${c.status}</span>
-              </td>
+              <td><span class="nfe-status ${c.status==='pago'?'confirmada':vencida?'cancelada':'importada'}">${c.status}</span></td>
               <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                  ${c.status==='aberto'?`<button onclick="pagarConta('${c.id}')" style="padding:4px 8px;border-radius:4px;border:none;background:#4caf50;color:#fff;cursor:pointer;font-size:0.75rem;font-weight:600">✓ Pagar</button>`:''}
+                  ${c.status==='aberto'?'<button onclick="pagarConta(\''+c.id+'\')" style="padding:4px 8px;border-radius:4px;border:none;background:#4caf50;color:#fff;cursor:pointer;font-size:0.75rem;font-weight:600">✓ Pagar</button>':''}
                   <button onclick="abrirFormConta('${c.id}','${window._empresaIdContas}')" style="padding:4px 8px;border-radius:4px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer;font-size:0.75rem">✏️</button>
                   <button onclick="excluirConta('${c.id}')" style="padding:4px 8px;border-radius:4px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer;font-size:0.75rem">🗑</button>
                 </div>
@@ -152,8 +137,7 @@ async function pagarConta(id) {
   const forma = prompt('Forma de pagamento (ex: PIX, Boleto, Dinheiro):') || 'Não informado';
   if (forma === null) return;
   await sb.from('oct_contas_pagar').update({
-    status: 'pago', data_pagamento: hoje,
-    forma_pagamento: forma,
+    status: 'pago', data_pagamento: hoje, forma_pagamento: forma,
     valor_pago: window._todasContas.find(c=>c.id===id)?.valor || 0,
   }).eq('id', id);
   moduloContasPagar();
@@ -176,7 +160,6 @@ async function abrirFormConta(id, empresaId) {
     const { data } = await sb.from('oct_contas_pagar').select('*').eq('id', id).single();
     c = data;
   }
-
   const { data: fornecedores } = await sb.from('oct_pessoas').select('id,nome').eq('empresa_id', empresaId).eq('tipo','fornecedor').order('nome');
 
   div.innerHTML = `
@@ -191,7 +174,7 @@ async function abrirFormConta(id, empresaId) {
           <label>Fornecedor</label>
           <select id="fc-forn">
             <option value="">Selecione...</option>
-            ${(fornecedores||[]).map(f=>`<option value="${f.id}" ${c?.fornecedor_id===f.id?'selected':''}>${f.nome}</option>`).join('')}
+            ${(fornecedores||[]).map(f=>'<option value="'+f.id+'" '+(c?.fornecedor_id===f.id?'selected':'')+'>'+f.nome+'</option>').join('')}
           </select>
         </div>
         <div class="form-group"><label>Nº Documento</label><input id="fc-doc" type="text" value="${c?.n_documento||''}" placeholder="Ex: 346995/1" /></div>
@@ -229,9 +212,10 @@ async function salvarConta(id, empresaId) {
   setTimeout(() => moduloContasPagar(), 1000);
 }
 
+
 // Chamado pela importação da NF-e
-async function lancarContasPagarNfe(nfeId, empresaId, fornecedorId, numero, serie, pagamentos, duplicatas) {
-  // Prioriza duplicatas (têm vencimento real), senão usa pagamentos
+async function lancarContasPagarNfe(nfeId, empresaId, fornecedorId, numero, serie, pagamentos, duplicatas, emissao) {
+  // Prioriza duplicatas (têm vencimento real)
   if (duplicatas && duplicatas.length > 0) {
     for (const dup of duplicatas) {
       if (!dup.dVenc || !dup.vDup) continue;
@@ -247,10 +231,10 @@ async function lancarContasPagarNfe(nfeId, empresaId, fornecedorId, numero, seri
       });
     }
   } else if (pagamentos && pagamentos.length > 0) {
-    // Pagamento a prazo sem duplicata: usa data de hoje + 30 dias como estimativa
     for (const pag of pagamentos) {
       if (pag.indPag === '0') continue; // à vista não lança
-      const venc = new Date(Date.now() + 30*864e5).toISOString().split('T')[0];
+      // Sem duplicata: usa data de emissão da NF-e como vencimento
+      const venc = emissao || new Date().toISOString().split('T')[0];
       await sb.from('oct_contas_pagar').insert({
         empresa_id: empresaId,
         descricao: `NF-e ${numero}/${serie}`,
@@ -259,9 +243,10 @@ async function lancarContasPagarNfe(nfeId, empresaId, fornecedorId, numero, seri
         valor: pag.vPag,
         vencimento: venc,
         n_documento: numero,
-        observacoes: `Forma: ${pag.xPag || pag.tPag}`,
+        observacoes: `Forma: ${pag.xPag || pag.tPag} — venc. = data emissão NF-e`,
         status: 'aberto',
       });
     }
   }
 }
+
