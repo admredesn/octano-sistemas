@@ -77,7 +77,10 @@ async function moduloNfe() {
             <div class="form-group span2">
               <label>Senha do certificado ${senhaAtual ? '— <span style="color:#4caf50;font-size:0.82rem">✅ salva na sessão</span>' : '*'}</label>
               <div style="display:flex;gap:8px;align-items:center">
-                <input id="manifest-senha" type="password" placeholder="${senhaAtual ? '••••• (salva)' : 'Senha do certificado'}" style="flex:1" />
+                <input id="manifest-senha" type="password"
+                  value="${senhaAtual || ''}"
+                  placeholder="${senhaAtual ? '(salva — clique em Buscar)' : 'Senha do certificado digital'}"
+                  style="flex:1" />
                 ${senhaAtual ? `<button onclick="limparSenhaSessao()" style="padding:6px 10px;border-radius:5px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem">🔄 Trocar</button>` : ''}
               </div>
             </div>
@@ -107,31 +110,43 @@ async function moduloNfe() {
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #2a4a6a;padding-bottom:8px">
             <h3 style="color:#60a5fa;font-size:0.9rem">📥 Manifestadas</h3>
-            <span style="background:#1a2a3a;color:#60a5fa;font-size:0.75rem;padding:2px 8px;border-radius:10px;border:1px solid #2a4a6a">${manifestadas?.length || 0}</span>
+            <span style="background:#1a2a3a;color:#60a5fa;font-size:0.75rem;padding:2px 8px;border-radius:10px;border:1px solid #2a4a6a">${(manifestadas||[]).filter(n=>!n.schema||(!n.schema.includes('resEvento')&&!n.schema.includes('procEvento'))).length}</span>
           </div>
           <div id="lista-manifestadas">
-            ${!manifestadas || manifestadas.length === 0
-              ? `<div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">Nenhuma NF-e manifestada pendente</div>`
-              : manifestadas.map(n => `
+            ${(()=>{
+              // Filtra apenas NF-es reais (ignora eventos resEvento, procEvento, etc)
+              const nfesReais = (manifestadas||[]).filter(n =>
+                !n.schema || (
+                  !n.schema.includes('resEvento') &&
+                  !n.schema.includes('procEvento') &&
+                  !n.schema.includes('evento')
+                )
+              );
+              if (nfesReais.length === 0) return `<div style="text-align:center;padding:30px;color:#555;border:2px dashed #2a2d3e;border-radius:10px;font-size:0.85rem">Nenhuma NF-e manifestada pendente</div>`;
+              return nfesReais.map(n => `
                 <div class="nfe-card manifestada" id="card-manifestada-${n.id}">
-                  <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                    <div>
-                      <div class="nfe-card-numero">${n.numero ? `NF-e ${n.numero}/${n.serie}` : n.schema || 'Resumo'}</div>
-                      <div class="nfe-card-emit">${n.emitente || '—'}</div>
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+                    <div style="flex:1;min-width:0">
+                      <div class="nfe-card-numero" style="color:#60a5fa">
+                        ${n.numero ? `NF-e ${n.numero}/${n.serie}` : `NSU ${n.nsu}`}
+                      </div>
+                      <div class="nfe-card-emit" style="margin-top:3px">${n.emitente || '—'}</div>
                       ${n.emit_cnpj ? `<div style="font-size:0.7rem;color:#555">${n.emit_cnpj}</div>` : ''}
+                      ${n.nat_op ? `<div style="font-size:0.72rem;color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${n.nat_op}</div>` : ''}
                     </div>
-                    <div style="text-align:right">
-                      ${n.valor ? `<div style="color:#f97316;font-weight:600;font-size:0.88rem">R$ ${Number(n.valor).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>` : ''}
+                    <div style="text-align:right;flex-shrink:0">
+                      ${n.valor ? `<div style="color:#f97316;font-weight:700;font-size:0.95rem">R$ ${Number(n.valor).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>` : ''}
                       ${n.emissao ? `<div style="font-size:0.72rem;color:#888">${new Date(n.emissao+'T12:00:00').toLocaleDateString('pt-BR')}</div>` : ''}
-                      <div style="font-size:0.65rem;color:#555">NSU: ${n.nsu}</div>
+                      <div style="font-size:0.65rem;color:#444;margin-top:2px">NSU: ${n.nsu}</div>
                     </div>
                   </div>
                   <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
                     ${n.xml ? `<button onclick="importarDoManifestado('${n.id}')" class="btn-nfe-importar">📥 Importar</button>` : `<button onclick="baixarXmlManifestado('${n.id}','${n.nsu}')" class="btn-nfe-baixar">⬇️ Baixar XML</button>`}
                     ${n.chave_nfe ? `<button onclick="cienciaManifestado('${n.chave_nfe}')" class="btn-nfe-ciencia">✓ Ciência</button>` : ''}
-                    <button onclick="ignorarManifestado('${n.id}')" class="btn-nfe-ignorar">✕</button>
+                    <button onclick="ignorarManifestado('${n.id}')" class="btn-nfe-ignorar">✕ Ignorar</button>
                   </div>
-                </div>`).join('')}
+                </div>`).join('');
+            })()}
           </div>
         </div>
 
