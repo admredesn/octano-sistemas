@@ -116,6 +116,5 @@ MODULOS.forEach(m => {
 });
 
 function moduloFCaixa(){ document.getElementById('conteudo').innerHTML = '<p style="color:#888;padding:24px">F.Caixa em desenvolvimento.</p>'; }
-function moduloPessoas(){ document.getElementById('conteudo').innerHTML = '<p style="color:#888;padding:24px">Pessoas em desenvolvimento.</p>'; }
 
 init();
