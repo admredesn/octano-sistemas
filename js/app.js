@@ -46,25 +46,14 @@ async function fazerLogout(){
 }
 
 async function renderApp(session){
-  // Busca perfil com empresa
   const { data: perfil } = await sb
     .from('oct_perfis')
-    .select('empresa_id, oct_empresas(nome_fantasia, razao_social)')
+    .select('empresa_id, oct_empresas(nome, nome_fantasia)')
     .eq('id', session.user.id)
     .single();
 
-  let nomeEmpresa = 'OCTANO SISTEMAS';
-  if(perfil?.oct_empresas){
-    nomeEmpresa = perfil.oct_empresas.nome_fantasia || perfil.oct_empresas.razao_social || nomeEmpresa;
-  } else if(perfil?.empresa_id){
-    // Fallback: busca direta na tabela
-    const { data: emp } = await sb
-      .from('oct_empresas')
-      .select('nome_fantasia, razao_social')
-      .eq('id', perfil.empresa_id)
-      .single();
-    if(emp) nomeEmpresa = emp.nome_fantasia || emp.razao_social || nomeEmpresa;
-  }
+  const emp = perfil?.oct_empresas;
+  const nomeEmpresa = emp?.nome_fantasia || emp?.nome || 'Minha Empresa';
 
   document.getElementById('app').innerHTML =
     '<div class="topbar">' +
