@@ -22,10 +22,7 @@ async function getSession() {
 
 async function init() {
   const session = await getSession();
-  if (!session) {
-    renderLogin();
-    return;
-  }
+  if (!session) { renderLogin(); return; }
   renderApp(session);
   navegarPara(_moduloAtual);
 }
@@ -53,7 +50,6 @@ async function fazerLogin() {
   const senha   = document.getElementById('login-senha').value;
   const erro    = document.getElementById('login-erro');
   if (!usuario || !senha) { erro.textContent = 'Preencha usuário e senha.'; return; }
-
   const email = usuario.includes('@') ? usuario : `${usuario}@octano.interno`;
   const { error } = await sb.auth.signInWithPassword({ email, password: senha });
   if (error) { erro.textContent = 'Usuário ou senha inválidos.'; return; }
@@ -69,10 +65,8 @@ async function renderApp(session) {
   const { data: perfil } = await sb.from('oct_perfis')
     .select('oct_empresas(nome_fantasia,razao_social)')
     .eq('id', session.user.id).single();
-
   const empresa = perfil?.oct_empresas;
   const nomeEmpresa = empresa?.nome_fantasia || empresa?.razao_social || 'Minha Empresa';
-
   document.getElementById('app').innerHTML = `
     <div class="topbar">
       <div class="logo">OCTANO SISTEMAS</div>
@@ -85,8 +79,17 @@ async function renderApp(session) {
     <div class="toolbar" id="toolbar"></div>
     <div class="conteudo" id="conteudo"></div>
   `;
-
   renderToolbar();
+  // CSS extra para cards de produto
+  if (!document.getElementById('style-extra')) {
+    const s = document.createElement('style');
+    s.id = 'style-extra';
+    s.textContent = `
+      .prod-card { background:#13151f; border:1px solid #2a2d3e; border-radius:10px; padding:16px; transition:all 0.2s; }
+      .prod-card:hover { border-color:#f97316; transform:translateY(-2px); box-shadow:0 4px 20px rgba(249,115,22,0.1); }
+    `;
+    document.head.appendChild(s);
+  }
 }
 
 function renderToolbar() {
@@ -96,23 +99,18 @@ function renderToolbar() {
     <div class="toolbar-item ${m.id === _moduloAtual ? 'ativo' : ''} ${m.breve ? 'breve' : ''}"
       id="tab-${m.id}"
       onclick="${m.breve ? '' : `navegarPara('${m.id}')`}">
-      ${m.icone} ${m.label}
-      ${m.breve ? '<small>BREVE</small>' : ''}
+      ${m.icone} ${m.label}${m.breve ? ' <small>BREVE</small>' : ''}
     </div>
   `).join('');
 }
 
 function navegarPara(modulo) {
   _moduloAtual = modulo;
-
-  // Atualiza toolbar
   document.querySelectorAll('.toolbar-item').forEach(el => el.classList.remove('ativo'));
   const tab = document.getElementById(`tab-${modulo}`);
   if (tab) tab.classList.add('ativo');
-
   const conteudo = document.getElementById('conteudo');
   if (!conteudo) return;
-
   switch (modulo) {
     case 'empresa':      moduloEmpresa();       break;
     case 'fcaixa':       moduloFCaixa();        break;
@@ -126,7 +124,6 @@ function navegarPara(modulo) {
   }
 }
 
-// Módulos placeholder ainda não implementados
 function moduloFCaixa() {
   document.getElementById('conteudo').innerHTML =
     '<p style="color:#888;padding:24px">Módulo <strong>F.Caixa</strong> em desenvolvimento.</p>';
@@ -136,23 +133,5 @@ function moduloPessoas() {
   document.getElementById('conteudo').innerHTML =
     '<p style="color:#888;padding:24px">Módulo <strong>Pessoas</strong> em desenvolvimento.</p>';
 }
-
-// CSS adicional para cards de produto
-const styleExtra = document.createElement('style');
-styleExtra.textContent = `
-  .prod-card {
-    background: #13151f;
-    border: 1px solid #2a2d3e;
-    border-radius: 10px;
-    padding: 16px;
-    transition: all 0.2s;
-  }
-  .prod-card:hover {
-    border-color: #f97316;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 20px rgba(249,115,22,0.1);
-  }
-`;
-document.head.appendChild(styleExtra);
 
 init();
