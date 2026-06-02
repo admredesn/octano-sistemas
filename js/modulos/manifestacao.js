@@ -239,6 +239,7 @@ function manifRender() {
                 ${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
                 <button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button>
                 <button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>
+                <button class="manif-btn-linha" style="border-color:#5a4a2a;color:#fbbf24" onclick="manifDesfazer('${n.id}')">↩ Desfazer</button>
               </td>` : ''}
               ${isCanceladas ? `<td>
                 <button class="manif-btn-linha" onclick="manifConsultarStatus('${n.chave_nfe}')">🔍 Status SEFAZ</button>
@@ -439,6 +440,20 @@ function manifImprimir(id) {
   if (!n?.xml) { manifMsg('Baixe o XML antes de imprimir.', 'info'); return; }
   // impressao do DANFE em PDF sera implementada futuramente
   manifMsg('Impressão de DANFE em PDF: em desenvolvimento.', 'info');
+}
+
+async function manifDesfazer(id) {
+  const n = _manifDados.find(x => x.id === id);
+  const ok = confirm(
+    'Devolver esta nota para "Sem Manifestação"?\n\n' +
+    'Isso reorganiza apenas no sistema. A Ciência da Operação já registrada na SEFAZ NÃO é cancelada (não há como desfazer na Receita).'
+  );
+  if (!ok) return;
+  const { error } = await sb.from('oct_nfe_manifestadas').update({ status: 'sem_manifestacao' }).eq('id', id);
+  if (error) { manifMsg('Erro: ' + error.message, 'erro'); return; }
+  await manifRegistrarLog(`Desfez manifestação da nota ${n?.numero || n?.nsu || id} (voltou para Sem Manifestação)`);
+  manifMsg('✓ Nota devolvida para "Sem Manifestação".', 'ok');
+  manifCarregarAba();
 }
 
 async function manifConsultarStatus(chave) {
