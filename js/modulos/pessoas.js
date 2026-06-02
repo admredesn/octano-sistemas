@@ -88,7 +88,13 @@ async function abrirFormPessoa(id, empresaId) {
             ${tipos.map(t=>`<option value="${t}" ${ (p?.tipo||'fornecedor')===t ? 'selected':''}>${t.charAt(0).toUpperCase()+t.slice(1)}</option>`).join('')}
           </select>
         </div>
-        <div class="form-group"><label>CNPJ / CPF</label><input id="fpe-doc" type="text" value="${p?.documento||''}" /></div>
+        <div class="form-group"><label>CNPJ / CPF</label>
+          <div style="display:flex;gap:6px">
+            <input id="fpe-doc" type="text" value="${p?.documento||''}" onblur="buscarCnpjPessoa()" style="flex:1" />
+            <button type="button" onclick="buscarCnpjPessoa()" title="Buscar dados do CNPJ" style="padding:0 12px;border-radius:6px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer;white-space:nowrap">🔍</button>
+          </div>
+          <span id="fpe-doc-msg" style="font-size:0.72rem;color:#888"></span>
+        </div>
         <div class="form-group"><label>Inscrição Estadual</label><input id="fpe-ie" type="text" value="${p?.ie||''}" /></div>
         <div class="form-group"><label>Telefone</label><input id="fpe-tel" type="text" value="${p?.telefone||''}" /></div>
         <div class="form-group span2"><label>E-mail</label><input id="fpe-email" type="text" value="${p?.email||''}" /></div>
@@ -105,6 +111,40 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
     </div>
   `;
+}
+
+async function buscarCnpjPessoa() {
+  const docEl = document.getElementById('fpe-doc');
+  const msg = document.getElementById('fpe-doc-msg');
+  if (!docEl) return;
+  const cnpj = (docEl.value || '').replace(/\D/g, '');
+  if (cnpj.length !== 14) {
+    // só busca para CNPJ (14 dígitos); CPF não tem consulta pública
+    return;
+  }
+  if (msg) { msg.textContent = 'Buscando dados na Receita...'; msg.style.color = '#888'; }
+  try {
+    const resp = await fetch('https://brasilapi.com.br/api/cnpj/v1/' + cnpj);
+    if (!resp.ok) {
+      if (msg) { msg.textContent = 'CNPJ não encontrado.'; msg.style.color = '#fbbf24'; }
+      return;
+    }
+    const d = await resp.json();
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+    // só preenche o nome se estiver vazio (não sobrescreve o que o usuário digitou)
+    const nomeEl = document.getElementById('fpe-nome');
+    if (nomeEl && !nomeEl.value.trim()) nomeEl.value = d.razao_social || d.nome_fantasia || '';
+    const tel = d.ddd_telefone_1 ? d.ddd_telefone_1.replace(/^(\d{2})(\d+)/, '($1) $2') : '';
+    setVal('fpe-tel', tel);
+    const endParts = [d.logradouro, d.numero, d.bairro].filter(Boolean).join(', ');
+    setVal('fpe-end', endParts);
+    setVal('fpe-cidade', d.municipio);
+    setVal('fpe-uf', d.uf);
+    if (d.email) setVal('fpe-email', d.email);
+    if (msg) { msg.textContent = '✓ Dados preenchidos pela Receita.'; msg.style.color = '#4caf50'; }
+  } catch (e) {
+    if (msg) { msg.textContent = 'Erro ao consultar: ' + e.message; msg.style.color = '#f44'; }
+  }
 }
 
 async function salvarPessoa(id, empresaId) {
