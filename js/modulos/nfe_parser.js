@@ -2,27 +2,28 @@
 // Parser completo de XML NF-e versão 4.00
 
 // Códigos ANP que exigem vínculo com TANQUE (combustíveis automotivos)
-// Série 130xxxxx = combustíveis líquidos (gasolina, etanol, diesel)
-// Série 130302010 = GNV
-// Demais (620xxxxx = lubrificantes, 320xxxxx = outros) NÃO precisam de tanque
+// Tabela ANP atual:
+//   3201xxxxx = Gasolina C (mistura, vendida na bomba)
+//   8101xxxxx = Etanol Hidratado/Anidro
+//   8201xxxxx = Óleo Diesel B (S10, S500, etc.)
+//   GNV       = 130302010 / família 0401 (gás natural veicular)
+// NÃO vão para tanque: 6205xxxxx e demais 62xxxxx (lubrificantes/óleos), 7401 (aditivos), etc.
 const ANP_COMBUSTIVEL_TANQUE = [
-  '130101001','130101002', // Diesel S500, S10
-  '130201001','130201002', // Etanol hidratado, anidro
-  '130302010',             // GNV
-  '130401001','130401002', // Gasolina comum, aditivada
-  '130401003',             // Gasolina Premium
-  '320102001','320102002', // Gasolina C comum, aditivada (mistura)
-  '320101100',             // ARLA 32
+  '130302010',             // GNV (código legado)
+  '320101100',             // ARLA 32 (tratado como item de tanque/granel)
 ];
+
+// prefixos (famílias) de combustível automotivo que vai para tanque
+const ANP_PREFIXOS_TANQUE = ['3201','8101','8201'];
 
 function ehCombustivelTanque(codAnp) {
   if (!codAnp) return false;
   const c = String(codAnp).trim();
-  // Combustíveis automotivos começam com 1301, 1302, 1303, 1304 ou são gasolina C (3201)
-  return ANP_COMBUSTIVEL_TANQUE.includes(c) ||
-    c.startsWith('1301') || c.startsWith('1302') ||
-    c.startsWith('1303') || c.startsWith('1304') ||
-    c === '320102001' || c === '320102002' || c === '320101100';
+  if (ANP_COMBUSTIVEL_TANQUE.includes(c)) return true;
+  if (ANP_PREFIXOS_TANQUE.some(p => c.startsWith(p))) return true;
+  // compatibilidade com notas antigas que usavam a família 13xx
+  if (c.startsWith('1301') || c.startsWith('1302') || c.startsWith('1303') || c.startsWith('1304')) return true;
+  return false;
 }
 
 function nfeNs(xml) {
