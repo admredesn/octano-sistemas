@@ -344,6 +344,9 @@ async function uploadCertificado() {
     cert_path: path,
   }).eq('id', empresaId);
 
+  // guarda a senha do certificado para reaproveitar na manifestacao de NF-e
+  if (typeof setCertSenha === 'function') setCertSenha(senha);
+
   msg.textContent = '✅ Certificado salvo com sucesso!';
   msg.style.color = '#4caf50';
   setTimeout(() => location.reload(), 1200);
@@ -356,6 +359,8 @@ async function removerCertificado() {
   await sb.from('oct_empresas').update({
     cert_nome: null, cert_path: null, cert_validade: null, cert_titular: null, cert_emissao: null
   }).eq('id', perfil.empresa_id);
+  // limpa a senha guardada ao remover o certificado
+  if (typeof setCertSenha === 'function') setCertSenha(null);
   location.reload();
 }
 
