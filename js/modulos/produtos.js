@@ -45,7 +45,7 @@ async function moduloProdutos() {
       { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
       { campo: 'preco_custo', titulo: 'Custo', tipo: 'numero', casas: 4, align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
       { campo: 'preco_venda', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
-      { campo: 'estoque_atual', titulo: 'Estoque', align: 'right', largura: '110px', valor:(p)=>p.estoque_atual, render: (v,p)=> Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:3})+' '+(p.unidade||'un') },
+      { campo: 'estoque', titulo: 'Estoque', align: 'right', largura: '110px', valor:(p)=>p.estoque, render: (v,p)=> Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:3})+' '+(p.unidade||'un') },
       { campo: 'ncm', titulo: 'NCM', largura: '90px', render: (v)=> v||'—' },
       { titulo: 'Tanque', largura: '150px', valor: (p)=> p.oct_tanques ? ('T'+p.oct_tanques.numero+' '+p.oct_tanques.combustivel) : '', render: (v)=> v ? `<span style="color:#4caf50">⛽ ${v}</span>` : '—' },
     ],
@@ -108,7 +108,7 @@ async function abrirDetalheProduto(id) {
             <div><span class="nfe-label">CFOP</span><br>${p.cfop||'—'}</div>
             <div><span class="nfe-label">Preço custo</span><br><strong>R$ ${Number(p.preco_custo||0).toLocaleString('pt-BR',{minimumFractionDigits:4})}</strong></div>
             <div><span class="nfe-label">Preço venda</span><br><strong style="color:#f97316">R$ ${Number(p.preco_venda||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</strong></div>
-            <div><span class="nfe-label">Estoque atual</span><br><strong>${Number(p.estoque_atual||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} ${p.unidade||'un'}</strong></div>
+            <div><span class="nfe-label">Estoque atual</span><br><strong>${Number(p.estoque||0).toLocaleString('pt-BR',{minimumFractionDigits:3})} ${p.unidade||'un'}</strong></div>
             <div><span class="nfe-label">Estoque mínimo</span><br>${Number(p.estoque_minimo||0).toLocaleString('pt-BR',{minimumFractionDigits:3})}</div>
             ${p.oct_tanques ? `<div style="grid-column:span 2"><span class="nfe-label">Tanque vinculado</span><br><span style="color:#4caf50">⛽ Tanque ${p.oct_tanques.numero} — ${p.oct_tanques.combustivel}</span></div>` : ''}
           </div>
@@ -179,7 +179,7 @@ async function abrirFormProduto(id, empresaId) {
         <div class="form-group"><label>NCM</label><input id="fp-ncm" type="text" value="${p?.ncm||''}" /></div>
         <div class="form-group"><label>Preço custo</label><input id="fp-custo" type="number" step="0.0001" value="${p?.preco_custo||0}" /></div>
         <div class="form-group"><label>Preço venda</label><input id="fp-venda" type="number" step="0.01" value="${p?.preco_venda||0}" /></div>
-        <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque_atual||0}" /></div>
+        <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque||0}" /></div>
         <div class="form-group"><label>Estoque mínimo</label><input id="fp-estoque-min" type="number" step="0.001" value="${p?.estoque_minimo||0}" /></div>
         <div class="form-group">
           <label>Tanque vinculado (opcional)</label>
@@ -213,7 +213,7 @@ async function salvarProduto(id, empresaId) {
     ncm:           document.getElementById('fp-ncm').value.trim() || null,
     preco_custo:   parseFloat(document.getElementById('fp-custo').value) || 0,
     preco_venda:   parseFloat(document.getElementById('fp-venda').value) || 0,
-    estoque_atual: parseFloat(document.getElementById('fp-estoque').value) || 0,
+    estoque: parseFloat(document.getElementById('fp-estoque').value) || 0,
     estoque_minimo:parseFloat(document.getElementById('fp-estoque-min').value) || 0,
     tanque_id:     document.getElementById('fp-tanque').value || null,
   };
