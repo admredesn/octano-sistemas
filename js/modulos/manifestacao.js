@@ -67,6 +67,7 @@ async function moduloManifestacao() {
             <option value="producao">Produção</option><option value="homologacao">Homologação</option>
           </select>
         </div>
+        <div id="manif-status-consulta" style="display:none"></div>
       </div>
 
       <div class="manif-corpo">
@@ -203,6 +204,15 @@ function manifRender() {
   if (qtd) qtd.textContent = lista.length;
 
   const fmtData = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+  // numero da NF: usa o campo, ou extrai da chave (digitos 26-34) removendo zeros a esquerda
+  const numNota = n => {
+    if (n.numero) return n.numero;
+    if (n.chave_nfe && n.chave_nfe.length === 44) {
+      const num = n.chave_nfe.substring(25, 34).replace(/^0+/, '');
+      return num || '—';
+    }
+    return '—';
+  };
   const fmtVal = v => v ? Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}) : '—';
 
   if (lista.length === 0) {
@@ -234,7 +244,7 @@ function manifRender() {
           ${lista.map(n => `
             <tr style="${n.status==='importada'?'background:#0f2a0f':''}">
               ${isSemManif ? `<td><input type="checkbox" class="manif-chk" data-id="${n.id}" ${_manifSelecionadas.has(n.id)?'checked':''} onclick="manifToggleUm('${n.id}',this.checked)" /></td>` : ''}
-              <td><strong>${n.numero||'—'}</strong>${n.status==='importada'?' <span style="font-size:0.65rem;color:#4caf50">✓ importada</span>':''}</td>
+              <td><strong>${numNota(n)}</strong>${n.status==='importada'?' <span style="font-size:0.65rem;color:#4caf50">✓ importada</span>':''}</td>
               <td style="font-family:monospace;font-size:0.74rem">${n.emit_cnpj||'—'}</td>
               <td title="${(n.emitente||'').replace(/"/g,'&quot;')}">${n.emitente||'—'}</td>
               <td>${fmtData(n.emissao)}</td>
@@ -302,12 +312,24 @@ function manifAtualizarContadorSelecao() {
 }
 
 // ─── CONSULTAR SEFAZ ────────────────────────────────────────
+// painel de status da consulta SEFAZ (fixo, nao some sozinho)
+function manifStatusConsulta(texto, tipo) {
+  const el = document.getElementById('manif-status-consulta');
+  if (!el) return;
+  if (!texto) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const cores = { ok:['#0f2a0f','#2a5a2a','#7ee787'], erro:['#2a0f0f','#5a2a2a','#ff9b9b'], alerta:['#2a2300','#5a4a00','#fbbf24'], info:['#0f1a2a','#2a4a6a','#7cc4ff'] };
+  const c = cores[tipo] || cores.info;
+  const hora = new Date().toLocaleTimeString('pt-BR');
+  el.style.cssText = `display:block;margin-top:8px;padding:10px 14px;border-radius:6px;font-size:0.82rem;background:${c[0]};border:1px solid ${c[1]};color:${c[2]};line-height:1.5`;
+  el.innerHTML = `${texto} <span style="color:#666;font-size:0.72rem;float:right">${hora}</span>`;
+}
+
 async function manifConsultarSefaz() {
   const senha = getCertSenha();
-  if (!senha) { manifMsg('Senha do certificado não encontrada. Configure na tela Empresa.', 'erro'); return; }
+  if (!senha) { manifStatusConsulta('⚠️ Senha do certificado não encontrada. Configure na tela Empresa.', 'erro'); return; }
   const ambiente = document.getElementById('manif-ambiente').value;
   const nsu = document.getElementById('manif-nsu').value || '0';
-  manifMsg('🔄 Consultando SEFAZ...', 'info');
+  manifStatusConsulta('🔄 Consultando SEFAZ...', 'info');
   try {
     const { data: cb } = await sb.storage.from('octano-certs').download(_manifEmpresa.cert_path);
     const buf = await cb.arrayBuffer();
@@ -315,9 +337,27 @@ async function manifConsultarSefaz() {
     const cnpj = _manifEmpresa.cnpj?.replace(/\D/g, '');
     const resp = await fetch(`${SEFAZ_URL}/manifestar`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, cert_base64:b64, cert_senha:senha, ambiente, ultimo_nsu:nsu }) });
     const dados = await resp.json();
-    if (dados.erro) { manifMsg('Erro SEFAZ: ' + dados.erro, 'erro'); return; }
+
+    const cstat = String(dados.cstat || '');
+    const xmotivo = dados.xmotivo || dados.erro || '';
+
+    // 656 = Consumo Indevido (consultas muito frequentes -> SEFAZ bloqueia ~1h)
+    if (cstat === '656' || /consumo indevido/i.test(xmotivo)) {
+      manifStatusConsulta('🚫 <strong>SEFAZ bloqueou a consulta por consumo indevido (cStat 656).</strong><br>Você fez consultas em intervalo muito curto. A SEFAZ libera novas consultas após cerca de <strong>1 hora</strong>. Aguarde e tente de novo. Evite clicar em "Consultar" repetidamente.', 'alerta');
+      await manifRegistrarLog('SEFAZ 656 — Consumo Indevido (consulta bloqueada ~1h)');
+      return;
+    }
+    if (dados.erro) { manifStatusConsulta('❌ Erro SEFAZ: ' + dados.erro, 'erro'); await manifRegistrarLog('Erro SEFAZ: '+dados.erro); return; }
+    // cStat informativos comuns: 137 = nenhum doc localizado; 138 = doc(s) localizados
+    if (cstat && !['137','138'].includes(cstat) && xmotivo) {
+      manifStatusConsulta(`ℹ️ SEFAZ [${cstat}]: ${xmotivo}`, 'info');
+    }
+
     if (dados.ultimo_nsu) document.getElementById('manif-nsu').value = dados.ultimo_nsu;
-    if (!dados.nfes || dados.nfes.length === 0) { manifMsg('✓ Nenhuma nota nova na SEFAZ.', 'ok'); return; }
+    if (!dados.nfes || dados.nfes.length === 0) {
+      manifStatusConsulta(`✓ Consulta OK — nenhuma nota nova.${cstat?` (SEFAZ ${cstat}: ${xmotivo})`:''}`, 'ok');
+      return;
+    }
     let salvas = 0;
     for (const n of dados.nfes) {
       const ehEvento = n.schema && (n.schema.includes('resEvento')||n.schema.includes('procEvento')||n.schema.includes('evento'));
@@ -331,9 +371,9 @@ async function manifConsultarSefaz() {
       if (!error) salvas++;
     }
     await manifRegistrarLog(`Consulta SEFAZ: ${salvas} nota(s) nova(s), último NSU ${dados.ultimo_nsu||nsu}`);
-    manifMsg(`✓ ${salvas} nota(s) salva(s)!`, 'ok');
+    manifStatusConsulta(`✓ Consulta OK — ${salvas} nota(s) salva(s). Último NSU: ${dados.ultimo_nsu||nsu}`, 'ok');
     if (_manifAbaAtual === 'sem_manifestacao') manifCarregarAba();
-  } catch(e) { manifMsg('Erro: ' + e.message, 'erro'); }
+  } catch(e) { manifStatusConsulta('❌ Erro de conexão: ' + e.message, 'erro'); }
 }
 
 // ─── ENVIAR MANIFESTACAO EM LOTE ────────────────────────────
