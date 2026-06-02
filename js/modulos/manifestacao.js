@@ -355,13 +355,17 @@ async function manifEnviarLote() {
     if (!nota?.chave_nfe) { falhas++; continue; }
     if (prog) prog.textContent = `Enviando ${i+1}/${ids.length}...`;
     try {
-      const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, chave_nfe:nota.chave_nfe, evento, cert_base64:b64, cert_senha:senha, ambiente }) });
+      const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, chave_nfe:nota.chave_nfe, cert_base64:b64, cert_senha:senha, ambiente }) });
       const dados = await resp.json();
-      // cstat 135/136 = evento registrado; 573 = ja manifestada (tratamos como ok)
-      if (dados.cstat && ['135','136','573'].includes(String(dados.cstat))) {
+      // o servidor pode retornar cstat (135/136/573 = ok) ou apenas tipo/descricao do evento
+      const cstatOk = dados.cstat && ['135','136','573'].includes(String(dados.cstat));
+      const eventoEnviado = !dados.erro && (dados.tipo || dados.descricao) && resp.status === 200;
+      if (cstatOk || eventoEnviado) {
         await sb.from('oct_nfe_manifestadas').update({ status:'ciencia' }).eq('id', nota.id);
         ok++;
-      } else { falhas++; }
+      } else {
+        falhas++;
+      }
     } catch(e) { falhas++; }
   }
   await manifRegistrarLog(`Manifestação em lote (${evento}): ${ok} ok, ${falhas} falha(s)`);
