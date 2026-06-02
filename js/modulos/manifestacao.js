@@ -234,7 +234,7 @@ function manifRender() {
               <td title="${(n.emitente||'').replace(/"/g,'&quot;')}">${n.emitente||'—'}</td>
               <td>${fmtData(n.emissao)}</td>
               <td style="text-align:right;font-weight:600">${fmtVal(n.valor)}</td>
-              <td style="font-family:monospace;font-size:0.7rem;color:#888" title="${n.chave_nfe||''}">${n.chave_nfe?n.chave_nfe.substring(0,20)+'…':'—'}</td>
+              <td style="font-family:monospace;font-size:0.7rem;color:#60a5fa;cursor:pointer" title="Clique para copiar a chave completa: ${n.chave_nfe||''}" onclick="manifCopiarChave('${n.chave_nfe||''}')">${n.chave_nfe?n.chave_nfe.substring(0,20)+'… 📋':'—'}</td>
               ${isManifestadas ? `<td>
                 ${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
                 <button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button>
@@ -385,11 +385,36 @@ async function manifIncluirNota(id) {
   }
 }
 
+function _manifSalvarArquivoXml(xmlString, nomeArquivo) {
+  try {
+    const blob = new Blob([xmlString], { type: 'application/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nomeArquivo;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch(e) { return false; }
+}
+
 async function manifBaixarXml(id, nsu) {
+  const nota = _manifDados.find(n => n.id === id);
+  const nomeArq = `NFe_${nota?.numero || nsu}.xml`;
+
+  // se ja temos o XML salvo no banco, so baixa o arquivo (nao chama a SEFAZ de novo)
+  if (nota?.xml) {
+    const ok = _manifSalvarArquivoXml(nota.xml, nomeArq);
+    manifMsg(ok ? `✓ Arquivo ${nomeArq} salvo na pasta de Downloads.` : 'Não foi possível salvar o arquivo.', ok ? 'ok' : 'erro');
+    return;
+  }
+
   const senha = getCertSenha();
   const ambiente = document.getElementById('manif-ambiente')?.value || 'producao';
   if (!senha) { manifMsg('Senha do certificado não encontrada.', 'erro'); return; }
-  manifMsg('🔄 Baixando XML...', 'info');
+  manifMsg('🔄 Baixando XML da SEFAZ...', 'info');
   try {
     const { data: cb } = await sb.storage.from('octano-certs').download(_manifEmpresa.cert_path);
     const buf = await cb.arrayBuffer();
@@ -398,11 +423,13 @@ async function manifBaixarXml(id, nsu) {
     const resp = await fetch(`${SEFAZ_URL}/xml/${nsu}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, cert_base64:b64, cert_senha:senha, ambiente, nsu }) });
     const dados = await resp.json();
     if (dados.nfes?.[0]?.xml) {
-      await sb.from('oct_nfe_manifestadas').update({ xml: dados.nfes[0].xml }).eq('id', id);
-      manifMsg('✓ XML baixado.', 'ok');
+      const xml = dados.nfes[0].xml;
+      await sb.from('oct_nfe_manifestadas').update({ xml }).eq('id', id);
+      const ok = _manifSalvarArquivoXml(xml, nomeArq);
+      manifMsg(ok ? `✓ XML baixado e salvo na pasta de Downloads (${nomeArq}).` : '✓ XML salvo no sistema (não foi possível baixar o arquivo).', 'ok');
       manifCarregarAba();
     } else {
-      manifMsg('Não foi possível baixar: ' + (dados.erro || 'sem retorno'), 'erro');
+      manifMsg('Não foi possível baixar. A SEFAZ só libera o XML completo após a Ciência da Operação. ' + (dados.erro ? '('+dados.erro+')' : ''), 'erro');
     }
   } catch(e) { manifMsg('Erro: ' + e.message, 'erro'); }
 }
@@ -428,6 +455,14 @@ async function manifConsultarStatus(chave) {
     const dados = await resp.json();
     manifMsg(`SEFAZ [${dados.cstat||'?'}]: ${dados.xmotivo||dados.erro||'sem retorno'}`, 'info');
   } catch(e) { manifMsg('Erro: ' + e.message, 'erro'); }
+}
+
+function manifCopiarChave(chave) {
+  if (!chave) { manifMsg('Esta nota não tem chave (NF-e resumida). Baixe o XML primeiro.', 'info'); return; }
+  navigator.clipboard.writeText(chave).then(()=>manifMsg('✓ Chave copiada: '+chave, 'ok')).catch(()=>{
+    // fallback: mostra a chave para copiar manualmente
+    prompt('Copie a chave da NF-e:', chave);
+  });
 }
 
 function manifCopiarChaveSelecao() {
