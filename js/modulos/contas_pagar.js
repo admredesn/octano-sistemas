@@ -307,7 +307,26 @@ async function salvarConta(id,eId){
   msg.textContent='Salvo!';msg.style.color='#4caf50';setTimeout(()=>moduloContasPagar(),600);
 }
 
-async function lancarContasPagarNfe(nfeId,eId,fornId,num,serie,pags,dups,emissao){
-  if(dups&&dups.length>0){for(const d of dups){if(!d.dVenc||!d.vDup)continue;await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie+' Dup '+(d.nDup||'001'),fornecedor_id:fornId||null,nfe_id:nfeId,valor:d.vDup,vencimento:d.dVenc,n_documento:num+'/'+(d.nDup||'1'),status:'aberto',competencia:emissao||null});}}
-  else if(pags&&pags.length>0){for(const p of pags){if(p.indPag==='0')continue;const v=emissao||new Date().toISOString().split('T')[0];await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:p.vPag,vencimento:v,n_documento:num,status:'aberto',competencia:emissao||null,observacoes:'Forma: '+(p.xPag||p.tPag)});}}
+async function lancarContasPagarNfe(nfeId,eId,fornId,num,serie,pags,dups,emissao,valorTotal){
+  const dataEmissao = emissao || new Date().toISOString().split('T')[0];
+  // 1) Se tem duplicatas com vencimento e valor, lança cada uma
+  const dupsValidas = (dups||[]).filter(d=>d.dVenc&&d.vDup);
+  if(dupsValidas.length>0){
+    for(const d of dupsValidas){
+      await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie+' Dup '+(d.nDup||'001'),fornecedor_id:fornId||null,nfe_id:nfeId,valor:d.vDup,vencimento:d.dVenc,n_documento:num+'/'+(d.nDup||'1'),status:'aberto',competencia:dataEmissao});
+    }
+    return;
+  }
+  // 2) Sem duplicata: se tem pagamentos a prazo, lança com vencimento = emissao
+  const pagsPrazo = (pags||[]).filter(p=>p.indPag!=='0'&&p.vPag);
+  if(pagsPrazo.length>0){
+    for(const p of pagsPrazo){
+      await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:p.vPag,vencimento:dataEmissao,n_documento:num,status:'aberto',competencia:dataEmissao,observacoes:'Forma: '+(p.xPag||p.tPag||'')});
+    }
+    return;
+  }
+  // 3) Sem duplicata e sem pagamento a prazo: lança UMA conta com o valor total, vencimento = emissao
+  if(valorTotal&&Number(valorTotal)>0){
+    await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:Number(valorTotal),vencimento:dataEmissao,n_documento:num,status:'aberto',competencia:dataEmissao});
+  }
 }
