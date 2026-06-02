@@ -358,11 +358,36 @@ async function manifConsultarSefaz() {
       manifStatusConsulta(`✓ Consulta OK — nenhuma nota nova.${cstat?` (SEFAZ ${cstat}: ${xmotivo})`:''}`, 'ok');
       return;
     }
-    let salvas = 0;
+    let salvas = 0, atualizadas = 0;
     for (const n of dados.nfes) {
       const ehEvento = n.schema && (n.schema.includes('resEvento')||n.schema.includes('procEvento')||n.schema.includes('evento'));
+      const chave = n.chave || null;
+
+      // Para NF-e com chave: se ja existe (qualquer status), atualiza a existente em vez de duplicar
+      if (chave && !ehEvento) {
+        const { data: existente } = await sb.from('oct_nfe_manifestadas')
+          .select('id,numero,xml,emissao,emitente,valor,status')
+          .eq('empresa_id', _manifEmpresaId).eq('chave_nfe', chave)
+          .limit(1).maybeSingle();
+        if (existente) {
+          // completa campos que faltavam, sem rebaixar status ja avancado
+          const patch = {};
+          if (!existente.numero && n.numero) patch.numero = n.numero;
+          if (!existente.xml && n.xml) patch.xml = n.xml;
+          if (!existente.emissao && n.emissao) patch.emissao = n.emissao;
+          if (!existente.emitente && n.emitente) patch.emitente = n.emitente;
+          if ((existente.valor==null) && n.valor) patch.valor = parseFloat(n.valor);
+          if (Object.keys(patch).length) {
+            await sb.from('oct_nfe_manifestadas').update(patch).eq('id', existente.id);
+            atualizadas++;
+          }
+          continue; // nao cria nova linha
+        }
+      }
+
+      // Nota nova (ou evento): insere
       const { error } = await sb.from('oct_nfe_manifestadas').upsert({
-        empresa_id:_manifEmpresaId, nsu:n.nsu, schema:n.schema, chave_nfe:n.chave||null,
+        empresa_id:_manifEmpresaId, nsu:n.nsu, schema:n.schema, chave_nfe:chave,
         numero:n.numero||null, serie:n.serie||null, emissao:n.emissao||null, emitente:n.emitente||null,
         emit_cnpj:n.emitCnpj||null, valor:n.valor?parseFloat(n.valor):null, nat_op:n.natOp||null,
         xml:n.xml||null, tipo:n.tipo||'resumo', status: ehEvento ? 'evento' : 'sem_manifestacao',
@@ -370,8 +395,8 @@ async function manifConsultarSefaz() {
       }, { onConflict:'empresa_id,nsu', ignoreDuplicates:true });
       if (!error) salvas++;
     }
-    await manifRegistrarLog(`Consulta SEFAZ: ${salvas} nota(s) nova(s), último NSU ${dados.ultimo_nsu||nsu}`);
-    manifStatusConsulta(`✓ Consulta OK — ${salvas} nota(s) salva(s). Último NSU: ${dados.ultimo_nsu||nsu}`, 'ok');
+    await manifRegistrarLog(`Consulta SEFAZ: ${salvas} nova(s), ${atualizadas} atualizada(s), último NSU ${dados.ultimo_nsu||nsu}`);
+    manifStatusConsulta(`✓ Consulta OK — ${salvas} nota(s) nova(s)${atualizadas?`, ${atualizadas} atualizada(s)`:''}. Último NSU: ${dados.ultimo_nsu||nsu}`, 'ok');
     if (_manifAbaAtual === 'sem_manifestacao') manifCarregarAba();
   } catch(e) { manifStatusConsulta('❌ Erro de conexão: ' + e.message, 'erro'); }
 }
