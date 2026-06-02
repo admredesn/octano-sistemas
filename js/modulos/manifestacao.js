@@ -165,9 +165,14 @@ async function manifCarregarAba() {
     return;
   }
 
-  const { data } = await sb.from('oct_nfe_manifestadas').select('*')
-    .eq('empresa_id', _manifEmpresaId).eq('status', _manifAbaAtual)
-    .order('emissao', { ascending: false });
+  let q = sb.from('oct_nfe_manifestadas').select('*').eq('empresa_id', _manifEmpresaId);
+  if (_manifAbaAtual === 'ciencia') {
+    // aba Manifestadas mostra as com ciencia E as ja importadas (estas em cor diferente)
+    q = q.in('status', ['ciencia', 'importada']);
+  } else {
+    q = q.eq('status', _manifAbaAtual);
+  }
+  const { data } = await q.order('emissao', { ascending: false });
   _manifDados = data || [];
   manifRender();
 }
@@ -227,19 +232,21 @@ function manifRender() {
         </thead>
         <tbody>
           ${lista.map(n => `
-            <tr>
+            <tr style="${n.status==='importada'?'background:#0f2a0f':''}">
               ${isSemManif ? `<td><input type="checkbox" class="manif-chk" data-id="${n.id}" ${_manifSelecionadas.has(n.id)?'checked':''} onclick="manifToggleUm('${n.id}',this.checked)" /></td>` : ''}
-              <td><strong>${n.numero||'—'}</strong></td>
+              <td><strong>${n.numero||'—'}</strong>${n.status==='importada'?' <span style="font-size:0.65rem;color:#4caf50">✓ importada</span>':''}</td>
               <td style="font-family:monospace;font-size:0.74rem">${n.emit_cnpj||'—'}</td>
               <td title="${(n.emitente||'').replace(/"/g,'&quot;')}">${n.emitente||'—'}</td>
               <td>${fmtData(n.emissao)}</td>
               <td style="text-align:right;font-weight:600">${fmtVal(n.valor)}</td>
               <td style="font-family:monospace;font-size:0.7rem;color:#60a5fa;cursor:pointer" title="Clique para copiar a chave completa: ${n.chave_nfe||''}" onclick="manifCopiarChave('${n.chave_nfe||''}')">${n.chave_nfe?n.chave_nfe.substring(0,20)+'… 📋':'—'}</td>
               ${isManifestadas ? `<td>
-                ${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
+                ${n.status==='importada'
+                  ? `<span style="color:#4caf50;font-size:0.75rem;margin-right:6px">✓ Importada</span><button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button><button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>`
+                  : `${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
                 <button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button>
                 <button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>
-                <button class="manif-btn-linha" style="border-color:#5a4a2a;color:#fbbf24" onclick="manifDesfazer('${n.id}')">↩ Desfazer</button>
+                <button class="manif-btn-linha" style="border-color:#5a4a2a;color:#fbbf24" onclick="manifDesfazer('${n.id}')">↩ Desfazer</button>`}
               </td>` : ''}
               ${isCanceladas ? `<td>
                 <button class="manif-btn-linha" onclick="manifConsultarStatus('${n.chave_nfe}')">🔍 Status SEFAZ</button>
