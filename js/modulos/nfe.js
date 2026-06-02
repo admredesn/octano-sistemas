@@ -370,10 +370,10 @@ async function _reverterImportacaoNfe(id) {
     .select('quantidade, produto_id, cod_anp').eq('nfe_id', id);
   for (const it of (itens || [])) {
     if (it.produto_id && !it.cod_anp) { // nao-combustivel vinculado
-      const { data: prod } = await sb.from('oct_produtos').select('estoque_atual').eq('id', it.produto_id).single();
+      const { data: prod } = await sb.from('oct_produtos').select('estoque').eq('id', it.produto_id).single();
       if (prod) {
-        const novo = Math.max(0, Number(prod.estoque_atual || 0) - Number(it.quantidade || 0));
-        await sb.from('oct_produtos').update({ estoque_atual: novo }).eq('id', it.produto_id);
+        const novo = Math.max(0, Number(prod.estoque || 0) - Number(it.quantidade || 0));
+        await sb.from('oct_produtos').update({ estoque: novo }).eq('id', it.produto_id);
       }
     }
   }
@@ -737,7 +737,7 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   nfeXmlDados.fornecedorExistente=fornExist||null;
 
   // Para cada item, tenta identificar produto ja cadastrado: primeiro por codigo, depois por nome
-  const{data:prodsEmpresa}=await sb.from('oct_produtos').select('id,nome,codigo,unidade,estoque_atual').eq('empresa_id',_empresaId).eq('ativo',true);
+  const{data:prodsEmpresa}=await sb.from('oct_produtos').select('id,nome,codigo,unidade,estoque').eq('empresa_id',_empresaId).eq('ativo',true);
   const lista=prodsEmpresa||[];
   const norm=s=>(s||'').toString().trim().toLowerCase();
   for(const it of d.itens){
@@ -748,7 +748,7 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
     if(!achado&&it.descricao){
       achado=lista.find(p=>norm(p.nome)===norm(it.descricao))||null;
     }
-    it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque_atual:achado.estoque_atual}:null;
+    it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque:achado.estoque}:null;
   }
   renderPreviewNfe();
 }
@@ -977,7 +977,7 @@ async function confirmarNfe(){
         ncm:it.ncm||null,cfop:it.cfop||null,
         preco_custo:custoFinal,
         tanque_id:it.tanqueId||null,
-        estoque_atual:0,
+        estoque:0,
       }).select().single();
       produtoId=np?.id||null;
     }
@@ -1012,11 +1012,11 @@ async function confirmarNfe(){
         await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:qtdTanque,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
       }
     }else if(produtoId){
-      // DEMAIS PRODUTOS: soma a quantidade no estoque_atual do proprio produto
-      const{data:prod}=await sb.from('oct_produtos').select('estoque_atual').eq('id',produtoId).single();
+      // DEMAIS PRODUTOS: soma a quantidade no estoque do proprio produto
+      const{data:prod}=await sb.from('oct_produtos').select('estoque').eq('id',produtoId).single();
       if(prod){
-        const novo=Number(prod.estoque_atual||0)+Number(qtdFinal||0);
-        await sb.from('oct_produtos').update({estoque_atual:novo}).eq('id',produtoId);
+        const novo=Number(prod.estoque||0)+Number(qtdFinal||0);
+        await sb.from('oct_produtos').update({estoque:novo}).eq('id',produtoId);
       }
     }
   }
