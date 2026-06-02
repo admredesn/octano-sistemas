@@ -79,7 +79,7 @@ async function moduloNfe() {
         <button class="nfe-tb-btn" onclick="nfeGridIrPagina(-1)"><div class="nfe-tb-ico">⏭</div><div>End</div></button>
         <button class="nfe-tb-btn" onclick="renderNfeGrid()"><div class="nfe-tb-ico">≣</div><div>F6 · Listar</div></button>
         <div class="nfe-tb-sep"></div>
-        ${temCert ? `<button class="nfe-tb-btn" onclick="abrirManifestar()"><div class="nfe-tb-ico">📡</div><div>Manifestar</div></button>` : ''}
+        ${temCert ? `<button class="nfe-tb-btn" onclick="navegarPara('manifestacao')"><div class="nfe-tb-ico">📡</div><div>Manifestar</div></button>` : ''}
         <div class="nfe-tb-paginfo" id="nfe-grid-paginfo">0 de 0</div>
       </div>
 
@@ -106,13 +106,21 @@ async function moduloNfe() {
               <label>Último NSU</label>
               <input id="manifest-nsu" type="text" value="${ultimoNsu}" />
             </div>
+            ${senhaAtual ? `
+            <input id="manifest-senha" type="hidden" value="${senhaAtual}" />
             <div class="form-group span2">
-              <label>Senha do certificado ${senhaAtual ? '— <span style="color:#4caf50;font-size:0.82rem">salva na sessão</span>' : '*'}</label>
-              <div style="display:flex;gap:8px;align-items:center">
-                <input id="manifest-senha" type="password" value="${senhaAtual || ''}" placeholder="${senhaAtual ? '(salva — clique em Buscar)' : 'Senha do certificado digital'}" style="flex:1" />
-                ${senhaAtual ? `<button onclick="limparSenhaSessao()" style="padding:6px 10px;border-radius:5px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem">Trocar</button>` : ''}
+              <label>Certificado</label>
+              <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;background:#0f1a0f;border:1px solid #2a5a2a;border-radius:6px">
+                <span style="color:#4caf50;font-size:0.85rem">🔒 Senha do certificado salva</span>
+                <button onclick="limparSenhaSessao()" style="margin-left:auto;padding:5px 12px;border-radius:5px;border:1px solid #555;background:transparent;color:#888;cursor:pointer;font-size:0.78rem">Trocar senha</button>
               </div>
             </div>
+            ` : `
+            <div class="form-group span2">
+              <label>Senha do certificado *</label>
+              <input id="manifest-senha" type="password" value="" placeholder="Senha do certificado digital" />
+            </div>
+            `}
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button onclick="executarManifestar()" class="btn-salvar">Buscar NF-es na SEFAZ</button>
@@ -176,7 +184,7 @@ async function moduloNfe() {
         <span>${_empresa?.nome || ''}</span>
       </div>
 
-      <div id="nfe-manifestadas-painel" style="display:none;padding:16px;border-top:1px solid #2a2d3e">
+      <div id="nfe-manifestadas-painel" style="display:${nfesReaisManifest.length > 0 ? 'block' : 'none'};padding:16px;border-top:1px solid #2a2d3e">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <h3 style="color:#60a5fa;font-size:0.9rem">📥 Manifestadas pendentes</h3>
           <button onclick="document.getElementById('nfe-manifestadas-painel').style.display='none'" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.1rem">✕</button>
@@ -646,7 +654,12 @@ async function confirmarNfeImportada(id){
 
 // ─── MANIFESTAÇÃO ───────────────────────────────────────────
 
-function abrirManifestar(){const p=document.getElementById('nfe-manifestar-painel');p.style.display=p.style.display==='none'?'block':'none';if(p.style.display==='block')p.scrollIntoView({behavior:'smooth'});}
+function _fecharPaineisNfe(exceto){
+  ['nfe-manifestar-painel','nfe-importar','nfe-preview','nfe-detalhe'].forEach(id=>{
+    if(id!==exceto){const el=document.getElementById(id);if(el)el.style.display='none';}
+  });
+}
+function abrirManifestar(){const p=document.getElementById('nfe-manifestar-painel');const abrir=p.style.display==='none';_fecharPaineisNfe('nfe-manifestar-painel');p.style.display=abrir?'block':'none';if(abrir)p.scrollIntoView({behavior:'smooth'});}
 function fecharManifestar(){document.getElementById('nfe-manifestar-painel').style.display='none';}
 function limparSenhaSessao(){setCertSenha(null);moduloNfe().then(()=>abrirManifestar());}
 
@@ -714,7 +727,7 @@ async function cienciaManifestado(chave){
 
 async function ignorarManifestado(id){if(!confirm('Ignorar esta NF-e?'))return;await sb.from('oct_nfe_manifestadas').update({status:'ignorada'}).eq('id',id);document.getElementById(`card-manifestada-${id}`)?.remove();}
 
-function abrirImportarNfe(){const a=document.getElementById('nfe-importar');a.style.display=a.style.display==='none'?'block':'none';if(a.style.display==='block')a.scrollIntoView({behavior:'smooth'});}
+function abrirImportarNfe(){const a=document.getElementById('nfe-importar');const abrir=a.style.display==='none';_fecharPaineisNfe('nfe-importar');a.style.display=abrir?'block':'none';if(abrir)a.scrollIntoView({behavior:'smooth'});}
 function lerXmlNfe(input){if(!input.files.length)return;lerXmlNfeFile(input.files[0]);}
 function lerXmlNfeFile(file){const r=new FileReader();r.onload=async(e)=>{try{const parser=new DOMParser();const xml=parser.parseFromString(e.target.result,'text/xml');const{data:tanques}=await sb.from('oct_tanques').select('*').eq('empresa_id',_empresaId).order('numero');nfeTanques=tanques||[];await processarXmlNfe(xml,file.name,null);}catch(err){alert('Erro: '+err.message);}};r.readAsText(file,'UTF-8');}
 
