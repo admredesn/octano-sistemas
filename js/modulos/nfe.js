@@ -955,7 +955,7 @@ async function confirmarNfe(){
   if(nfeErr){msg.textContent='Erro: '+nfeErr.message;msg.style.color='#f44';return;}
 
   // Lança contas a pagar automaticamente (uma única vez)
-  await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups);
+  await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups, d.dhEmi, d.vNF);
 
   for(let i=0;i<d.itens.length;i++){
     const it=d.itens[i];
