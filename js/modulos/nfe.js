@@ -737,6 +737,21 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   nfeXmlDados={...d,nomeArquivo,manifestadaId,xmlString};
   const{data:fornExist}=await sb.from('oct_pessoas').select('id,nome').eq('empresa_id',_empresaId).eq('documento',d.emitCnpj).single();
   nfeXmlDados.fornecedorExistente=fornExist||null;
+
+  // Para cada item, tenta identificar produto ja cadastrado: primeiro por codigo, depois por nome
+  const{data:prodsEmpresa}=await sb.from('oct_produtos').select('id,nome,codigo,unidade,estoque_atual').eq('empresa_id',_empresaId).eq('ativo',true);
+  const lista=prodsEmpresa||[];
+  const norm=s=>(s||'').toString().trim().toLowerCase();
+  for(const it of d.itens){
+    let achado=null;
+    if(it.codigo){
+      achado=lista.find(p=>p.codigo&&norm(p.codigo)===norm(it.codigo))||null;
+    }
+    if(!achado&&it.descricao){
+      achado=lista.find(p=>norm(p.nome)===norm(it.descricao))||null;
+    }
+    it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque_atual:achado.estoque_atual}:null;
+  }
   renderPreviewNfe();
 }
 
@@ -858,11 +873,15 @@ function renderPreviewNfe(){
                     : `<span style="color:#555;font-size:0.75rem">—</span>`}
                 </td>
                 <td>
-                  <input id="prod-nome-${i}" type="text" value="${it.descricao}" style="width:130px;padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem" />
+                  ${it.produtoExistente
+                    ? `<div style="font-size:0.72rem;color:#4caf50;margin-bottom:3px">✓ Já cadastrado:<br><strong>${it.produtoExistente.nome}</strong></div>`
+                    : `<input id="prod-nome-${i}" type="text" value="${it.descricao}" style="width:130px;padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem" />`}
                 </td>
                 <td>
+                  <input type="hidden" id="prod-existente-${i}" value="${it.produtoExistente?it.produtoExistente.id:''}" />
                   <select id="prod-acao-${i}" style="padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.75rem">
-                    <option value="novo">Cadastrar novo</option>
+                    ${it.produtoExistente?`<option value="vincular" selected>Vincular ao existente</option>`:''}
+                    <option value="novo" ${it.produtoExistente?'':'selected'}>Cadastrar novo</option>
                     <option value="ignorar">Não vincular</option>
                   </select>
                 </td>
@@ -942,12 +961,17 @@ async function confirmarNfe(){
     const it=d.itens[i];
     const acao=document.getElementById(`prod-acao-${i}`)?.value||'ignorar';
     const nomeProd=document.getElementById(`prod-nome-${i}`)?.value||it.descricao;
+    const idExistente=document.getElementById(`prod-existente-${i}`)?.value||'';
     const qtdFinal   = it.quantidadeImport   || it.quantidade;
     const unFinal    = it.unidadeImport      || it.unidade;
     const custoFinal = it.custoUnitario      || it.valorUnitario;
 
     let produtoId=null;
-    if(acao==='novo'){
+    if(acao==='vincular'&&idExistente){
+      // vincula ao produto ja cadastrado e atualiza custo
+      produtoId=idExistente;
+      await sb.from('oct_produtos').update({preco_custo:custoFinal}).eq('id',produtoId);
+    }else if(acao==='novo'){
       const{data:np}=await sb.from('oct_produtos').insert({
         empresa_id:_empresaId,nome:nomeProd,codigo:it.codigo||null,
         unidade:unFinal,
@@ -955,6 +979,7 @@ async function confirmarNfe(){
         ncm:it.ncm||null,cfop:it.cfop||null,
         preco_custo:custoFinal,
         tanque_id:it.tanqueId||null,
+        estoque_atual:0,
       }).select().single();
       produtoId=np?.id||null;
     }
@@ -980,12 +1005,20 @@ async function confirmarNfe(){
     }
 
     if(it.precisaTanque&&it.tanqueId){
+      // COMBUSTIVEL: movimenta o estoque do TANQUE + LMC
       const{data:tanque}=await sb.from('oct_tanques').select('estoque_atual,capacidade').eq('id',it.tanqueId).single();
       if(tanque){
-        const qtdTanque = it.quantidade;
+        const qtdTanque = qtdFinal;
         const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(qtdTanque),Number(tanque.capacidade));
         await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);
         await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:qtdTanque,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
+      }
+    }else if(produtoId){
+      // DEMAIS PRODUTOS: soma a quantidade no estoque_atual do proprio produto
+      const{data:prod}=await sb.from('oct_produtos').select('estoque_atual').eq('id',produtoId).single();
+      if(prod){
+        const novo=Number(prod.estoque_atual||0)+Number(qtdFinal||0);
+        await sb.from('oct_produtos').update({estoque_atual:novo}).eq('id',produtoId);
       }
     }
   }
