@@ -50,6 +50,7 @@ async function moduloProdutos() {
       { titulo: 'Tanque', largura: '150px', valor: (p)=> p.oct_tanques ? ('T'+p.oct_tanques.numero+' '+p.oct_tanques.combustivel) : '', render: (v)=> v ? `<span style="color:#4caf50">⛽ ${v}</span>` : '—' },
     ],
     aoClicarLinha: (p) => abrirDetalheProduto(p.id),
+    botaoExcluir: (p) => excluirProduto(p.id),
   });
 }
 
