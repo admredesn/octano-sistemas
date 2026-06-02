@@ -343,47 +343,19 @@ function renderNfeGrid(){
 
 // ─── EXCLUIR ────────────────────────────────────────────────
 
-async function excluirNfe(id) {
-  const reverter = confirm(
-    'Excluir esta NF-e do sistema?\n\n' +
-    'Clique OK para excluir E reverter o estoque dos tanques.\n' +
-    'Clique Cancelar para abortar.'
-  );
-  if (!reverter) return;
-
-  const det = document.getElementById('nfe-detalhe');
-  if (det) det.style.display = 'none';
-
-  const { data: itens } = await sb
-    .from('oct_nfe_entrada_itens')
-    .select('quantidade, cod_anp, nfe_id')
-    .eq('nfe_id', id);
-
-  const { data: lmcItens } = await sb
-    .from('oct_lmc')
-    .select('id, tanque_id, entrada, saldo_anterior')
-    .eq('empresa_id', _empresaId)
-    .like('observacoes', '%NF-e%')
-    .order('criado_em', { ascending: false });
-
-  const { data: nfe } = await sb
-    .from('oct_nfe_entrada')
-    .select('numero, serie')
-    .eq('id', id).single();
-
+async function _reverterImportacaoNfe(id) {
+  // reverte estoque (tanques e produtos), apaga itens, contas a pagar e vinculos; por fim apaga a NF-e
+  const { data: nfe } = await sb.from('oct_nfe_entrada').select('numero, serie').eq('id', id).single();
   const numSerie = nfe ? nfe.numero + '/' + nfe.serie : '';
 
-  if (lmcItens && numSerie) {
-    const { data: lmcNota } = await sb
-      .from('oct_lmc')
-      .select('id, tanque_id, entrada')
-      .eq('empresa_id', _empresaId)
+  // 1) reverte estoque dos TANQUES via registros do LMC desta nota
+  if (numSerie) {
+    const { data: lmcNota } = await sb.from('oct_lmc')
+      .select('id, tanque_id, entrada').eq('empresa_id', _empresaId)
       .ilike('observacoes', '%' + numSerie + '%');
-
     if (lmcNota && lmcNota.length > 0) {
       for (const lmc of lmcNota) {
-        const { data: tanque } = await sb
-          .from('oct_tanques').select('estoque_atual').eq('id', lmc.tanque_id).single();
+        const { data: tanque } = await sb.from('oct_tanques').select('estoque_atual').eq('id', lmc.tanque_id).single();
         if (tanque) {
           const novoEstoque = Math.max(0, Number(tanque.estoque_atual) - Number(lmc.entrada));
           await sb.from('oct_tanques').update({ estoque_atual: novoEstoque }).eq('id', lmc.tanque_id);
@@ -393,11 +365,37 @@ async function excluirNfe(id) {
     }
   }
 
+  // 2) reverte estoque dos PRODUTOS nao-combustivel (itens com produto vinculado e sem tanque)
+  const { data: itens } = await sb.from('oct_nfe_entrada_itens')
+    .select('quantidade, produto_id, cod_anp').eq('nfe_id', id);
+  for (const it of (itens || [])) {
+    if (it.produto_id && !it.cod_anp) { // nao-combustivel vinculado
+      const { data: prod } = await sb.from('oct_produtos').select('estoque_atual').eq('id', it.produto_id).single();
+      if (prod) {
+        const novo = Math.max(0, Number(prod.estoque_atual || 0) - Number(it.quantidade || 0));
+        await sb.from('oct_produtos').update({ estoque_atual: novo }).eq('id', it.produto_id);
+      }
+    }
+  }
+
+  // 3) apaga vinculos, itens, contas a pagar e a propria NF-e
   await sb.from('oct_produto_nfe').delete().eq('nfe_id', id);
   await sb.from('oct_nfe_entrada_itens').delete().eq('nfe_id', id);
   await sb.from('oct_contas_pagar').delete().eq('nfe_id', id);
   const { error } = await sb.from('oct_nfe_entrada').delete().eq('id', id);
+  return error;
+}
 
+async function excluirNfe(id) {
+  const reverter = confirm(
+    'Excluir esta NF-e do sistema?\n\n' +
+    'Clique OK para excluir E reverter o estoque (tanques e produtos).\n' +
+    'Clique Cancelar para abortar.'
+  );
+  if (!reverter) return;
+  const det = document.getElementById('nfe-detalhe');
+  if (det) det.style.display = 'none';
+  const error = await _reverterImportacaoNfe(id);
   if (error) { alert('Erro ao excluir: ' + error.message); return; }
   moduloNfe();
 }
