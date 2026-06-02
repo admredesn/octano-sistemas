@@ -242,7 +242,7 @@ function manifRender() {
               <td style="font-family:monospace;font-size:0.7rem;color:#60a5fa;cursor:pointer" title="Clique para copiar a chave completa: ${n.chave_nfe||''}" onclick="manifCopiarChave('${n.chave_nfe||''}')">${n.chave_nfe?n.chave_nfe.substring(0,20)+'… 📋':'—'}</td>
               ${isManifestadas ? `<td>
                 ${n.status==='importada'
-                  ? `<span style="color:#4caf50;font-size:0.75rem;margin-right:6px">✓ Importada</span><button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button><button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>`
+                  ? `<span style="color:#4caf50;font-size:0.75rem;margin-right:6px">✓ Importada</span><button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button><button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button><button class="manif-btn-linha" style="border-color:#5a2a2a;color:#f44" onclick="manifExcluirImportacao('${n.id}','${n.chave_nfe||''}')">🗑 Excluir importação</button>`
                   : `${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
                 <button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button>
                 <button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>
@@ -447,6 +447,47 @@ function manifImprimir(id) {
   if (!n?.xml) { manifMsg('Baixe o XML antes de imprimir.', 'info'); return; }
   // impressao do DANFE em PDF sera implementada futuramente
   manifMsg('Impressão de DANFE em PDF: em desenvolvimento.', 'info');
+}
+
+async function manifExcluirImportacao(id, chave) {
+  const n = _manifDados.find(x => x.id === id);
+  const ok = confirm(
+    'Excluir a IMPORTAÇÃO desta nota?\n\n' +
+    'Isso vai:\n' +
+    '• Remover a NF-e da tela "Nota Fiscal Entrada"\n' +
+    '• Reverter o estoque (tanques e produtos)\n' +
+    '• Apagar a conta a pagar lançada\n\n' +
+    'A nota volta para "Manifestadas" e poderá ser importada de novo.\n' +
+    'A Ciência na SEFAZ NÃO é afetada.'
+  );
+  if (!ok) return;
+
+  // sincroniza _empresaId usado pela funcao de reversao do nfe.js
+  if (typeof _empresaId !== 'undefined') { _empresaId = _manifEmpresaId; }
+
+  // localiza a NF-e importada por chave (ou por numero/serie como fallback)
+  let nfeId = null;
+  if (chave) {
+    const { data } = await sb.from('oct_nfe_entrada').select('id').eq('empresa_id', _manifEmpresaId).eq('chave_nfe', chave).limit(1).single();
+    nfeId = data?.id || null;
+  }
+  if (!nfeId && n?.numero) {
+    const { data } = await sb.from('oct_nfe_entrada').select('id').eq('empresa_id', _manifEmpresaId).eq('numero', String(n.numero)).limit(1).single();
+    nfeId = data?.id || null;
+  }
+
+  if (nfeId && typeof _reverterImportacaoNfe === 'function') {
+    const err = await _reverterImportacaoNfe(nfeId);
+    if (err) { manifMsg('Erro ao reverter: ' + err.message, 'erro'); return; }
+  } else {
+    manifMsg('NF-e importada não localizada — apenas mudando o status.', 'info');
+  }
+
+  // volta a manifestada para 'ciencia' (Manifestadas, nao-importada)
+  await sb.from('oct_nfe_manifestadas').update({ status: 'ciencia' }).eq('id', id);
+  await manifRegistrarLog(`Excluiu importação da nota ${n?.numero || n?.nsu || id} (revertida e voltou para Manifestadas)`);
+  manifMsg('✓ Importação excluída. Nota voltou para "Manifestadas".', 'ok');
+  manifCarregarAba();
 }
 
 async function manifDesfazer(id) {
