@@ -16,7 +16,6 @@ const MOD_FRETE = {'0':'Por conta emit.','1':'Por conta dest.','2':'Por conta te
 
 async function moduloNfe() {
   const conteudo = document.getElementById('conteudo');
-  conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
 
   const session = await getSession();
   const { data: perfil } = await sb
