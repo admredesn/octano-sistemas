@@ -101,6 +101,7 @@ function navegarPara(modulo){
     empresa:       moduloEmpresa,
     fcaixa:        moduloFCaixa,
     nfe:           moduloNfe,
+    nfe_saida:     moduloNfeSaida,
     manifestacao:  moduloManifestacao,
     tanques:       moduloTanques,
     pessoas:       moduloPessoas,
