@@ -10,6 +10,9 @@ let _saidaItens = [];          // itens da nota em edição
 let _saidaProdutos = [];       // cache de produtos da empresa
 let _saidaPessoas = [];        // cache de pessoas (destinatários)
 let _saidaEditId = null;       // id da nota sendo editada (null = nova)
+let _saidaAbaForm = 'capa';    // aba interna ativa: capa|itens|transporte|cupom
+let _saidaCupons = [];         // cupons vinculados na nota em edição
+let _saidaNotaAtual = null;    // dados da nota em edição (cabeçalho)
 
 async function moduloNfeSaida() {
   const conteudo = document.getElementById('conteudo');
@@ -164,6 +167,10 @@ function nfeSaidaStyles() {
     .ns-aba.ativo{background:#13151f;color:#60a5fa;border-left-color:#60a5fa;font-weight:600}
     .ns-aba-ico{font-size:1.1rem}
     .ns-painel{flex:1;min-width:0;padding:16px;overflow:auto}
+    .ns-subabas{display:flex;gap:4px;border-bottom:1px solid #2a2d3e}
+    .ns-subaba{display:flex;align-items:center;gap:6px;padding:9px 16px;cursor:pointer;color:#aaa;font-size:0.82rem;border-bottom:2px solid transparent;margin-bottom:-1px}
+    .ns-subaba:hover{color:#e0e0e0}
+    .ns-subaba.ativo{color:#60a5fa;border-bottom-color:#60a5fa;font-weight:600}
     .ns-btn-novo{background:#1a3a1a;border:1px solid #2a5a2a;color:#4caf50;padding:9px 16px;border-radius:7px;cursor:pointer;font-size:0.86rem;font-weight:600}
     .ns-btn-novo:hover{background:#224a22}
     .ns-tabela{width:100%;border-collapse:collapse;font-size:0.84rem}
@@ -189,11 +196,15 @@ function nfeSaidaStyles() {
 function nfeSaidaNova() {
   _saidaEditId = null;
   _saidaItens = [];
+  _saidaCupons = [];
+  _saidaNotaAtual = null;
+  _saidaAbaForm = 'capa';
   nfeSaidaRenderForm(null);
 }
 
 async function nfeSaidaEditar(id) {
   _saidaEditId = id;
+  _saidaAbaForm = 'capa';
   const { data: nota } = await sb.from('oct_nfe_saida').select('*').eq('id', id).single();
   const { data: itens } = await sb.from('oct_nfe_saida_itens').select('*').eq('nfe_saida_id', id).order('numero_item');
   _saidaItens = (itens || []).map(it => ({
@@ -203,6 +214,10 @@ async function nfeSaidaEditar(id) {
     valor_total: Number(it.valor_total), cfop_edit: it.cfop,
     cst_icms: it.cst_icms, cod_anp: it.cod_anp, desc_anp: it.desc_anp,
   }));
+  let cupons = [];
+  try { const r = await sb.from('oct_nfe_saida_cupons').select('*').eq('nfe_saida_id', id); cupons = r.data || []; } catch(e){}
+  _saidaCupons = cupons;
+  _saidaNotaAtual = nota;
   nfeSaidaRenderForm(nota);
 }
 
@@ -210,37 +225,147 @@ function nfeSaidaRenderForm(nota) {
   const area = document.getElementById('ns-conteudo');
   if (!area) return;
   const somenteLeitura = nota && nota.status !== 'rascunho';
-  const dest = nota?.destinatario_id || '';
+  _saidaNotaAtual = nota;
+
+  const titulo = nota ? (somenteLeitura ? '👁 NF-e Saída ' + (nota.numero || '') : '✏️ Editar rascunho') : '＋ Nova NF-e de Saída';
+  const abas = [
+    { id: 'capa',       ico: '📄', label: 'Capa' },
+    { id: 'itens',      ico: '📦', label: 'Itens' },
+    { id: 'transporte', ico: '🚚', label: 'Transporte' },
+    { id: 'cupom',      ico: '🧾', label: 'Cupom Fiscal' },
+  ];
 
   area.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <h2 style="color:#e0e0e0;font-size:1rem;margin:0">${nota ? (somenteLeitura?'👁 NF-e Saída '+(nota.numero||''):'✏️ Editar rascunho') : '＋ Nova NF-e de Saída'}</h2>
-      <button class="ns-btn-linha" onclick="nfeSaidaCarregarLista()">← Voltar à lista</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="color:#e0e0e0;font-size:1rem;margin:0">${titulo}</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${somenteLeitura ? '' : `<button class="ns-btn-novo" onclick="nfeSaidaSalvar()">💾 Salvar rascunho</button>`}
+        <span id="ns-msg" style="font-size:0.85rem"></span>
+        <button class="ns-btn-linha" onclick="nfeSaidaCarregarLista()">← Voltar à lista</button>
+      </div>
     </div>
 
+    <div class="ns-subabas">
+      ${abas.map(a => `<div class="ns-subaba ${a.id===_saidaAbaForm?'ativo':''}" onclick="nfeSaidaTrocarAba('${a.id}')"><span>${a.ico}</span><span>${a.label}</span></div>`).join('')}
+    </div>
+
+    <div id="ns-aba-conteudo" style="padding-top:14px"></div>
+  `;
+  nfeSaidaRenderAba(somenteLeitura);
+}
+
+function nfeSaidaTrocarAba(aba) {
+  nfeSaidaCapturarCampos();
+  _saidaAbaForm = aba;
+  const somenteLeitura = _saidaNotaAtual && _saidaNotaAtual.status !== 'rascunho';
+  nfeSaidaRenderForm(_saidaNotaAtual);
+}
+
+// Lê os inputs da aba visível e guarda no estado, para não perder ao trocar de aba
+function nfeSaidaCapturarCampos() {
+  const n = _saidaNotaAtual || {};
+  const g = id => document.getElementById(id);
+  if (g('ns-dest'))   n.destinatario_id = g('ns-dest').value;
+  if (g('ns-serie'))  n.serie = parseInt(g('ns-serie').value) || 1;
+  if (g('ns-natop'))  n.natureza_op = g('ns-natop').value;
+  if (g('ns-emissao'))n.data_emissao = g('ns-emissao').value || null;
+  if (g('ns-saida'))  n.data_saida = g('ns-saida').value || null;
+  if (g('ns-cfop'))   n.cfop_padrao = g('ns-cfop').value;
+  if (g('ns-inf'))    n.inf_complementar = g('ns-inf').value;
+  // transporte
+  const frete = document.querySelector('input[name="ns-frete"]:checked');
+  if (frete) n.mod_frete = frete.value;
+  if (g('ns-transp-nome')) n.transp_nome = g('ns-transp-nome').value;
+  if (g('ns-transp-placa'))n.transp_placa = g('ns-transp-placa').value;
+  if (g('ns-transp-doc'))  n.transp_documento = g('ns-transp-doc').value;
+  if (g('ns-emb-unid')) n.emb_unidade = g('ns-emb-unid').value;
+  if (g('ns-emb-qtd'))  n.emb_quantidade = parseFloat(g('ns-emb-qtd').value) || 0;
+  if (g('ns-emb-pb'))   n.emb_peso_bruto = parseFloat(g('ns-emb-pb').value) || 0;
+  if (g('ns-emb-pl'))   n.emb_peso_liquido = parseFloat(g('ns-emb-pl').value) || 0;
+  _saidaNotaAtual = n;
+}
+
+function nfeSaidaRenderAba(somenteLeitura) {
+  const c = document.getElementById('ns-aba-conteudo');
+  if (!c) return;
+  if (_saidaAbaForm === 'capa')        c.innerHTML = nfeSaidaAbaCapa(_saidaNotaAtual, somenteLeitura);
+  else if (_saidaAbaForm === 'itens')  { c.innerHTML = nfeSaidaAbaItens(somenteLeitura); nfeSaidaRenderItens(somenteLeitura); }
+  else if (_saidaAbaForm === 'transporte') c.innerHTML = nfeSaidaAbaTransporte(_saidaNotaAtual, somenteLeitura);
+  else if (_saidaAbaForm === 'cupom')  c.innerHTML = nfeSaidaAbaCupom(somenteLeitura);
+}
+
+// ---------- ABA CAPA ----------
+function nfeSaidaAbaCapa(nota, somenteLeitura) {
+  const dest = nota?.destinatario_id || '';
+  return `
     <div class="ns-form-sec">
-      <h3>👤 Destinatário</h3>
+      <h3>👤 Destinatário e identificação</h3>
       <div class="ns-grid">
         <div class="ns-fg span2">
           <label>Cliente / Destinatário *</label>
-          <select id="ns-dest" ${somenteLeitura?'disabled':''} onchange="nfeSaidaPreencherDest()">
+          <select id="ns-dest" ${somenteLeitura?'disabled':''}>
             <option value="">— Selecione —</option>
             ${_saidaPessoas.map(p=>`<option value="${p.id}" ${p.id===dest?'selected':''}>${p.nome}${p.documento?' ('+p.documento+')':''}</option>`).join('')}
           </select>
         </div>
         <div class="ns-fg">
+          <label>Série</label>
+          <input id="ns-serie" type="number" value="${nota?.serie||1}" ${somenteLeitura?'disabled':''} />
+        </div>
+        <div class="ns-fg">
+          <label>Nº Nota</label>
+          <input id="ns-numero" value="${nota?.numero||''}" disabled placeholder="(gerado na emissão)" />
+        </div>
+        <div class="ns-fg span2">
           <label>Natureza da operação</label>
           <input id="ns-natop" value="${nota?.natureza_op||'VENDA DE MERCADORIA'}" ${somenteLeitura?'disabled':''} />
         </div>
         <div class="ns-fg">
-          <label>Série</label>
-          <input id="ns-serie" type="number" value="${nota?.serie||1}" ${somenteLeitura?'disabled':''} />
+          <label>Emissão</label>
+          <input id="ns-emissao" type="date" value="${nota?.data_emissao?String(nota.data_emissao).substring(0,10):''}" ${somenteLeitura?'disabled':''} />
+        </div>
+        <div class="ns-fg">
+          <label>Saída</label>
+          <input id="ns-saida" type="date" value="${nota?.data_saida?String(nota.data_saida).substring(0,10):''}" ${somenteLeitura?'disabled':''} />
+        </div>
+        <div class="ns-fg span2">
+          <label>CFOP padrão da nota</label>
+          <input id="ns-cfop" value="${nota?.cfop_padrao||'5102'}" ${somenteLeitura?'disabled':''} placeholder="ex 5102, 5656" />
+        </div>
+        <div class="ns-fg span2">
+          <label>Chave NF-e (após autorização)</label>
+          <input value="${nota?.chave_nfe||''}" disabled placeholder="—" />
+        </div>
+        <div class="ns-fg span2" style="grid-column:span 4">
+          <label>Mensagem / Inf. complementar</label>
+          <input id="ns-inf" value="${(nota?.inf_complementar||'').replace(/"/g,'&quot;')}" ${somenteLeitura?'disabled':''} />
         </div>
       </div>
     </div>
-
     <div class="ns-form-sec">
-      <h3>📦 Itens</h3>
+      <h3>💰 Totais</h3>
+      <div id="ns-totais" style="font-size:0.9rem"></div>
+    </div>
+    ${nfeSaidaRodapeStatus(nota, somenteLeitura)}
+  `;
+}
+
+function nfeSaidaRodapeStatus(nota, somenteLeitura) {
+  if (somenteLeitura) {
+    return `<div style="background:#1a1500;border:1px solid #5a4a00;border-radius:8px;padding:12px;color:#fbbf24;font-size:0.84rem">
+        Esta nota está com status <strong>${nota.status}</strong>${nota.protocolo?' (protocolo '+nota.protocolo+')':''}. ${nota.motivo_rejeicao?'<br>Motivo: '+nota.motivo_rejeicao:''}
+      </div>`;
+  }
+  return `<div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:8px;padding:10px;font-size:0.78rem;color:#7cc4ff">
+      ℹ️ A nota é salva como <strong>rascunho</strong>. A transmissão à SEFAZ (assinatura + envio) será adicionada na próxima etapa, no servidor.
+    </div>`;
+}
+
+// ---------- ABA ITENS ----------
+function nfeSaidaAbaItens(somenteLeitura) {
+  return `
+    <div class="ns-form-sec">
+      <h3>📦 Itens da nota</h3>
       ${somenteLeitura?'':`
       <div class="ns-grid" style="margin-bottom:12px;align-items:end">
         <div class="ns-fg span2">
@@ -250,45 +375,101 @@ function nfeSaidaRenderForm(nota) {
             ${_saidaProdutos.map(p=>`<option value="${p.id}">${p.nome}${p.codigo?' ['+p.codigo+']':''}</option>`).join('')}
           </select>
         </div>
-        <div class="ns-fg">
-          <label>Quantidade</label>
-          <input id="ns-item-qtd" type="number" step="0.001" value="1" />
-        </div>
-        <div class="ns-fg">
-          <label>Vlr unitário</label>
-          <input id="ns-item-vlr" type="number" step="0.0001" value="0" />
-        </div>
+        <div class="ns-fg"><label>Quantidade</label><input id="ns-item-qtd" type="number" step="0.001" value="1" /></div>
+        <div class="ns-fg"><label>Vlr unitário</label><input id="ns-item-vlr" type="number" step="0.0001" value="0" /></div>
       </div>
       <button class="ns-btn-linha" style="border-color:#2a5a2a;color:#4caf50" onclick="nfeSaidaAddItem()">＋ Adicionar item</button>
       `}
       <div id="ns-itens-lista" style="margin-top:12px"></div>
     </div>
-
-    <div class="ns-form-sec">
-      <h3>💰 Totais</h3>
-      <div id="ns-totais" style="font-size:0.9rem"></div>
-    </div>
-
-    ${somenteLeitura ? `
-      <div style="background:#1a1500;border:1px solid #5a4a00;border-radius:8px;padding:12px;color:#fbbf24;font-size:0.84rem">
-        Esta nota está com status <strong>${nota.status}</strong>${nota.protocolo?' (protocolo '+nota.protocolo+')':''}. ${nota.motivo_rejeicao?'<br>Motivo: '+nota.motivo_rejeicao:''}
-      </div>
-    ` : `
-      <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
-        <button class="ns-btn-novo" onclick="nfeSaidaSalvar()">💾 Salvar rascunho</button>
-        <span id="ns-msg" style="font-size:0.85rem"></span>
-      </div>
-      <div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:8px;padding:10px;margin-top:12px;font-size:0.78rem;color:#7cc4ff">
-        ℹ️ Por enquanto a nota é salva como <strong>rascunho</strong>. A transmissão à SEFAZ (assinatura + envio) será adicionada na próxima etapa, no servidor.
-      </div>
-    `}
   `;
-  nfeSaidaRenderItens(somenteLeitura);
 }
 
-function nfeSaidaPreencherDest() {
-  // (placeholder) — poderia mostrar dados do destinatário; o id é lido ao salvar
+// ---------- ABA TRANSPORTE ----------
+function nfeSaidaAbaTransporte(nota, somenteLeitura) {
+  const mf = nota?.mod_frete || '9';
+  const ro = somenteLeitura?'disabled':'';
+  return `
+    <div class="ns-form-sec">
+      <h3>🚚 Transporte</h3>
+      <div class="ns-fg" style="margin-bottom:12px">
+        <label>Tipo de frete</label>
+        <div style="display:flex;gap:18px;padding-top:4px">
+          <label style="font-size:0.84rem;color:#ccc;display:flex;gap:6px;align-items:center"><input type="radio" name="ns-frete" value="0" ${mf==='0'?'checked':''} ${ro} style="width:auto"> Emitente</label>
+          <label style="font-size:0.84rem;color:#ccc;display:flex;gap:6px;align-items:center"><input type="radio" name="ns-frete" value="1" ${mf==='1'?'checked':''} ${ro} style="width:auto"> Destinatário</label>
+          <label style="font-size:0.84rem;color:#ccc;display:flex;gap:6px;align-items:center"><input type="radio" name="ns-frete" value="9" ${mf==='9'?'checked':''} ${ro} style="width:auto"> Sem frete</label>
+        </div>
+      </div>
+      <div class="ns-grid">
+        <div class="ns-fg span2"><label>Transportadora</label><input id="ns-transp-nome" value="${(nota?.transp_nome||'').replace(/"/g,'&quot;')}" ${ro} /></div>
+        <div class="ns-fg"><label>Placa</label><input id="ns-transp-placa" value="${nota?.transp_placa||''}" ${ro} /></div>
+        <div class="ns-fg"><label>Documento transp.</label><input id="ns-transp-doc" value="${nota?.transp_documento||''}" ${ro} /></div>
+      </div>
+    </div>
+    <div class="ns-form-sec">
+      <h3>📦 Embalagens</h3>
+      <div class="ns-grid">
+        <div class="ns-fg span2"><label>Unidade</label><input id="ns-emb-unid" value="${nota?.emb_unidade||''}" ${ro} /></div>
+        <div class="ns-fg"><label>Qtd. embalagens</label><input id="ns-emb-qtd" type="number" step="0.001" value="${nota?.emb_quantidade||0}" ${ro} /></div>
+        <div class="ns-fg"></div>
+        <div class="ns-fg"><label>Peso bruto (KG)</label><input id="ns-emb-pb" type="number" step="0.001" value="${nota?.emb_peso_bruto||0}" ${ro} /></div>
+        <div class="ns-fg"><label>Peso líquido (KG)</label><input id="ns-emb-pl" type="number" step="0.001" value="${nota?.emb_peso_liquido||0}" ${ro} /></div>
+      </div>
+    </div>
+  `;
 }
+
+// ---------- ABA CUPOM FISCAL ----------
+function nfeSaidaAbaCupom(somenteLeitura) {
+  const fmt = v => Number(v||0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const avulsos = _saidaCupons.filter(c => c.tipo === 'avulsa');
+  const deCupom = _saidaCupons.filter(c => c.tipo === 'cupom');
+  return `
+    <div class="ns-form-sec">
+      <h3>🧾 Cupons NF Avulsa</h3>
+      ${somenteLeitura?'':`
+      <div style="display:flex;gap:8px;align-items:end;margin-bottom:10px">
+        <div class="ns-fg"><label>Nº Cupom</label><input id="ns-cupom-num" /></div>
+        <button class="ns-btn-linha" style="border-color:#2a5a2a;color:#4caf50" onclick="nfeSaidaAddCupomAvulso()">＋ Incluir</button>
+      </div>`}
+      <table class="ns-tabela">
+        <thead><tr><th>Nº Cupom</th>${somenteLeitura?'':'<th style="width:40px"></th>'}</tr></thead>
+        <tbody>
+          ${avulsos.length ? avulsos.map((c,i)=>`<tr><td>${c.num_cupom}</td>${somenteLeitura?'':`<td><button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f44;padding:2px 7px" onclick="nfeSaidaRemCupom('avulsa',${i})">✕</button></td>`}</tr>`).join('') : `<tr><td colspan="2" style="color:#888;padding:14px">Nenhum cupom avulso adicionado.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="ns-form-sec">
+      <h3>🧾 Cupons NF de cupom</h3>
+      <table class="ns-tabela">
+        <thead><tr><th>Seq. Cupom</th><th>Nº Cupom</th><th>Data</th><th style="text-align:right">Valor</th><th>Cód. Cliente</th><th>Razão Social</th></tr></thead>
+        <tbody>
+          ${deCupom.length ? deCupom.map(c=>`<tr><td>${c.seq_cupom||'—'}</td><td>${c.num_cupom||'—'}</td><td>${c.data_cupom?new Date(c.data_cupom).toLocaleDateString('pt-BR'):'—'}</td><td style="text-align:right;font-weight:600">${fmt(c.valor)}</td><td>${c.cod_cliente||'—'}</td><td>${c.razao_social||'—'}</td></tr>`).join('') : `<tr><td colspan="6" style="color:#888;padding:14px">Nenhum cupom vinculado.</td></tr>`}
+        </tbody>
+      </table>
+      <div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:8px;padding:10px;margin-top:12px;font-size:0.78rem;color:#7cc4ff">
+        ℹ️ Esta aba agrupa cupons/NFC-e numa NF-e de resumo. A busca automática dos cupons reais será habilitada quando o módulo de PDV/NFC-e existir (Fase 2). Por ora, é possível registrar cupons avulsos por número.
+      </div>
+    </div>
+  `;
+}
+
+function nfeSaidaAddCupomAvulso() {
+  const num = (document.getElementById('ns-cupom-num')?.value || '').trim();
+  if (!num) { nfeSaidaMsg('Informe o número do cupom.', 'erro'); return; }
+  _saidaCupons.push({ tipo: 'avulsa', num_cupom: num });
+  nfeSaidaRenderAba(false);
+}
+
+function nfeSaidaRemCupom(tipo, idx) {
+  const lista = _saidaCupons.filter(c => c.tipo === tipo);
+  const alvo = lista[idx];
+  const pos = _saidaCupons.indexOf(alvo);
+  if (pos >= 0) _saidaCupons.splice(pos, 1);
+  nfeSaidaRenderAba(false);
+}
+
+function nfeSaidaPreencherDest() {}
 
 function nfeSaidaAddItem() {
   const prodId = document.getElementById('ns-item-prod')?.value;
@@ -372,19 +553,29 @@ function nfeSaidaMsg(txt, tipo) {
 }
 
 async function nfeSaidaSalvar() {
-  const destId = document.getElementById('ns-dest')?.value;
-  if (!destId) { nfeSaidaMsg('Selecione o destinatário.', 'erro'); return; }
-  if (!_saidaItens.length) { nfeSaidaMsg('Adicione ao menos um item.', 'erro'); return; }
+  nfeSaidaCapturarCampos();
+  const n = _saidaNotaAtual || {};
+  const destId = n.destinatario_id;
+  if (!destId) { nfeSaidaMsg('Selecione o destinatário (aba Capa).', 'erro'); return; }
+  if (!_saidaItens.length) { nfeSaidaMsg('Adicione ao menos um item (aba Itens).', 'erro'); return; }
   const dest = _saidaPessoas.find(p => p.id === destId);
   const vProd = _saidaItens.reduce((s,it)=>s+Number(it.valor_total||0),0);
 
   const cab = {
     empresa_id: _saidaEmpresaId,
-    serie: parseInt(document.getElementById('ns-serie')?.value) || 1,
+    serie: n.serie || 1,
     modelo: '55',
-    natureza_op: document.getElementById('ns-natop')?.value || 'VENDA',
+    natureza_op: n.natureza_op || 'VENDA',
+    cfop_padrao: n.cfop_padrao || null,
+    data_emissao: n.data_emissao || new Date().toISOString(),
+    data_saida: n.data_saida || null,
+    inf_complementar: n.inf_complementar || null,
     destinatario_id: destId,
     dest_nome: dest?.nome, dest_documento: dest?.documento, dest_ie: dest?.ie, dest_email: dest?.email,
+    mod_frete: n.mod_frete || '9',
+    transp_nome: n.transp_nome || null, transp_placa: n.transp_placa || null, transp_documento: n.transp_documento || null,
+    emb_unidade: n.emb_unidade || null, emb_quantidade: n.emb_quantidade || 0,
+    emb_peso_bruto: n.emb_peso_bruto || 0, emb_peso_liquido: n.emb_peso_liquido || 0,
     valor_produtos: vProd, valor_total: vProd,
     status: 'rascunho',
     atualizado_em: new Date().toISOString(),
@@ -395,10 +586,11 @@ async function nfeSaidaSalvar() {
     const { error } = await sb.from('oct_nfe_saida').update(cab).eq('id', nfeId);
     if (error) { nfeSaidaMsg('Erro: ' + error.message, 'erro'); return; }
     await sb.from('oct_nfe_saida_itens').delete().eq('nfe_saida_id', nfeId);
+    try { await sb.from('oct_nfe_saida_cupons').delete().eq('nfe_saida_id', nfeId); } catch(e){}
   } else {
     const { data, error } = await sb.from('oct_nfe_saida').insert(cab).select().single();
     if (error) { nfeSaidaMsg('Erro: ' + error.message, 'erro'); return; }
-    nfeId = data.id;
+    nfeId = data.id; _saidaEditId = nfeId;
   }
 
   // grava itens
@@ -411,6 +603,17 @@ async function nfeSaidaSalvar() {
   }));
   const { error: errIt } = await sb.from('oct_nfe_saida_itens').insert(itensRows);
   if (errIt) { nfeSaidaMsg('Nota salva, mas erro nos itens: ' + errIt.message, 'erro'); return; }
+
+  // grava cupons vinculados (se houver)
+  if (_saidaCupons.length) {
+    const cupRows = _saidaCupons.map(c => ({
+      nfe_saida_id: nfeId, empresa_id: _saidaEmpresaId, tipo: c.tipo || 'avulsa',
+      seq_cupom: c.seq_cupom || null, num_cupom: c.num_cupom || null,
+      data_cupom: c.data_cupom || null, valor: c.valor || 0,
+      cod_cliente: c.cod_cliente || null, razao_social: c.razao_social || null,
+    }));
+    try { await sb.from('oct_nfe_saida_cupons').insert(cupRows); } catch(e){}
+  }
 
   nfeSaidaMsg('✓ Rascunho salvo!', 'ok');
   setTimeout(() => nfeSaidaCarregarLista(), 800);
