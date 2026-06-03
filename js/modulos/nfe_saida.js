@@ -38,21 +38,29 @@ async function moduloNfeSaida() {
     ${nfeSaidaStyles()}
     <div class="ns-janela">
       <div class="ns-titulo">
-        <span>📤 Nota Fiscal de Saída</span>
+        <span>Movimento nota fiscal</span>
         <button onclick="navegarPara('empresa')" class="ns-fechar" title="Fechar">✕</button>
       </div>
+      <div class="ns-toolbar-top">
+        <button class="ns-tb-btn" onclick="nfeSaidaNova()"><div class="ns-tb-ico">＋</div><div>F1 · Incluir</div></button>
+        <button class="ns-tb-btn" onclick="nfeSaidaCarregarLista()"><div class="ns-tb-ico">≣</div><div>F6 · Listar</div></button>
+        <div class="ns-tb-paginfo" id="ns-paginfo">${_saidaDados.length} nota(s)</div>
+      </div>
+      <div class="ns-filtros-topo">
+        <span style="color:#555;font-size:0.78rem">Busca rápida:</span>
+        <input id="ns-busca" type="text" placeholder="Seq, número, destinatário..." oninput="nfeSaidaRenderLista()" />
+      </div>
       <div class="ns-corpo">
-        <div class="ns-conteudo" id="ns-conteudo">
-          <p style="color:#888;padding:20px">Carregando notas...</p>
-        </div>
-        <!-- abas verticais à direita -->
         <div class="ns-abas">
           <div class="ns-aba" onclick="navegarPara('nfe')">
-            <span class="ns-aba-ico">📥</span><span>Nota Fiscal de Entrada</span>
+            <span class="ns-aba-ico">📥</span><span>Nota fiscal de entrada</span>
           </div>
           <div class="ns-aba ativo">
-            <span class="ns-aba-ico">📤</span><span>Nota Fiscal de Saída</span>
+            <span class="ns-aba-ico">📤</span><span>Nota fiscal de saída</span>
           </div>
+        </div>
+        <div class="ns-painel" id="ns-conteudo">
+          <p style="color:#888;padding:20px">Carregando notas...</p>
         </div>
       </div>
     </div>
@@ -90,7 +98,18 @@ function nfeSaidaRenderLista() {
   const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
   const fmtData = d => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
 
-  const linhas = _saidaDados.map(n => `
+  // filtro pela busca rápida do topo
+  const termo = (document.getElementById('ns-busca')?.value || '').toLowerCase().trim();
+  const dados = !termo ? _saidaDados : _saidaDados.filter(n => {
+    const alvo = [n.numero, n.serie, n.oct_pessoas?.nome, n.dest_nome, n.dest_documento, n.chave_nfe]
+      .filter(Boolean).join(' ').toLowerCase();
+    return alvo.includes(termo);
+  });
+
+  const pag = document.getElementById('ns-paginfo');
+  if (pag) pag.textContent = `${dados.length} nota(s)`;
+
+  const linhas = dados.map(n => `
     <tr>
       <td><strong>${n.numero || '—'}</strong></td>
       <td>${n.serie || 1}</td>
@@ -105,10 +124,6 @@ function nfeSaidaRenderLista() {
     </tr>`).join('');
 
   area.innerHTML = `
-    <div class="ns-toolbar">
-      <button class="ns-btn-novo" onclick="nfeSaidaNova()">＋ Nova Nota de Saída</button>
-      <span style="color:#888;font-size:0.82rem;margin-left:auto">${_saidaDados.length} nota(s)</span>
-    </div>
     <div style="overflow-x:auto">
       <table class="ns-tabela">
         <thead>
@@ -123,7 +138,7 @@ function nfeSaidaRenderLista() {
           </tr>
         </thead>
         <tbody>
-          ${linhas || `<tr><td colspan="7" style="text-align:center;color:#888;padding:30px">Nenhuma nota de saída. Clique em "Nova Nota de Saída" para começar.</td></tr>`}
+          ${linhas || `<tr><td colspan="7" style="text-align:center;color:#888;padding:30px">${termo?'Nenhuma nota encontrada para a busca.':'Nenhuma nota de saída. Clique em "Incluir" para começar.'}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -132,17 +147,23 @@ function nfeSaidaRenderLista() {
 
 function nfeSaidaStyles() {
   return `<style>
-    .ns-janela{background:#13151f;border:1px solid #2a2d3e;border-radius:12px;overflow:hidden;max-width:1300px;margin:0 auto}
-    .ns-titulo{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:#0f1117;border-bottom:1px solid #2a2d3e;font-size:1rem;font-weight:600;color:#e0e0e0}
+    .ns-janela{background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden;max-width:1500px;margin:0 auto;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+    .ns-titulo{background:linear-gradient(180deg,#2a2d3e,#1a1d2e);padding:10px 16px;display:flex;justify-content:space-between;align-items:center;font-weight:600;color:#e0e0e0;border-bottom:1px solid #2a2d3e}
     .ns-fechar{background:transparent;border:none;color:#888;cursor:pointer;font-size:1.1rem}
-    .ns-corpo{display:flex;min-height:440px}
-    .ns-conteudo{flex:1;padding:16px;overflow:auto}
-    .ns-abas{width:220px;background:#0f1117;border-left:1px solid #2a2d3e;padding:8px 0;flex-shrink:0}
-    .ns-aba{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;color:#aaa;font-size:0.86rem;border-right:3px solid transparent}
+    .ns-toolbar-top{display:flex;align-items:center;gap:4px;padding:8px 12px;background:#0f1117;border-bottom:1px solid #2a2d3e;flex-wrap:wrap}
+    .ns-tb-btn{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:58px;padding:6px 8px;background:transparent;border:1px solid transparent;border-radius:6px;color:#aaa;cursor:pointer;font-size:0.68rem}
+    .ns-tb-btn:hover{background:#1a1d2e;color:#e0e0e0}
+    .ns-tb-ico{font-size:1.1rem}
+    .ns-tb-paginfo{margin-left:auto;color:#666;font-size:0.75rem;padding-right:8px}
+    .ns-filtros-topo{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#10121a;border-bottom:1px solid #2a2d3e}
+    .ns-filtros-topo input{flex:1;max-width:400px;padding:6px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.82rem}
+    .ns-corpo{display:flex;min-height:400px}
+    .ns-abas{width:230px;background:#0f1117;border-right:1px solid #2a2d3e;padding:8px 0;flex-shrink:0}
+    .ns-aba{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;color:#aaa;font-size:0.86rem;border-left:3px solid transparent}
     .ns-aba:hover{background:#1a1d2e;color:#e0e0e0}
-    .ns-aba.ativo{background:#13151f;color:#60a5fa;border-right-color:#60a5fa;font-weight:600}
+    .ns-aba.ativo{background:#13151f;color:#60a5fa;border-left-color:#60a5fa;font-weight:600}
     .ns-aba-ico{font-size:1.1rem}
-    .ns-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+    .ns-painel{flex:1;min-width:0;padding:16px;overflow:auto}
     .ns-btn-novo{background:#1a3a1a;border:1px solid #2a5a2a;color:#4caf50;padding:9px 16px;border-radius:7px;cursor:pointer;font-size:0.86rem;font-weight:600}
     .ns-btn-novo:hover{background:#224a22}
     .ns-tabela{width:100%;border-collapse:collapse;font-size:0.84rem}
