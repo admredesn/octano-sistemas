@@ -189,6 +189,49 @@ async function abrirFormProduto(id, empresaId) {
           </select>
         </div>
       </div>
+
+      <details style="margin-top:16px;border:1px solid #2a2d3e;border-radius:8px;padding:0" id="fp-fiscal-bloco">
+        <summary style="padding:12px 16px;cursor:pointer;color:#60a5fa;font-weight:600;font-size:0.9rem">📊 Perfil fiscal (NF-e / tributação)</summary>
+        <div style="padding:0 16px 16px">
+          <div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:6px;padding:8px 10px;margin-bottom:14px;font-size:0.76rem;color:#7cc4ff">
+            ℹ️ Preencha conforme orientação do contador. Combustível usa ICMS monofásico (CST 61) com alíquota em <strong>R$/litro</strong> (ad rem), não percentual.
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>É combustível?</label>
+              <select id="fp-ind-comb" onchange="produtoToggleComb()">
+                <option value="N" ${(p?.ind_combustivel||'N')==='N'?'selected':''}>Não</option>
+                <option value="S" ${p?.ind_combustivel==='S'?'selected':''}>Sim</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Monofásico?</label>
+              <select id="fp-ind-mono">
+                <option value="N" ${(p?.ind_monofasico||'N')==='N'?'selected':''}>Não</option>
+                <option value="S" ${p?.ind_monofasico==='S'?'selected':''}>Sim</option>
+              </select>
+            </div>
+            <div class="form-group"><label>Código ANP</label><input id="fp-anp" type="text" value="${p?.cod_anp||''}" placeholder="9 dígitos" /></div>
+            <div class="form-group"><label>Descrição ANP</label><input id="fp-anp-desc" type="text" value="${(p?.desc_anp||'').replace(/"/g,'&quot;')}" /></div>
+            <div class="form-group"><label>CEST</label><input id="fp-cest" type="text" value="${p?.cest||''}" /></div>
+            <div class="form-group"><label>Origem</label><input id="fp-origem" type="text" value="${p?.origem||'0'}" placeholder="0=nacional" /></div>
+            <div class="form-group"><label>CFOP venda</label><input id="fp-cfop" type="text" value="${p?.cfop||''}" placeholder="ex 5102, 5656" /></div>
+            <div class="form-group"><label>CFOP cupom/ECF</label><input id="fp-cfop-ecf" type="text" value="${p?.cfop_ecf||''}" placeholder="ex 5929" /></div>
+            <div class="form-group"><label>CST ICMS</label><input id="fp-cst-icms" type="text" value="${p?.cst_icms||''}" placeholder="ex 00, 60, 61" /></div>
+            <div class="form-group"><label>CSOSN (Simples)</label><input id="fp-csosn" type="text" value="${p?.csosn||''}" placeholder="ex 102, 500" /></div>
+            <div class="form-group"><label>Alíq. ICMS (%)</label><input id="fp-aliq-icms" type="number" step="0.0001" value="${p?.aliq_icms||0}" /></div>
+            <div class="form-group" id="fp-adrem-grp"><label>ICMS ad rem (R$/L)</label><input id="fp-adrem" type="number" step="0.00001" value="${p?.aliq_icms_ad_rem||0}" placeholder="combustível monofásico" /></div>
+            <div class="form-group"><label>CST PIS</label><input id="fp-cst-pis" type="text" value="${p?.cst_pis||''}" placeholder="ex 01, 04" /></div>
+            <div class="form-group"><label>Alíq. PIS (%)</label><input id="fp-aliq-pis" type="number" step="0.0001" value="${p?.aliq_pis||0}" /></div>
+            <div class="form-group"><label>CST COFINS</label><input id="fp-cst-cofins" type="text" value="${p?.cst_cofins||''}" placeholder="ex 01, 04" /></div>
+            <div class="form-group"><label>Alíq. COFINS (%)</label><input id="fp-aliq-cofins" type="number" step="0.0001" value="${p?.aliq_cofins||0}" /></div>
+            <div class="form-group"><label>% Bio (combustível)</label><input id="fp-perc-bio" type="number" step="0.01" value="${p?.perc_bio||0}" /></div>
+            <div class="form-group"><label>PMPF (R$)</label><input id="fp-pmpf" type="number" step="0.001" value="${p?.pmpf||0}" /></div>
+            <div class="form-group"><label>Unid. tributável</label><input id="fp-unid-trib" type="text" value="${p?.unidade_tributavel||''}" placeholder="ex LT" /></div>
+          </div>
+        </div>
+      </details>
+
       <div class="form-acoes">
         <button onclick="salvarProduto('${id||''}','${empresaId}')" class="btn-salvar">💾 Salvar produto</button>
         <button onclick="document.getElementById('form-produto').style.display='none'" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Cancelar</button>
@@ -216,6 +259,26 @@ async function salvarProduto(id, empresaId) {
     estoque: parseFloat(document.getElementById('fp-estoque').value) || 0,
     estoque_minimo:parseFloat(document.getElementById('fp-estoque-min').value) || 0,
     tanque_id:     document.getElementById('fp-tanque').value || null,
+    // perfil fiscal
+    ind_combustivel: document.getElementById('fp-ind-comb')?.value || 'N',
+    ind_monofasico:  document.getElementById('fp-ind-mono')?.value || 'N',
+    cod_anp:       document.getElementById('fp-anp')?.value.trim() || null,
+    desc_anp:      document.getElementById('fp-anp-desc')?.value.trim() || null,
+    cest:          document.getElementById('fp-cest')?.value.trim() || null,
+    origem:        document.getElementById('fp-origem')?.value.trim() || null,
+    cfop:          document.getElementById('fp-cfop')?.value.trim() || null,
+    cfop_ecf:      document.getElementById('fp-cfop-ecf')?.value.trim() || null,
+    cst_icms:      document.getElementById('fp-cst-icms')?.value.trim() || null,
+    csosn:         document.getElementById('fp-csosn')?.value.trim() || null,
+    aliq_icms:     parseFloat(document.getElementById('fp-aliq-icms')?.value) || 0,
+    aliq_icms_ad_rem: parseFloat(document.getElementById('fp-adrem')?.value) || 0,
+    cst_pis:       document.getElementById('fp-cst-pis')?.value.trim() || null,
+    aliq_pis:      parseFloat(document.getElementById('fp-aliq-pis')?.value) || 0,
+    cst_cofins:    document.getElementById('fp-cst-cofins')?.value.trim() || null,
+    aliq_cofins:   parseFloat(document.getElementById('fp-aliq-cofins')?.value) || 0,
+    perc_bio:      parseFloat(document.getElementById('fp-perc-bio')?.value) || 0,
+    pmpf:          parseFloat(document.getElementById('fp-pmpf')?.value) || 0,
+    unidade_tributavel: document.getElementById('fp-unid-trib')?.value.trim() || null,
   };
 
   let error;
@@ -235,4 +298,17 @@ async function excluirProduto(id) {
   await sb.from('oct_produto_nfe').delete().eq('produto_id', id);
   await sb.from('oct_produtos').update({ ativo: false }).eq('id', id);
   moduloProdutos();
+}
+
+// Ao marcar "é combustível", sugere monofásico=Sim (combustível em geral é monofásico)
+function produtoToggleComb() {
+  const comb = document.getElementById('fp-ind-comb')?.value;
+  const mono = document.getElementById('fp-ind-mono');
+  const adremGrp = document.getElementById('fp-adrem-grp');
+  if (comb === 'S') {
+    if (mono && mono.value === 'N') mono.value = 'S';
+    if (adremGrp) adremGrp.style.outline = '1px solid #2a5a2a';
+  } else {
+    if (adremGrp) adremGrp.style.outline = 'none';
+  }
 }
