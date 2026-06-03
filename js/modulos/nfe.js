@@ -1010,11 +1010,38 @@ async function confirmarNfe(){
     const unFinal    = it.unidadeImport      || it.unidade;
     const custoFinal = it.custoUnitario      || it.valorUnitario;
 
+    // perfil fiscal extraido do XML de entrada (preenche o cadastro do produto)
+    const perfilFiscal={
+      ind_combustivel: it.temAnp?'S':'N',
+      ind_monofasico:  it.ehMonofasico?'S':'N',
+      cod_anp:         it.codAnp||null,
+      desc_anp:        it.descAnp||null,
+      cest:            it.cest||null,
+      origem:          '0',
+      cst_icms:        it.cstIcms||null,          // CST de ENTRADA (como veio do fornecedor)
+      aliq_icms:       it.aliqIcms||0,
+      aliq_icms_ad_rem:it.adRemItem||0,           // R$/L monofasico
+      cst_pis:         it.cstPis||null,
+      aliq_pis:        it.aliqPis||0,
+      cst_cofins:      it.cstCofins||null,
+      aliq_cofins:     it.aliqCofins||0,
+      perc_bio:        it.pBio||0,
+    };
+
     let produtoId=null;
     if(acao==='vincular'&&idExistente){
       // vincula ao produto ja cadastrado e atualiza custo
       produtoId=idExistente;
-      await sb.from('oct_produtos').update({preco_custo:custoFinal}).eq('id',produtoId);
+      const upd={preco_custo:custoFinal};
+      // preenche o perfil fiscal SOMENTE nos campos que estiverem vazios (nao sobrescreve ajustes)
+      const{data:atual}=await sb.from('oct_produtos').select('cod_anp,desc_anp,cest,origem,cst_icms,aliq_icms,aliq_icms_ad_rem,cst_pis,aliq_pis,cst_cofins,aliq_cofins,perc_bio,ind_combustivel,ind_monofasico').eq('id',produtoId).single();
+      if(atual){
+        const vazio=v=>v===null||v===undefined||v===''||v===0;
+        for(const k in perfilFiscal){
+          if(vazio(atual[k]) && !vazio(perfilFiscal[k])) upd[k]=perfilFiscal[k];
+        }
+      }
+      await sb.from('oct_produtos').update(upd).eq('id',produtoId);
     }else if(acao==='novo'){
       const{data:np}=await sb.from('oct_produtos').insert({
         empresa_id:_empresaId,nome:nomeProd,codigo:it.codigo||null,
@@ -1024,6 +1051,7 @@ async function confirmarNfe(){
         preco_custo:custoFinal,
         tanque_id:it.tanqueId||null,
         estoque:0,
+        ...perfilFiscal,                          // perfil fiscal do XML
       }).select().single();
       produtoId=np?.id||null;
     }
