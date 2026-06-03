@@ -64,7 +64,7 @@ async function moduloNfe() {
     ${nfeGridStyles()}
     <div class="nfe-grid-janela">
       <div class="nfe-grid-titulo">
-        <span>Nota Fiscal Entrada</span>
+        <span>Movimento nota fiscal</span>
         <button onclick="navegarPara('empresa')" class="nfe-grid-fechar" title="Fechar">✕</button>
       </div>
 
@@ -78,19 +78,24 @@ async function moduloNfe() {
         <button class="nfe-tb-btn" onclick="nfeGridPag(1)"><div class="nfe-tb-ico">▶▶</div><div>Pg Down</div></button>
         <button class="nfe-tb-btn" onclick="nfeGridIrPagina(-1)"><div class="nfe-tb-ico">⏭</div><div>End</div></button>
         <button class="nfe-tb-btn" onclick="renderNfeGrid()"><div class="nfe-tb-ico">≣</div><div>F6 · Listar</div></button>
-        <div class="nfe-tb-sep"></div>
-        ${temCert ? `<button class="nfe-tb-btn" onclick="navegarPara('manifestacao')"><div class="nfe-tb-ico">📡</div><div>Manifestar</div></button>` : ''}
-        <button class="nfe-tb-btn" onclick="navegarPara('nfe_saida')"><div class="nfe-tb-ico">📤</div><div>NF-e Saída</div></button>
         <div class="nfe-tb-paginfo" id="nfe-grid-paginfo">0 de 0</div>
       </div>
 
       <div class="nfe-grid-filtros-topo">
         <span style="color:#555;font-size:0.78rem">Busca rápida:</span>
-        <input id="nfe-grid-busca-global" type="text" placeholder="Fornecedor, número, chave..." oninput="renderNfeGrid()" />
-        <span style="color:#555;font-size:0.78rem;margin-left:12px">Manifestadas pendentes:</span>
-        <span class="nfe-grid-badge">${nfesReaisManifest.length}</span>
-        ${nfesReaisManifest.length > 0 ? `<button onclick="document.getElementById('nfe-manifestadas-painel').style.display='block';document.getElementById('nfe-manifestadas-painel').scrollIntoView({behavior:'smooth'})" class="nfe-grid-link">ver</button>` : ''}
+        <input id="nfe-grid-busca-global" type="text" placeholder="Seq, número, cód. forn, fornecedor, chave..." oninput="renderNfeGrid()" />
       </div>
+
+      <div class="nfe-mov-corpo">
+        <div class="nfe-mov-abas">
+          <div class="nfe-mov-aba ativo">
+            <span class="nfe-mov-aba-ico">📥</span><span>Nota fiscal de entrada</span>
+          </div>
+          <div class="nfe-mov-aba" onclick="navegarPara('nfe_saida')">
+            <span class="nfe-mov-aba-ico">📤</span><span>Nota fiscal de saída</span>
+          </div>
+        </div>
+        <div class="nfe-mov-painel">
 
       <div id="nfe-manifestar-painel" style="display:none;padding:16px;border-bottom:1px solid #2a2d3e">
         <div style="background:#13151f;border:1px solid #2a4a6a;border-radius:10px;padding:20px">
@@ -214,6 +219,8 @@ async function moduloNfe() {
             </div>`).join('')}
         </div>
       </div>
+        </div>
+      </div>
     </div>
   `;
 
@@ -223,6 +230,13 @@ async function moduloNfe() {
 function nfeGridStyles() {
   return `<style>
     .nfe-grid-janela{max-width:1500px;margin:0 auto;background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+    .nfe-mov-corpo{display:flex;min-height:400px}
+    .nfe-mov-abas{width:230px;background:#0f1117;border-right:1px solid #2a2d3e;padding:8px 0;flex-shrink:0}
+    .nfe-mov-aba{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;color:#aaa;font-size:0.86rem;border-left:3px solid transparent}
+    .nfe-mov-aba:hover{background:#1a1d2e;color:#e0e0e0}
+    .nfe-mov-aba.ativo{background:#13151f;color:#60a5fa;border-left-color:#60a5fa;font-weight:600}
+    .nfe-mov-aba-ico{font-size:1.1rem}
+    .nfe-mov-painel{flex:1;min-width:0;overflow:auto}
     .nfe-grid-titulo{background:linear-gradient(180deg,#2a2d3e,#1a1d2e);padding:10px 16px;display:flex;justify-content:space-between;align-items:center;font-weight:600;color:#e0e0e0;border-bottom:1px solid #2a2d3e}
     .nfe-grid-fechar{background:transparent;border:none;color:#888;cursor:pointer;font-size:1.1rem}
     .nfe-grid-fechar:hover{color:#f44}
