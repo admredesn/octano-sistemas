@@ -70,6 +70,8 @@ function parseNFe(xml) {
   const emitEnd  = [qv(enderEmit,'xLgr'),qv(enderEmit,'nro'),qv(enderEmit,'xBairro')].filter(Boolean).join(', ');
   const emitMun  = qv(enderEmit, 'xMun');
   const emitUF   = qv(enderEmit, 'UF');
+  const emitCEP  = qv(enderEmit, 'CEP') || '';
+  const emitFone = qv(enderEmit, 'fone') || '';
 
   // DEST
   const dest     = q(nfe, 'dest');
@@ -222,7 +224,7 @@ function parseNFe(xml) {
     chNFe, nProt,
     numero, serie, natOp, dhEmi, tpNF, finNFe, mod,
     cfopCapa,
-    emitCnpj, emitNome, emitFant, emitIE, emitCRT, emitEnd, emitMun, emitUF,
+    emitCnpj, emitNome, emitFant, emitIE, emitCRT, emitEnd, emitMun, emitUF, emitCEP, emitFone,
     destCnpj, destNome, destIE,
     vBC, vICMS, vBCST, vST, vProd, vFrete, vDesc, vIPI, vPIS, vCOFINS, vNF,
     qBCMonoRet, vICMSMonoRet,
