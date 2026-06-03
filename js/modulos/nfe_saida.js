@@ -32,7 +32,7 @@ async function moduloNfeSaida() {
   // carrega caches (reaproveita se já carregou antes — troca de aba fica instantânea)
   if (!_saidaProdutos.length || !_saidaPessoas.length || _saidaCacheEmpresa !== _saidaEmpresaId) {
     const [{ data: prods }, { data: pess }] = await Promise.all([
-      sb.from('oct_produtos').select('id,nome,codigo,unidade,preco_venda_a,preco_custo,ncm,cest,cfop,cod_anp,desc_anp').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
+      sb.from('oct_produtos').select('id,nome,codigo,unidade,preco_venda_a,preco_custo,ncm,cest,cfop,cfop_ecf,cod_anp,desc_anp,ind_combustivel,ind_monofasico,origem,cst_icms,csosn,aliq_icms,aliq_icms_ad_rem,cst_pis,aliq_pis,cst_cofins,aliq_cofins,perc_bio,pmpf,unidade_tributavel').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
       sb.from('oct_pessoas').select('id,nome,documento,ie,email,endereco,cidade,uf,tipo').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
     ]);
     _saidaProdutos = prods || [];
@@ -216,6 +216,19 @@ async function nfeSaidaEditar(id) {
     quantidade: Number(it.quantidade), valor_unitario: Number(it.valor_unitario),
     valor_total: Number(it.valor_total), cfop_edit: it.cfop,
     cst_icms: it.cst_icms, cod_anp: it.cod_anp, desc_anp: it.desc_anp,
+    ind_combustivel: it.ind_combustivel || 'N',
+    ind_monofasico: it.ind_monofasico || 'N',
+    origem: it.origem || '0',
+    csosn: it.csosn || null,
+    aliq_icms: Number(it.aliq_icms) || 0,
+    aliq_icms_ad_rem: Number(it.aliq_icms_ad_rem) || 0,
+    cst_pis: it.cst_pis || null,
+    aliq_pis: Number(it.aliq_pis) || 0,
+    cst_cofins: it.cst_cofins || null,
+    aliq_cofins: Number(it.aliq_cofins) || 0,
+    perc_bio: Number(it.perc_bio) || 0,
+    pmpf: Number(it.pmpf) || 0,
+    unidade_tributavel: it.unidade_tributavel || null,
   }));
   let cupons = [];
   try { const r = await sb.from('oct_nfe_saida_cupons').select('*').eq('nfe_saida_id', id); cupons = r.data || []; } catch(e){}
@@ -487,7 +500,21 @@ function nfeSaidaAddItem() {
     ncm: p.ncm, cest: p.cest, cfop: p.cfop || '5102', unidade: p.unidade || 'UN',
     quantidade: qtd, valor_unitario: vlr || Number(p.preco_venda_a) || 0,
     valor_total: qtd * (vlr || Number(p.preco_venda_a) || 0),
-    cst_icms: '', cod_anp: p.cod_anp, desc_anp: p.desc_anp,
+    // perfil fiscal herdado do produto (pré-preenche o CST; pode ser editado na grade)
+    cst_icms: p.cst_icms || '', cod_anp: p.cod_anp, desc_anp: p.desc_anp,
+    ind_combustivel: p.ind_combustivel || 'N',
+    ind_monofasico: p.ind_monofasico || 'N',
+    origem: p.origem || '0',
+    csosn: p.csosn || null,
+    aliq_icms: Number(p.aliq_icms) || 0,
+    aliq_icms_ad_rem: Number(p.aliq_icms_ad_rem) || 0,
+    cst_pis: p.cst_pis || null,
+    aliq_pis: Number(p.aliq_pis) || 0,
+    cst_cofins: p.cst_cofins || null,
+    aliq_cofins: Number(p.aliq_cofins) || 0,
+    perc_bio: Number(p.perc_bio) || 0,
+    pmpf: Number(p.pmpf) || 0,
+    unidade_tributavel: p.unidade_tributavel || null,
   });
   // reset campos
   document.getElementById('ns-item-prod').value = '';
@@ -603,6 +630,13 @@ async function nfeSaidaSalvar() {
     ncm: it.ncm, cest: it.cest, cfop: it.cfop, unidade: it.unidade,
     quantidade: it.quantidade, valor_unitario: it.valor_unitario, valor_total: it.valor_total,
     cst_icms: it.cst_icms || null, cod_anp: it.cod_anp || null, desc_anp: it.desc_anp || null,
+    ind_combustivel: it.ind_combustivel || 'N', ind_monofasico: it.ind_monofasico || 'N',
+    origem: it.origem || '0', csosn: it.csosn || null,
+    aliq_icms: it.aliq_icms || 0, aliq_icms_ad_rem: it.aliq_icms_ad_rem || 0,
+    cst_pis: it.cst_pis || null, aliq_pis: it.aliq_pis || 0,
+    cst_cofins: it.cst_cofins || null, aliq_cofins: it.aliq_cofins || 0,
+    perc_bio: it.perc_bio || 0, pmpf: it.pmpf || 0,
+    unidade_tributavel: it.unidade_tributavel || null,
   }));
   const { error: errIt } = await sb.from('oct_nfe_saida_itens').insert(itensRows);
   if (errIt) { nfeSaidaMsg('Nota salva, mas erro nos itens: ' + errIt.message, 'erro'); return; }
