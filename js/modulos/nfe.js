@@ -933,6 +933,8 @@ async function confirmarNfe(){
         empresa_id:_empresaId,nome:document.getElementById('forn-nome')?.value||d.emitNome,
         tipo:'fornecedor',documento:d.emitCnpj,
         ie:document.getElementById('forn-ie')?.value||d.emitIE,
+        endereco:[d.emitEnd, d.emitCEP?('CEP '+d.emitCEP):''].filter(Boolean).join(' - ')||null,
+        telefone:d.emitFone||null,
         cidade:d.emitMun,uf:d.emitUF,
       }).select().single();
       fornecedorId=nf?.id;
