@@ -408,7 +408,7 @@ async function abrirDetalheNfe(id) {
 
   const { data: nfe } = await sb
     .from('oct_nfe_entrada')
-    .select('*, oct_pessoas(nome,documento), oct_nfe_entrada_itens(*, oct_produtos(nome,codigo))')
+    .select('*, oct_pessoas(nome,documento), oct_plano_contas(codigo,descricao), oct_nfe_entrada_itens(*, oct_produtos(nome,codigo))')
     .eq('id', id).single();
 
   if (!nfe) { div.innerHTML = '<p style="color:#f44">NF-e não encontrada.</p>'; return; }
@@ -446,6 +446,7 @@ async function abrirDetalheNfe(id) {
           <div class="form-group"><label>Data Emissão</label><input id="edit-emissao" type="date" value="${nfe.emissao||''}" /></div>
           <div class="form-group"><label>Data Entrada</label><input id="edit-entrada" type="date" value="${nfe.entrada||''}" /></div>
           <div class="form-group span2"><label>Fornecedor</label><input type="text" value="${nfe.oct_pessoas?.nome||'—'}" disabled style="opacity:0.6" /></div>
+          <div class="form-group span2"><label>Conta contábil</label><input type="text" value="${nfe.oct_plano_contas?(nfe.oct_plano_contas.codigo+' — '+nfe.oct_plano_contas.descricao):'— sem conta —'}" disabled style="opacity:0.6" /></div>
           <div class="form-group span2"><label>Natureza da Operação</label><input id="edit-natureza" type="text" value="${nfe.natureza||''}" /></div>
           <div class="form-group">
             <label>CFOP</label>
@@ -750,6 +751,20 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
     }
     it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque:achado.estoque}:null;
   }
+
+  // Plano de contas (custo) para vinculo contabil da nota + sugestao automatica
+  const{data:contas}=await sb.from('oct_plano_contas').select('id,codigo,descricao,tipo').eq('empresa_id',_empresaId).eq('ativo',true).eq('tipo','custo').order('codigo');
+  nfeXmlDados.contasCusto=contas||[];
+  // sugere pela categoria predominante dos itens
+  const temComb=d.itens.some(it=>it.precisaTanque);
+  const temLub=d.itens.some(it=>it.ehLubrificante);
+  let sugerida=null;
+  const acha=(re)=> (contas||[]).find(c=>re.test((c.descricao||'').toLowerCase()));
+  if(temComb) sugerida=acha(/combust/);            // conta de combustivel, se existir
+  if(!sugerida && temLub) sugerida=acha(/lubrific|acess/);
+  if(!sugerida) sugerida=acha(/cmv|mercador|revenda/); // fallback generico de custo de revenda
+  nfeXmlDados.contaSugeridaId=sugerida?sugerida.id:'';
+
   renderPreviewNfe();
 }
 
@@ -802,6 +817,18 @@ function renderPreviewNfe(){
               <div class="form-group"><label>Nome *</label><input id="forn-nome" type="text" value="${d.emitNome}" /></div>
               <div class="form-group"><label>IE</label><input id="forn-ie" type="text" value="${d.emitIE||''}" /></div>
             </div>`}
+      </div>
+
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:14px;margin-bottom:16px">
+        <div class="nfe-label" style="margin-bottom:10px">📊 Conta contábil (entrada)</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <select id="nfe-conta-contabil" style="padding:8px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.85rem;min-width:340px">
+            <option value="">— Sem conta vinculada —</option>
+            ${(d.contasCusto||[]).map(c=>`<option value="${c.id}" ${c.id===d.contaSugeridaId?'selected':''}>${c.codigo} — ${c.descricao}</option>`).join('')}
+          </select>
+          ${d.contaSugeridaId?`<span style="font-size:0.74rem;color:#4caf50">✓ sugestão automática</span>`:`<span style="font-size:0.74rem;color:#fbbf24">sem sugestão — selecione se desejar</span>`}
+        </div>
+        <div style="font-size:0.72rem;color:#888;margin-top:6px">Usada na geração do SPED. Você pode alterar ou deixar sem conta.</div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#0f1117;border-radius:8px;margin-bottom:16px;font-size:0.82rem">
@@ -951,6 +978,7 @@ async function confirmarNfe(){
     forma_pagamento:d.pagamentos,duplicatas:d.dups,xml_completo:d.xmlString,
     n_prot:d.nProt,q_bc_mono_ret:d.qBCMonoRet||null,v_icms_mono_ret:d.vICMSMonoRet||null,
     transp_nome:d.transpNome||null,mod_frete:d.modFrete||null,inf_cpl:d.infCpl||null,
+    plano_conta_id:document.getElementById('nfe-conta-contabil')?.value||null,
   }).select().single();
 
   if(nfeErr){msg.textContent='Erro: '+nfeErr.message;msg.style.color='#f44';return;}
