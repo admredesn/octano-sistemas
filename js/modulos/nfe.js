@@ -936,6 +936,7 @@ async function confirmarNfe(){
         endereco:[d.emitEnd, d.emitCEP?('CEP '+d.emitCEP):''].filter(Boolean).join(' - ')||null,
         telefone:d.emitFone||null,
         cidade:d.emitMun,uf:d.emitUF,
+        ativo:true,
       }).select().single();
       fornecedorId=nf?.id;
     }
