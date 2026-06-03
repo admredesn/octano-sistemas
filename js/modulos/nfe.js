@@ -80,6 +80,7 @@ async function moduloNfe() {
         <button class="nfe-tb-btn" onclick="renderNfeGrid()"><div class="nfe-tb-ico">≣</div><div>F6 · Listar</div></button>
         <div class="nfe-tb-sep"></div>
         ${temCert ? `<button class="nfe-tb-btn" onclick="navegarPara('manifestacao')"><div class="nfe-tb-ico">📡</div><div>Manifestar</div></button>` : ''}
+        <button class="nfe-tb-btn" onclick="navegarPara('nfe_saida')"><div class="nfe-tb-ico">📤</div><div>NF-e Saída</div></button>
         <div class="nfe-tb-paginfo" id="nfe-grid-paginfo">0 de 0</div>
       </div>
 
