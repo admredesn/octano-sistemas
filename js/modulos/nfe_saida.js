@@ -13,10 +13,10 @@ let _saidaEditId = null;       // id da nota sendo editada (null = nova)
 let _saidaAbaForm = 'capa';    // aba interna ativa: capa|itens|transporte|cupom
 let _saidaCupons = [];         // cupons vinculados na nota em edição
 let _saidaNotaAtual = null;    // dados da nota em edição (cabeçalho)
+let _saidaCacheEmpresa = null; // empresa cujos caches já foram carregados
 
 async function moduloNfeSaida() {
   const conteudo = document.getElementById('conteudo');
-  conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
 
   const session = await getSession();
   const { data: perfil } = await sb
@@ -29,13 +29,16 @@ async function moduloNfeSaida() {
     return;
   }
 
-  // carrega caches
-  const [{ data: prods }, { data: pess }] = await Promise.all([
-    sb.from('oct_produtos').select('id,nome,codigo,unidade,preco_venda_a,preco_custo,ncm,cest,cfop,cod_anp,desc_anp').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
-    sb.from('oct_pessoas').select('id,nome,documento,ie,email,endereco,cidade,uf,tipo').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
-  ]);
-  _saidaProdutos = prods || [];
-  _saidaPessoas = pess || [];
+  // carrega caches (reaproveita se já carregou antes — troca de aba fica instantânea)
+  if (!_saidaProdutos.length || !_saidaPessoas.length || _saidaCacheEmpresa !== _saidaEmpresaId) {
+    const [{ data: prods }, { data: pess }] = await Promise.all([
+      sb.from('oct_produtos').select('id,nome,codigo,unidade,preco_venda_a,preco_custo,ncm,cest,cfop,cod_anp,desc_anp').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
+      sb.from('oct_pessoas').select('id,nome,documento,ie,email,endereco,cidade,uf,tipo').eq('empresa_id', _saidaEmpresaId).eq('ativo', true).order('nome'),
+    ]);
+    _saidaProdutos = prods || [];
+    _saidaPessoas = pess || [];
+    _saidaCacheEmpresa = _saidaEmpresaId;
+  }
 
   conteudo.innerHTML = `
     ${nfeSaidaStyles()}
