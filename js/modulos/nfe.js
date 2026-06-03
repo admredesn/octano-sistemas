@@ -869,6 +869,7 @@ function renderPreviewNfe(){
                   ${it.codAnp?`<br><span style="font-size:0.68rem;color:${it.precisaTanque?'#4caf50':'#fbbf24'}">
                     ${it.precisaTanque?'⛽':'🛢'} ${it.codAnp} — ${it.descAnp}
                   </span>`:''}
+                  ${(it.codAnp && it.anpReconhecido===false)?`<br><span style="font-size:0.66rem;color:#f87171" title="Código ANP não consta na lista oficial. Confira se está correto.">⚠ código ANP não reconhecido</span>`:''}
                   <br><span style="font-size:0.68rem;padding:1px 5px;border-radius:4px;background:${it.precisaTanque?'#1a3a1a':it.ehLubrificante?'#2a2000':'#1a1d2e'};color:${it.precisaTanque?'#4caf50':it.ehLubrificante?'#fbbf24':'#888'}">
                     ${it.tipoItem}
                   </span>
