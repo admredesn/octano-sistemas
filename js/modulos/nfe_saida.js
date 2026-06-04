@@ -773,8 +773,10 @@ async function nfeSaidaTransmitir() {
       } catch (e) {}
       setTimeout(() => nfeSaidaCarregarLista(), 2500);
     } else {
-      const motivo = r.xmotivo || r.erro || (r.erros ? r.erros.join(' | ') : 'sem detalhe');
-      nfeSaidaMsg(`❌ [${r.etapa || '?'}] ${r.cstat_nfe || r.cstat_lote || ''} ${motivo}`, 'erro');
+      const motivo = r.xmotivo || r.erro || r.detalhes || (r.erros ? r.erros.join(' | ') : 'sem detalhe');
+      const extra = r.status ? ` (HTTP ${r.status})` : '';
+      nfeSaidaMsg(`❌ [${r.etapa || '?'}]${extra} ${r.cstat_nfe || r.cstat_lote || ''} ${motivo}`, 'erro');
+      console.error('Retorno /emitir:', r);
     }
   } catch (e) {
     nfeSaidaMsg('Erro ao transmitir: ' + e.message, 'erro');
