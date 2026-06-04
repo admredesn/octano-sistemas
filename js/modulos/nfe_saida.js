@@ -256,6 +256,11 @@ function nfeSaidaRenderForm(nota) {
       <h2 style="color:#e0e0e0;font-size:1rem;margin:0">${titulo}</h2>
       <div style="display:flex;gap:8px;align-items:center">
         ${somenteLeitura ? '' : `<button class="ns-btn-novo" onclick="nfeSaidaSalvar()">💾 Salvar rascunho</button>`}
+        ${(!somenteLeitura && _saidaEditId) ? `<button class="ns-btn-novo" style="background:#1f6f43" onclick="nfeSaidaTransmitir()">📡 Transmitir SEFAZ</button>
+        <select id="ns-ambiente" class="manif-input-sm" title="Ambiente SEFAZ" style="padding:4px 6px;border-radius:6px;background:#0f1117;color:#e0e0e0;border:1px solid #2a2d3e;font-size:0.8rem">
+          <option value="homologacao" selected>Homologação</option>
+          <option value="producao">Produção</option>
+        </select>` : ''}
         <span id="ns-msg" style="font-size:0.85rem"></span>
         <button class="ns-btn-linha" onclick="nfeSaidaCarregarLista()">← Voltar à lista</button>
       </div>
@@ -654,6 +659,99 @@ async function nfeSaidaSalvar() {
 
   nfeSaidaMsg('✓ Rascunho salvo!', 'ok');
   setTimeout(() => nfeSaidaCarregarLista(), 800);
+}
+
+async function nfeSaidaTransmitir() {
+  const ambiente = document.getElementById('ns-ambiente')?.value || 'homologacao';
+  if (!_saidaEditId) { nfeSaidaMsg('Salve o rascunho antes de transmitir.', 'erro'); return; }
+  if (!_saidaItens.length) { nfeSaidaMsg('Adicione ao menos um item.', 'erro'); return; }
+  if (!_saidaEmpresa?.cert_path) { nfeSaidaMsg('Certificado não configurado (tela Empresa).', 'erro'); return; }
+  const senha = (typeof getCertSenha === 'function') ? getCertSenha() : null;
+  if (!senha) { nfeSaidaMsg('Senha do certificado não encontrada (tela Empresa).', 'erro'); return; }
+
+  const n = _saidaNotaAtual || {};
+  const dest = _saidaPessoas.find(p => p.id === n.destinatario_id);
+  if (!dest) { nfeSaidaMsg('Destinatário não encontrado.', 'erro'); return; }
+
+  if (!confirm(`Transmitir NF-e em ${ambiente.toUpperCase()}?`)) return;
+  nfeSaidaMsg('📡 Transmitindo à SEFAZ...', 'info');
+
+  try {
+    // certificado do app (mesmo padrao da manifestacao)
+    const { data: cb } = await sb.storage.from('octano-certs').download(_saidaEmpresa.cert_path);
+    const buf = await cb.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+    // monta itens no formato do /emitir
+    const itens = _saidaItens.map((it, i) => ({
+      nItem: i + 1,
+      cProd: it.codigo || ('ITEM' + (i + 1)),
+      xProd: it.descricao,
+      cEAN: 'SEM GTIN', cEANTrib: 'SEM GTIN',
+      ncm: it.ncm, cest: it.cest || null, cfop: it.cfop,
+      uCom: it.unidade || 'LT', uTrib: it.unidade_tributavel || it.unidade || 'LT',
+      qCom: Number(it.quantidade), vUnCom: Number(it.valor_unitario), vProd: Number(it.valor_total),
+      ind_combustivel: it.ind_combustivel || 'N',
+      ind_monofasico: it.ind_monofasico || 'N',
+      cod_anp: it.cod_anp || null, desc_anp: it.desc_anp || null,
+      perc_bio: Number(it.perc_bio) || 0, uf_cons: dest.uf || 'MG',
+      origem: it.origem || '0',
+      cst_icms: it.cst_icms || null, aliq_icms: Number(it.aliq_icms) || 0,
+      aliq_icms_ad_rem: Number(it.aliq_icms_ad_rem) || 0,
+      cst_pis: it.cst_pis || '04', cst_cofins: it.cst_cofins || '04',
+    }));
+
+    const nota = {
+      numero: n.numero || Date.now() % 1000000,
+      serie: n.serie || 1,
+      natureza_op: n.natureza_op || 'VENDA',
+      id_lote: '1',
+      mod_frete: n.mod_frete || '9',
+      emitente: {
+        cnpj: (_saidaEmpresa.cnpj || '').replace(/\D/g, ''),
+        nome: _saidaEmpresa.nome,
+        ie: (_saidaEmpresa.ie || '').replace(/\D/g, ''),
+        logradouro: _saidaEmpresa.endereco || '',
+        numero: 'S/N', bairro: 'CENTRO',
+        municipio: _saidaEmpresa.cidade || '', c_mun: _saidaEmpresa.c_mun || '3123205',
+        uf: _saidaEmpresa.uf || 'MG', cep: (_saidaEmpresa.cep || '').replace(/\D/g, ''),
+        crt: _saidaEmpresa.regime_tributario === 'simples' ? '1' : '3',
+      },
+      destinatario: {
+        cnpj_cpf: (dest.documento || '').replace(/\D/g, ''),
+        nome: ambiente === 'homologacao'
+          ? 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
+          : dest.nome,
+        ie: (dest.ie || '').replace(/\D/g, '') || null,
+        ind_ie: dest.ie ? '1' : '9',
+        uf: dest.uf || 'MG',
+      },
+      itens,
+    };
+
+    const cnpj = nota.emitente.cnpj;
+    const resp = await fetch(`${SEFAZ_URL}/emitir`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cnpj, cert_base64: b64, cert_senha: senha, ambiente, nota }),
+    });
+    const r = await resp.json();
+
+    if (r.ok) {
+      nfeSaidaMsg(`✓ AUTORIZADA! Protocolo ${r.protocolo} — chave ${r.chave}`, 'ok');
+      try {
+        await sb.from('oct_nfe_saida').update({
+          status: 'transmitida', chave_nfe: r.chave, protocolo: r.protocolo,
+          xml_autorizado: r.xml_assinado || null, atualizado_em: new Date().toISOString(),
+        }).eq('id', _saidaEditId);
+      } catch (e) {}
+      setTimeout(() => nfeSaidaCarregarLista(), 2500);
+    } else {
+      const motivo = r.xmotivo || r.erro || (r.erros ? r.erros.join(' | ') : 'sem detalhe');
+      nfeSaidaMsg(`❌ [${r.etapa || '?'}] ${r.cstat_nfe || r.cstat_lote || ''} ${motivo}`, 'erro');
+    }
+  } catch (e) {
+    nfeSaidaMsg('Erro ao transmitir: ' + e.message, 'erro');
+  }
 }
 
 async function nfeSaidaExcluir(id) {
