@@ -726,6 +726,7 @@ async function nfeSaidaTransmitir() {
       cst_icms: it.cst_icms || null, aliq_icms: Number(it.aliq_icms) || 0,
       aliq_icms_ad_rem: Number(it.aliq_icms_ad_rem) || 0,
       cst_pis: it.cst_pis || '04', cst_cofins: it.cst_cofins || '04',
+      aliq_pis: Number(it.aliq_pis) || 0, aliq_cofins: Number(it.aliq_cofins) || 0,
     }));
 
     const nota = {
@@ -777,6 +778,7 @@ async function nfeSaidaTransmitir() {
       const extra = r.status ? ` (HTTP ${r.status})` : '';
       nfeSaidaMsg(`❌ [${r.etapa || '?'}]${extra} ${r.cstat_nfe || r.cstat_lote || ''} ${motivo}`, 'erro');
       console.error('Retorno /emitir:', r);
+      if (r.xml_debug) { window.ultimoXmlNfe = r.xml_debug; console.log('XML salvo em window.ultimoXmlNfe — rode: copy(window.ultimoXmlNfe)'); }
     }
   } catch (e) {
     nfeSaidaMsg('Erro ao transmitir: ' + e.message, 'erro');
