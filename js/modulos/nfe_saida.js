@@ -196,13 +196,32 @@ function nfeSaidaStyles() {
 // FORMULÁRIO DE EMISSÃO (nova nota / editar rascunho)
 // ============================================================
 
-function nfeSaidaNova() {
+async function nfeSaidaNova() {
   _saidaEditId = null;
   _saidaItens = [];
   _saidaCupons = [];
-  _saidaNotaAtual = null;
   _saidaAbaForm = 'capa';
-  nfeSaidaRenderForm(null);
+  // proximo numero sequencial da serie 1 + datas de hoje
+  const prox = await nfeSaidaProximoNumero(1);
+  const hoje = new Date().toISOString();
+  _saidaNotaAtual = { serie: 1, numero: prox, data_emissao: hoje, data_saida: hoje };
+  nfeSaidaRenderForm(_saidaNotaAtual);
+}
+
+// Retorna o proximo numero da serie (maior numero existente + 1)
+async function nfeSaidaProximoNumero(serie) {
+  try {
+    const { data } = await sb.from('oct_nfe_saida')
+      .select('numero')
+      .eq('empresa_id', _saidaEmpresaId)
+      .eq('serie', serie)
+      .order('numero', { ascending: false })
+      .limit(1);
+    const ultimo = (data && data[0] && Number(data[0].numero)) || 0;
+    return ultimo + 1;
+  } catch (e) {
+    return 1;
+  }
 }
 
 async function nfeSaidaEditar(id) {
@@ -256,11 +275,13 @@ function nfeSaidaRenderForm(nota) {
       <h2 style="color:#e0e0e0;font-size:1rem;margin:0">${titulo}</h2>
       <div style="display:flex;gap:8px;align-items:center">
         ${somenteLeitura ? '' : `<button class="ns-btn-novo" onclick="nfeSaidaSalvar()">💾 Salvar rascunho</button>`}
-        ${(!somenteLeitura && _saidaEditId) ? `<button class="ns-btn-novo" style="background:#1f6f43" onclick="nfeSaidaTransmitir()">📡 Transmitir SEFAZ</button>
+        ${somenteLeitura ? '' : (_saidaEditId
+          ? `<button class="ns-btn-novo" style="background:#1f6f43" onclick="nfeSaidaTransmitir()">📡 Transmitir SEFAZ</button>
         <select id="ns-ambiente" class="manif-input-sm" title="Ambiente SEFAZ" style="padding:4px 6px;border-radius:6px;background:#0f1117;color:#e0e0e0;border:1px solid #2a2d3e;font-size:0.8rem">
           <option value="homologacao" selected>Homologação</option>
           <option value="producao">Produção</option>
-        </select>` : ''}
+        </select>`
+          : `<button class="ns-btn-novo" style="background:#444;cursor:not-allowed" disabled title="Salve o rascunho para habilitar">📡 Transmitir (salve primeiro)</button>`)}
         <span id="ns-msg" style="font-size:0.85rem"></span>
         <button class="ns-btn-linha" onclick="nfeSaidaCarregarLista()">← Voltar à lista</button>
       </div>
@@ -288,6 +309,7 @@ function nfeSaidaCapturarCampos() {
   const g = id => document.getElementById(id);
   if (g('ns-dest'))   n.destinatario_id = g('ns-dest').value;
   if (g('ns-serie'))  n.serie = parseInt(g('ns-serie').value) || 1;
+  if (g('ns-numero')) n.numero = parseInt(g('ns-numero').value) || null;
   if (g('ns-natop'))  n.natureza_op = g('ns-natop').value;
   if (g('ns-emissao'))n.data_emissao = g('ns-emissao').value || null;
   if (g('ns-saida'))  n.data_saida = g('ns-saida').value || null;
@@ -318,6 +340,9 @@ function nfeSaidaRenderAba(somenteLeitura) {
 // ---------- ABA CAPA ----------
 function nfeSaidaAbaCapa(nota, somenteLeitura) {
   const dest = nota?.destinatario_id || '';
+  const hoje = new Date().toISOString().substring(0, 10);
+  const dEmissao = nota?.data_emissao ? String(nota.data_emissao).substring(0,10) : hoje;
+  const dSaida   = nota?.data_saida   ? String(nota.data_saida).substring(0,10)   : hoje;
   return `
     <div class="ns-form-sec">
       <h3>👤 Destinatário e identificação</h3>
@@ -335,7 +360,7 @@ function nfeSaidaAbaCapa(nota, somenteLeitura) {
         </div>
         <div class="ns-fg">
           <label>Nº Nota</label>
-          <input id="ns-numero" value="${nota?.numero||''}" disabled placeholder="(gerado na emissão)" />
+          <input id="ns-numero" type="number" value="${nota?.numero||''}" ${somenteLeitura?'disabled':''} placeholder="sequencial" />
         </div>
         <div class="ns-fg span2">
           <label>Natureza da operação</label>
@@ -343,11 +368,11 @@ function nfeSaidaAbaCapa(nota, somenteLeitura) {
         </div>
         <div class="ns-fg">
           <label>Emissão</label>
-          <input id="ns-emissao" type="date" value="${nota?.data_emissao?String(nota.data_emissao).substring(0,10):''}" ${somenteLeitura?'disabled':''} />
+          <input id="ns-emissao" type="date" value="${dEmissao}" ${somenteLeitura?'disabled':''} />
         </div>
         <div class="ns-fg">
           <label>Saída</label>
-          <input id="ns-saida" type="date" value="${nota?.data_saida?String(nota.data_saida).substring(0,10):''}" ${somenteLeitura?'disabled':''} />
+          <input id="ns-saida" type="date" value="${dSaida}" ${somenteLeitura?'disabled':''} />
         </div>
         <div class="ns-fg span2">
           <label>CFOP padrão da nota</label>
@@ -599,6 +624,7 @@ async function nfeSaidaSalvar() {
   const cab = {
     empresa_id: _saidaEmpresaId,
     serie: n.serie || 1,
+    numero: n.numero || await nfeSaidaProximoNumero(n.serie || 1),
     modelo: '55',
     natureza_op: n.natureza_op || 'VENDA',
     cfop_padrao: n.cfop_padrao || null,
