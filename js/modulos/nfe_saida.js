@@ -77,10 +77,11 @@ async function moduloNfeSaida() {
 async function nfeSaidaCarregarLista() {
   const area = document.getElementById('ns-conteudo');
   if (!area) return;
-  const { data } = await sb.from('oct_nfe_saida')
-    .select('*, oct_pessoas(nome,documento)')
+  const { data, error } = await sb.from('oct_nfe_saida')
+    .select('*')
     .eq('empresa_id', _saidaEmpresaId)
     .order('criado_em', { ascending: false });
+  if (error) { console.warn('lista nfe saida:', error.message); }
   _saidaDados = data || [];
   nfeSaidaRenderLista();
 }
@@ -107,7 +108,7 @@ function nfeSaidaRenderLista() {
   // filtro pela busca rápida do topo
   const termo = (document.getElementById('ns-busca')?.value || '').toLowerCase().trim();
   const dados = !termo ? _saidaDados : _saidaDados.filter(n => {
-    const alvo = [n.numero, n.serie, n.oct_pessoas?.nome, n.dest_nome, n.dest_documento, n.chave_nfe]
+    const alvo = [n.numero, n.serie, n.dest_nome, n.dest_documento, n.chave_nfe]
       .filter(Boolean).join(' ').toLowerCase();
     return alvo.includes(termo);
   });
@@ -120,7 +121,7 @@ function nfeSaidaRenderLista() {
       <td><strong>${n.numero || '—'}</strong></td>
       <td>${n.serie || 1}</td>
       <td>${fmtData(n.data_emissao)}</td>
-      <td title="${(n.oct_pessoas?.nome||n.dest_nome||'').replace(/"/g,'&quot;')}">${n.oct_pessoas?.nome || n.dest_nome || '—'}</td>
+      <td title="${(n.dest_nome||'').replace(/"/g,'&quot;')}">${n.dest_nome || '—'}</td>
       <td style="text-align:right;font-weight:600">${fmt(n.valor_total)}</td>
       <td>${nfeSaidaStatusBadge(n.status)}</td>
       <td>
