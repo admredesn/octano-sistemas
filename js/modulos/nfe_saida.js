@@ -14,6 +14,8 @@ let _saidaAbaForm = 'capa';    // aba interna ativa: capa|itens|transporte|cupom
 let _saidaCupons = [];         // cupons vinculados na nota em edição
 let _saidaNotaAtual = null;    // dados da nota em edição (cabeçalho)
 let _saidaCacheEmpresa = null; // empresa cujos caches já foram carregados
+let _saidaGridPagina = 0;      // pagina atual da lista de saída (0-based)
+const NS_GRID_POR_PAGINA = 200;
 
 async function moduloNfeSaida() {
   const conteudo = document.getElementById('conteudo');
@@ -49,8 +51,15 @@ async function moduloNfeSaida() {
       </div>
       <div class="ns-toolbar-top">
         <button class="ns-tb-btn" onclick="nfeSaidaNova()"><div class="ns-tb-ico">＋</div><div>F1 · Incluir</div></button>
+        <button class="ns-tb-btn" onclick="document.getElementById('ns-busca').focus()"><div class="ns-tb-ico">🔍</div><div>F4 · Pesquisar</div></button>
+        <button class="ns-tb-btn" onclick="nfeSaidaLimparFiltros()"><div class="ns-tb-ico">✖</div><div>F5 · Limpar</div></button>
+        <div class="ns-tb-sep"></div>
+        <button class="ns-tb-btn" onclick="nfeSaidaIrPagina(0)"><div class="ns-tb-ico">⏮</div><div>Home</div></button>
+        <button class="ns-tb-btn" onclick="nfeSaidaPag(-1)"><div class="ns-tb-ico">◀◀</div><div>Pg Up</div></button>
+        <button class="ns-tb-btn" onclick="nfeSaidaPag(1)"><div class="ns-tb-ico">▶▶</div><div>Pg Down</div></button>
+        <button class="ns-tb-btn" onclick="nfeSaidaIrPagina(-1)"><div class="ns-tb-ico">⏭</div><div>End</div></button>
         <button class="ns-tb-btn" onclick="nfeSaidaCarregarLista()"><div class="ns-tb-ico">≣</div><div>F6 · Listar</div></button>
-        <div class="ns-tb-paginfo" id="ns-paginfo">${_saidaDados.length} nota(s)</div>
+        <div class="ns-tb-paginfo" id="ns-paginfo">0 de 0</div>
       </div>
       <div class="ns-filtros-topo">
         <span style="color:#555;font-size:0.78rem">Busca rápida:</span>
@@ -77,6 +86,8 @@ async function moduloNfeSaida() {
 async function nfeSaidaCarregarLista() {
   const area = document.getElementById('ns-conteudo');
   if (!area) return;
+  area.innerHTML = '';  // limpa para a grade ser remontada (volta do formulário p/ lista)
+  _saidaGridPagina = 0;
   const { data, error } = await sb.from('oct_nfe_saida')
     .select('*')
     .eq('empresa_id', _saidaEmpresaId)
@@ -99,57 +110,119 @@ function nfeSaidaStatusBadge(s) {
   return `<span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:${c[0]};color:${c[1]}">${c[2]}</span>`;
 }
 
+function _nsFiltroVal(col){const el=document.querySelector(`.ns-grid-filtros input[data-col="${col}"]`);return (el?.value||'').toLowerCase().trim();}
+
+function nfeSaidaLimparFiltros(){
+  document.querySelectorAll('.ns-grid-filtros input').forEach(i=>i.value='');
+  const g=document.getElementById('ns-busca'); if(g) g.value='';
+  _saidaGridPagina=0;
+  nfeSaidaRenderLista();
+}
+
+function nfeSaidaPag(dir){
+  const filtradas=_nfeSaidaFiltrar();
+  const maxPag=Math.max(0,Math.ceil(filtradas.length/NS_GRID_POR_PAGINA)-1);
+  _saidaGridPagina=Math.min(maxPag,Math.max(0,_saidaGridPagina+dir));
+  nfeSaidaRenderLista();
+}
+function nfeSaidaIrPagina(p){
+  const filtradas=_nfeSaidaFiltrar();
+  const maxPag=Math.max(0,Math.ceil(filtradas.length/NS_GRID_POR_PAGINA)-1);
+  _saidaGridPagina = p<0 ? maxPag : 0;
+  nfeSaidaRenderLista();
+}
+
+function _nsFmtData(d){return d ? new Date(d).toLocaleDateString('pt-BR') : '';}
+
+function _nfeSaidaFiltrar(){
+  const bg=(document.getElementById('ns-busca')?.value||'').toLowerCase().trim();
+  const fNum=_nsFiltroVal('numero'), fSer=_nsFiltroVal('serie'), fEmi=_nsFiltroVal('emissao');
+  const fDest=_nsFiltroVal('dest'), fVal=_nsFiltroVal('valor'), fStatus=_nsFiltroVal('status');
+  return _saidaDados.filter(n=>{
+    const dest=(n.dest_nome||'').toLowerCase();
+    if(bg){
+      const blob=`${n.numero||''} ${n.serie||''} ${dest} ${n.dest_documento||''} ${n.chave_nfe||''}`.toLowerCase();
+      if(!blob.includes(bg)) return false;
+    }
+    if(fNum && !String(n.numero||'').toLowerCase().includes(fNum)) return false;
+    if(fSer && !String(n.serie||'').toLowerCase().includes(fSer)) return false;
+    if(fEmi && !_nsFmtData(n.data_emissao).includes(fEmi)) return false;
+    if(fDest && !dest.includes(fDest)) return false;
+    if(fVal && !String(n.valor_total||'').includes(fVal)) return false;
+    if(fStatus && !String(n.status||'').toLowerCase().includes(fStatus)) return false;
+    return true;
+  });
+}
+
 function nfeSaidaRenderLista() {
   const area = document.getElementById('ns-conteudo');
   if (!area) return;
   const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
   const fmtData = d => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
 
-  // filtro pela busca rápida do topo
-  const termo = (document.getElementById('ns-busca')?.value || '').toLowerCase().trim();
-  const dados = !termo ? _saidaDados : _saidaDados.filter(n => {
-    const alvo = [n.numero, n.serie, n.dest_nome, n.dest_documento, n.chave_nfe]
-      .filter(Boolean).join(' ').toLowerCase();
-    return alvo.includes(termo);
-  });
+  // monta a estrutura da grade (com cabeçalho de filtros) só uma vez
+  if (!document.getElementById('ns-grid-corpo')) {
+    area.innerHTML = `
+      <div class="ns-grid-scroll">
+        <table class="ns-tabela ns-grid-tabela">
+          <thead>
+            <tr class="ns-grid-head">
+              <th style="width:80px">Nº</th>
+              <th style="width:60px">Série</th>
+              <th style="width:100px">Emissão</th>
+              <th style="min-width:220px">Destinatário</th>
+              <th style="width:120px;text-align:right">Valor</th>
+              <th style="width:110px">Status</th>
+              <th style="width:160px">Ações</th>
+            </tr>
+            <tr class="ns-grid-filtros">
+              <th><input data-col="numero" oninput="nfeSaidaRenderLista()" /></th>
+              <th><input data-col="serie" oninput="nfeSaidaRenderLista()" /></th>
+              <th><input data-col="emissao" oninput="nfeSaidaRenderLista()" /></th>
+              <th><input data-col="dest" oninput="nfeSaidaRenderLista()" /></th>
+              <th><input data-col="valor" oninput="nfeSaidaRenderLista()" /></th>
+              <th><input data-col="status" oninput="nfeSaidaRenderLista()" /></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="ns-grid-corpo"></tbody>
+        </table>
+      </div>
+      <div class="ns-grid-rodape">
+        <span id="ns-grid-contador">0 registros</span>
+        <span>${_saidaEmpresa?.nome || ''}</span>
+      </div>
+    `;
+  }
 
+  const filtradas = _nfeSaidaFiltrar();
+  const ini = _saidaGridPagina*NS_GRID_POR_PAGINA;
+  const pagina = filtradas.slice(ini, ini+NS_GRID_POR_PAGINA);
+  const totalPag = Math.max(1, Math.ceil(filtradas.length/NS_GRID_POR_PAGINA));
+
+  const corpo = document.getElementById('ns-grid-corpo');
+  if (pagina.length === 0) {
+    corpo.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#888;padding:30px">Nenhuma nota de saída encontrada.</td></tr>`;
+  } else {
+    corpo.innerHTML = pagina.map((n,idx) => `
+      <tr ondblclick="nfeSaidaEditar('${n.id}')">
+        <td><strong>${n.numero || '—'}</strong></td>
+        <td>${n.serie || 1}</td>
+        <td>${fmtData(n.data_emissao)}</td>
+        <td title="${(n.dest_nome||'').replace(/"/g,'&quot;')}">${n.dest_nome || '—'}</td>
+        <td style="text-align:right;font-weight:600">${fmt(n.valor_total)}</td>
+        <td>${nfeSaidaStatusBadge(n.status)}</td>
+        <td>
+          <button class="ns-btn-linha" onclick="event.stopPropagation();nfeSaidaEditar('${n.id}')">${n.status==='rascunho'?'✏️ Editar':'👁 Ver'}</button>
+          ${n.status==='rascunho'?`<button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f44" onclick="event.stopPropagation();nfeSaidaExcluir('${n.id}')">🗑 Excluir</button>`:''}
+        </td>
+      </tr>`).join('');
+  }
+
+  const contador = document.getElementById('ns-grid-contador');
+  if (contador) contador.textContent = `${filtradas.length} registro${filtradas.length!==1?'s':''}`;
   const pag = document.getElementById('ns-paginfo');
-  if (pag) pag.textContent = `${dados.length} nota(s)`;
-
-  const linhas = dados.map(n => `
-    <tr>
-      <td><strong>${n.numero || '—'}</strong></td>
-      <td>${n.serie || 1}</td>
-      <td>${fmtData(n.data_emissao)}</td>
-      <td title="${(n.dest_nome||'').replace(/"/g,'&quot;')}">${n.dest_nome || '—'}</td>
-      <td style="text-align:right;font-weight:600">${fmt(n.valor_total)}</td>
-      <td>${nfeSaidaStatusBadge(n.status)}</td>
-      <td>
-        <button class="ns-btn-linha" onclick="nfeSaidaEditar('${n.id}')">${n.status==='rascunho'?'✏️ Editar':'👁 Ver'}</button>
-        ${n.status==='rascunho'?`<button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f44" onclick="nfeSaidaExcluir('${n.id}')">🗑 Excluir</button>`:''}
-      </td>
-    </tr>`).join('');
-
-  area.innerHTML = `
-    <div style="overflow-x:auto">
-      <table class="ns-tabela">
-        <thead>
-          <tr>
-            <th style="width:80px">Nº</th>
-            <th style="width:50px">Série</th>
-            <th style="width:100px">Emissão</th>
-            <th>Destinatário</th>
-            <th style="width:120px;text-align:right">Valor</th>
-            <th style="width:100px">Status</th>
-            <th style="width:160px">Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${linhas || `<tr><td colspan="7" style="text-align:center;color:#888;padding:30px">${termo?'Nenhuma nota encontrada para a busca.':'Nenhuma nota de saída. Clique em "Incluir" para começar.'}</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-  `;
+  if (pag) pag.textContent = `${_saidaGridPagina+1} de ${totalPag}`;
 }
 
 function nfeSaidaStyles() {
@@ -161,7 +234,8 @@ function nfeSaidaStyles() {
     .ns-tb-btn{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:58px;padding:6px 8px;background:transparent;border:1px solid transparent;border-radius:6px;color:#aaa;cursor:pointer;font-size:0.68rem}
     .ns-tb-btn:hover{background:#1a1d2e;color:#e0e0e0}
     .ns-tb-ico{font-size:1.1rem}
-    .ns-tb-paginfo{margin-left:auto;color:#666;font-size:0.75rem;padding-right:8px}
+    .ns-tb-paginfo{margin-left:auto;color:#888;font-size:0.82rem;padding:6px 12px;background:#1a1d2e;border-radius:6px;border:1px solid #2a2d3e}
+    .ns-tb-sep{width:1px;height:36px;background:#2a2d3e;margin:0 6px}
     .ns-filtros-topo{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#10121a;border-bottom:1px solid #2a2d3e}
     .ns-filtros-topo input{flex:1;max-width:400px;padding:6px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.82rem}
     .ns-corpo{display:flex;min-height:400px}
@@ -181,6 +255,15 @@ function nfeSaidaStyles() {
     .ns-tabela th{text-align:left;padding:8px 10px;color:#888;font-weight:500;border-bottom:1px solid #2a2d3e;font-size:0.76rem}
     .ns-tabela td{padding:9px 10px;border-bottom:1px solid #1a1d2e;color:#ddd}
     .ns-tabela tbody tr:hover{background:#1a1d2e}
+    .ns-grid-scroll{overflow:auto;max-height:60vh}
+    .ns-grid-tabela{font-size:0.82rem}
+    .ns-grid-head th{position:sticky;top:0;background:#2a2d3e;color:#cfcfcf;text-align:left;padding:8px 10px;font-weight:600;white-space:nowrap;z-index:2;border-bottom:1px solid #1a1d2e}
+    .ns-grid-filtros th{position:sticky;top:34px;background:#1e2235;padding:3px 6px;z-index:1}
+    .ns-grid-filtros input{width:100%;padding:3px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.76rem}
+    .ns-grid-tabela tbody td{padding:6px 10px;border-bottom:1px solid #1a1d2e;white-space:nowrap;color:#d0d0d0}
+    .ns-grid-tabela tbody tr{cursor:pointer}
+    .ns-grid-tabela tbody tr:nth-child(even){background:rgba(255,255,255,.012)}
+    .ns-grid-rodape{display:flex;justify-content:space-between;padding:8px 16px;background:#1a1d2e;border-top:1px solid #2a2d3e;font-size:0.78rem;color:#888}
     .ns-btn-linha{background:#1a1d2e;border:1px solid #2a2d3e;color:#ccc;padding:4px 9px;border-radius:5px;cursor:pointer;font-size:0.74rem;margin-right:4px}
     .ns-btn-linha:hover{background:#2a2d3e}
     .ns-form-sec{background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:14px;margin-bottom:14px}
