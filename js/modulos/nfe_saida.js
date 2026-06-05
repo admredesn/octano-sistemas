@@ -16,6 +16,9 @@ let _saidaNotaAtual = null;    // dados da nota em edição (cabeçalho)
 let _saidaCacheEmpresa = null; // empresa cujos caches já foram carregados
 let _saidaGridPagina = 0;      // pagina atual da lista de saída (0-based)
 const NS_GRID_POR_PAGINA = 200;
+// Serie exclusiva do Octano em PRODUCAO (o legado TecnoSpeed usa a serie 1).
+// Mantém as numerações separadas para evitar duplicidade (rejeicao 539).
+const NS_SERIE_PADRAO = 3;
 
 async function moduloNfeSaida() {
   const conteudo = document.getElementById('conteudo');
@@ -285,10 +288,10 @@ async function nfeSaidaNova() {
   _saidaItens = [];
   _saidaCupons = [];
   _saidaAbaForm = 'capa';
-  // proximo numero sequencial da serie 1 + datas de hoje
-  const prox = await nfeSaidaProximoNumero(1);
+  // proximo numero sequencial da serie padrao do Octano + datas de hoje
+  const prox = await nfeSaidaProximoNumero(NS_SERIE_PADRAO);
   const hoje = new Date().toISOString();
-  _saidaNotaAtual = { serie: 1, numero: prox, data_emissao: hoje, data_saida: hoje };
+  _saidaNotaAtual = { serie: NS_SERIE_PADRAO, numero: prox, data_emissao: hoje, data_saida: hoje };
   nfeSaidaRenderForm(_saidaNotaAtual);
 }
 
@@ -392,7 +395,7 @@ function nfeSaidaCapturarCampos() {
   const n = _saidaNotaAtual || {};
   const g = id => document.getElementById(id);
   if (g('ns-dest'))   n.destinatario_id = g('ns-dest').value;
-  if (g('ns-serie'))  n.serie = parseInt(g('ns-serie').value) || 1;
+  if (g('ns-serie'))  n.serie = parseInt(g('ns-serie').value) || NS_SERIE_PADRAO;
   if (g('ns-numero')) n.numero = parseInt(g('ns-numero').value) || null;
   if (g('ns-natop'))  n.natureza_op = g('ns-natop').value;
   if (g('ns-emissao'))n.data_emissao = g('ns-emissao').value || null;
@@ -440,7 +443,7 @@ function nfeSaidaAbaCapa(nota, somenteLeitura) {
         </div>
         <div class="ns-fg">
           <label>Série</label>
-          <input id="ns-serie" type="number" value="${nota?.serie||1}" ${somenteLeitura?'disabled':''} />
+          <input id="ns-serie" type="number" value="${nota?.serie||NS_SERIE_PADRAO}" ${somenteLeitura?'disabled':''} />
         </div>
         <div class="ns-fg">
           <label>Nº Nota</label>
@@ -486,6 +489,19 @@ function nfeSaidaRodapeStatus(nota, somenteLeitura) {
     const podeCancelar = nota && (nota.status === 'transmitida' || nota.status === 'autorizada')
       && nota.chave_nfe && nota.protocolo;
     const jaCancelada = nota && nota.status === 'cancelada';
+    // botoes de download: aparecem quando a nota tem documento fiscal (chave + xml)
+    let painelDownload = '';
+    if (nota && nota.chave_nfe && nota.xml_autorizado) {
+      painelDownload = `
+        <div style="background:#0f1a14;border:1px solid #2a5a3a;border-radius:8px;padding:14px;margin-top:12px">
+          <div style="color:#4caf50;font-size:0.86rem;font-weight:600;margin-bottom:10px">📄 Documentos da NF-e</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="ns-btn-linha" style="border-color:#2a5a3a;color:#7be0a0" onclick="nfeSaidaBaixarXml('${nota.id}')">⬇️ Baixar XML</button>
+            <button class="ns-btn-linha" style="border-color:#2a4a6a;color:#7cc4ff" onclick="nfeSaidaBaixarDanfe('${nota.id}')">⬇️ Baixar DANFE (PDF)</button>
+            <span id="ns-doc-msg" style="font-size:0.8rem;color:#888"></span>
+          </div>
+        </div>`;
+    }
     let painelCancel = '';
     if (podeCancelar) {
       painelCancel = `
@@ -511,7 +527,7 @@ function nfeSaidaRodapeStatus(nota, somenteLeitura) {
     }
     return `<div style="background:#1a1500;border:1px solid #5a4a00;border-radius:8px;padding:12px;color:#fbbf24;font-size:0.84rem">
         Esta nota está com status <strong>${nota.status}</strong>${nota.protocolo?' (protocolo '+nota.protocolo+')':''}. ${nota.motivo_rejeicao?'<br>Motivo: '+nota.motivo_rejeicao:''}
-      </div>${jaCancelada ? `<div style="background:#1a0f0f;border:1px solid #5a2a2a;border-radius:8px;padding:12px;margin-top:12px;color:#f87171;font-size:0.84rem">Esta NF-e foi <strong>cancelada</strong>${nota.protocolo_cancelamento?' (protocolo '+nota.protocolo_cancelamento+')':''}.${nota.justificativa_cancelamento?'<br>Justificativa: '+nota.justificativa_cancelamento:''}</div>` : ''}${painelCancel}`;
+      </div>${jaCancelada ? `<div style="background:#1a0f0f;border:1px solid #5a2a2a;border-radius:8px;padding:12px;margin-top:12px;color:#f87171;font-size:0.84rem">Esta NF-e foi <strong>cancelada</strong>${nota.protocolo_cancelamento?' (protocolo '+nota.protocolo_cancelamento+')':''}.${nota.justificativa_cancelamento?'<br>Justificativa: '+nota.justificativa_cancelamento:''}</div>` : ''}${painelDownload}${painelCancel}`;
   }
   return `<div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:8px;padding:10px;font-size:0.78rem;color:#7cc4ff">
       ℹ️ A nota é salva como <strong>rascunho</strong>. A transmissão à SEFAZ (assinatura + envio) será adicionada na próxima etapa, no servidor.
@@ -568,6 +584,67 @@ async function nfeSaidaCancelar() {
     }
   } catch (e) {
     setMsg('Erro ao cancelar: ' + e.message, '#f44');
+  }
+}
+
+// ---------- DOWNLOAD DE DOCUMENTOS (XML / DANFE) ----------
+async function nfeSaidaCarregarNota(id) {
+  // busca a nota completa no banco (xml_autorizado, chave, numero)
+  const { data } = await sb.from('oct_nfe_saida').select('*').eq('id', id).single();
+  return data;
+}
+
+async function nfeSaidaBaixarXml(id) {
+  const msg = document.getElementById('ns-doc-msg');
+  const setMsg = (t, c) => { if (msg) { msg.textContent = t; msg.style.color = c; } };
+  try {
+    const nota = await nfeSaidaCarregarNota(id);
+    if (!nota || !nota.xml_autorizado) { setMsg('XML não disponível para esta nota.', '#f44'); return; }
+    const nomeArq = (nota.chave_nfe || ('nfe-' + (nota.numero || id))) + '.xml';
+    const blob = new Blob([nota.xml_autorizado], { type: 'application/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = nomeArq;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    setMsg('✓ XML baixado.', '#4caf50');
+  } catch (e) {
+    setMsg('Erro ao baixar XML: ' + e.message, '#f44');
+  }
+}
+
+async function nfeSaidaBaixarDanfe(id) {
+  const msg = document.getElementById('ns-doc-msg');
+  const setMsg = (t, c) => { if (msg) { msg.textContent = t; msg.style.color = c; } };
+  try {
+    const nota = await nfeSaidaCarregarNota(id);
+    if (!nota || !nota.xml_autorizado) { setMsg('XML não disponível para gerar o DANFE.', '#f44'); return; }
+    // o DANFE precisa do nfeProc (com protocolo). Se o XML salvo não tiver, avisa.
+    if (!nota.xml_autorizado.includes('protNFe') && !nota.xml_autorizado.includes('infProt')) {
+      setMsg('XML sem protocolo — reemita para gerar o DANFE (notas antigas).', '#fbbf24');
+      return;
+    }
+    setMsg('📄 Gerando DANFE...', '#888');
+    const resp = await fetch(`${SEFAZ_URL}/danfe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml: nota.xml_autorizado }),
+    });
+    if (!resp.ok) {
+      let detalhe = '';
+      try { const j = await resp.json(); detalhe = j.erro || ''; } catch (e) {}
+      setMsg('Erro ao gerar DANFE. ' + detalhe, '#f44');
+      return;
+    }
+    const blob = await resp.blob();
+    const nomeArq = (nota.chave_nfe || ('danfe-' + (nota.numero || id))) + '.pdf';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = nomeArq;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    setMsg('✓ DANFE baixado.', '#4caf50');
+  } catch (e) {
+    setMsg('Erro ao baixar DANFE: ' + e.message, '#f44');
   }
 }
 
@@ -787,8 +864,8 @@ async function nfeSaidaSalvar() {
 
   const cab = {
     empresa_id: _saidaEmpresaId,
-    serie: n.serie || 1,
-    numero: n.numero || await nfeSaidaProximoNumero(n.serie || 1),
+    serie: n.serie || NS_SERIE_PADRAO,
+    numero: n.numero || await nfeSaidaProximoNumero(n.serie || NS_SERIE_PADRAO),
     modelo: '55',
     natureza_op: n.natureza_op || 'VENDA',
     cfop_padrao: n.cfop_padrao || null,
@@ -894,7 +971,7 @@ async function nfeSaidaTransmitir() {
 
     const nota = {
       numero: n.numero || Date.now() % 1000000,
-      serie: n.serie || 1,
+      serie: n.serie || NS_SERIE_PADRAO,
       natureza_op: n.natureza_op || 'VENDA',
       id_lote: '1',
       mod_frete: n.mod_frete || '9',
@@ -932,7 +1009,7 @@ async function nfeSaidaTransmitir() {
       try {
         await sb.from('oct_nfe_saida').update({
           status: 'transmitida', chave_nfe: r.chave, protocolo: r.protocolo,
-          xml_autorizado: r.xml_assinado || null, atualizado_em: new Date().toISOString(),
+          xml_autorizado: r.nfe_proc || r.xml_assinado || null, atualizado_em: new Date().toISOString(),
         }).eq('id', _saidaEditId);
       } catch (e) {}
       setTimeout(() => nfeSaidaCarregarLista(), 2500);
