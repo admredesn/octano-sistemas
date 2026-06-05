@@ -482,13 +482,93 @@ function nfeSaidaAbaCapa(nota, somenteLeitura) {
 
 function nfeSaidaRodapeStatus(nota, somenteLeitura) {
   if (somenteLeitura) {
+    // notas que podem ser canceladas: transmitida ou autorizada, com chave e protocolo
+    const podeCancelar = nota && (nota.status === 'transmitida' || nota.status === 'autorizada')
+      && nota.chave_nfe && nota.protocolo;
+    const jaCancelada = nota && nota.status === 'cancelada';
+    let painelCancel = '';
+    if (podeCancelar) {
+      painelCancel = `
+        <div style="background:#1a0f0f;border:1px solid #5a2a2a;border-radius:8px;padding:14px;margin-top:12px">
+          <div style="color:#f87171;font-size:0.86rem;font-weight:600;margin-bottom:8px">⚠️ Cancelar NF-e</div>
+          <div style="color:#aaa;font-size:0.76rem;margin-bottom:10px">
+            O cancelamento é um evento enviado à SEFAZ e é irreversível. Só é possível dentro do prazo legal (em geral 24h após a autorização). Informe a justificativa (mínimo 15 caracteres).
+          </div>
+          <div class="ns-fg" style="margin-bottom:10px">
+            <label>Justificativa do cancelamento *</label>
+            <input id="ns-cancel-just" type="text" maxlength="255" placeholder="Ex: erro nos dados do destinatário" />
+            <span id="ns-cancel-just-cnt" style="font-size:0.7rem;color:#888"></span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="ns-cancel-ambiente" style="padding:6px 8px;border-radius:6px;background:#0f1117;color:#e0e0e0;border:1px solid #2a2d3e;font-size:0.8rem">
+              <option value="homologacao" selected>Homologação</option>
+              <option value="producao">Produção</option>
+            </select>
+            <button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f44" onclick="nfeSaidaCancelar()">🚫 Cancelar NF-e na SEFAZ</button>
+            <span id="ns-cancel-msg" style="font-size:0.84rem"></span>
+          </div>
+        </div>`;
+    }
     return `<div style="background:#1a1500;border:1px solid #5a4a00;border-radius:8px;padding:12px;color:#fbbf24;font-size:0.84rem">
         Esta nota está com status <strong>${nota.status}</strong>${nota.protocolo?' (protocolo '+nota.protocolo+')':''}. ${nota.motivo_rejeicao?'<br>Motivo: '+nota.motivo_rejeicao:''}
-      </div>`;
+      </div>${jaCancelada ? `<div style="background:#1a0f0f;border:1px solid #5a2a2a;border-radius:8px;padding:12px;margin-top:12px;color:#f87171;font-size:0.84rem">Esta NF-e foi <strong>cancelada</strong>${nota.protocolo_cancelamento?' (protocolo '+nota.protocolo_cancelamento+')':''}.${nota.justificativa_cancelamento?'<br>Justificativa: '+nota.justificativa_cancelamento:''}</div>` : ''}${painelCancel}`;
   }
   return `<div style="background:#0f1a2a;border:1px solid #2a4a6a;border-radius:8px;padding:10px;font-size:0.78rem;color:#7cc4ff">
       ℹ️ A nota é salva como <strong>rascunho</strong>. A transmissão à SEFAZ (assinatura + envio) será adicionada na próxima etapa, no servidor.
     </div>`;
+}
+
+async function nfeSaidaCancelar() {
+  const n = _saidaNotaAtual || {};
+  const justEl = document.getElementById('ns-cancel-just');
+  const msg = document.getElementById('ns-cancel-msg');
+  const ambiente = document.getElementById('ns-cancel-ambiente')?.value || 'homologacao';
+  const setMsg = (txt, cor) => { if (msg) { msg.textContent = txt; msg.style.color = cor; } };
+
+  const just = (justEl?.value || '').trim();
+  if (just.length < 15) { setMsg('Justificativa precisa de no mínimo 15 caracteres.', '#f44'); return; }
+  if (!n.chave_nfe || !n.protocolo) { setMsg('Nota sem chave/protocolo — não é possível cancelar.', '#f44'); return; }
+  if (!_saidaEmpresa?.cert_path) { setMsg('Certificado não configurado (tela Empresa).', '#f44'); return; }
+  const senha = (typeof getCertSenha === 'function') ? getCertSenha() : null;
+  if (!senha) { setMsg('Senha do certificado não encontrada (tela Empresa).', '#f44'); return; }
+
+  if (!confirm(`Cancelar a NF-e nº ${n.numero} em ${ambiente.toUpperCase()}?\n\nEsta ação é IRREVERSÍVEL e será registrada na SEFAZ.`)) return;
+  setMsg('📡 Enviando cancelamento à SEFAZ...', '#888');
+
+  try {
+    const { data: cb } = await sb.storage.from('octano-certs').download(_saidaEmpresa.cert_path);
+    const buf = await cb.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const cnpj = (_saidaEmpresa.cnpj || '').replace(/\D/g, '');
+
+    const resp = await fetch(`${SEFAZ_URL}/cancelar`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chave: n.chave_nfe, protocolo: n.protocolo, justificativa: just,
+        cnpj, cert_base64: b64, cert_senha: senha, ambiente,
+      }),
+    });
+    const r = await resp.json();
+
+    if (r.ok) {
+      setMsg(`✓ CANCELADA! Protocolo ${r.protocolo_cancelamento || ''} — ${r.xmotivo || ''}`, '#4caf50');
+      try {
+        await sb.from('oct_nfe_saida').update({
+          status: 'cancelada',
+          protocolo_cancelamento: r.protocolo_cancelamento || null,
+          justificativa_cancelamento: just,
+          atualizado_em: new Date().toISOString(),
+        }).eq('id', _saidaEditId || n.id);
+      } catch (e) {}
+      setTimeout(() => nfeSaidaCarregarLista(), 2500);
+    } else {
+      const motivo = r.xmotivo || r.erro || r.detalhes || 'sem detalhe';
+      setMsg(`❌ [${r.etapa || '?'}] ${r.cstat_evento || r.cstat_lote || ''} ${motivo}`, '#f44');
+      console.error('Retorno /cancelar:', r);
+    }
+  } catch (e) {
+    setMsg('Erro ao cancelar: ' + e.message, '#f44');
+  }
 }
 
 // ---------- ABA ITENS ----------
