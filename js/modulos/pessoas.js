@@ -124,7 +124,7 @@ async function buscarCnpjPessoa() {
   }
   if (msg) { msg.textContent = 'Buscando dados na Receita...'; msg.style.color = '#888'; }
   try {
-    const resp = await fetch('https://brasilapi.com.br/api/cnpj/v1/' + cnpj);
+    const resp = await fetch(SEFAZ_URL + '/cnpj/' + cnpj);
     if (!resp.ok) {
       if (msg) { msg.textContent = 'CNPJ não encontrado.'; msg.style.color = '#fbbf24'; }
       return;
