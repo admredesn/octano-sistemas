@@ -43,7 +43,7 @@ async function moduloProdutos() {
       { campo: 'codigo', titulo: 'Código', largura: '110px', render: (v)=> v||'—' },
       { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v) },
       { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
-      { campo: 'preco_custo', titulo: 'Custo', tipo: 'numero', casas: 4, align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
+      { campo: 'preco_custo', titulo: 'Custo', align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
       { campo: 'preco_venda_a', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
       { campo: 'estoque', titulo: 'Estoque', align: 'right', largura: '110px', valor:(p)=>p.estoque, render: (v,p)=> Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:3})+' '+(p.unidade||'un') },
       { campo: 'ncm', titulo: 'NCM', largura: '90px', render: (v)=> v||'—' },
