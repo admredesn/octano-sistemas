@@ -343,7 +343,7 @@ async function nfeSaidaEditar(id) {
 function nfeSaidaRenderForm(nota) {
   const area = document.getElementById('ns-conteudo');
   if (!area) return;
-  const somenteLeitura = nota && nota.status !== 'rascunho';
+  const somenteLeitura = !!(nota && nota.status && nota.status !== 'rascunho');
   _saidaNotaAtual = nota;
 
   const titulo = nota ? (somenteLeitura ? '👁 NF-e Saída ' + (nota.numero || '') : '✏️ Editar rascunho') : '＋ Nova NF-e de Saída';
@@ -383,7 +383,7 @@ function nfeSaidaRenderForm(nota) {
 function nfeSaidaTrocarAba(aba) {
   nfeSaidaCapturarCampos();
   _saidaAbaForm = aba;
-  const somenteLeitura = _saidaNotaAtual && _saidaNotaAtual.status !== 'rascunho';
+  const somenteLeitura = !!(_saidaNotaAtual && _saidaNotaAtual.status && _saidaNotaAtual.status !== 'rascunho');
   nfeSaidaRenderForm(_saidaNotaAtual);
 }
 
