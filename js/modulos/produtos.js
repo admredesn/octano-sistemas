@@ -35,13 +35,15 @@ async function moduloProdutos() {
     aoFechar: "navegarPara('empresa')",
     rodapeDireita: perfil?.oct_empresas?.nome || '',
     dados: window._todosProdutos,
+    selecaoMultipla: true,
+    aoEditarLote: (selecionados) => abrirEdicaoLote(selecionados, empresaId),
     acoes: [
       { rotulo: 'Novo Produto', ico: '＋', onClick: `abrirFormProduto(null,'${empresaId}')` },
     ],
     colunas: [
       { campo: 'nome', titulo: 'Nome', largura: '220px' },
       { campo: 'codigo', titulo: 'Código', largura: '110px', render: (v)=> v||'—' },
-      { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v) },
+      { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v), filtroOpcoes: ['combustivel','lubrificante','filtro','aditivo','mercadoria','material','servico'] },
       { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
       { campo: 'preco_custo', titulo: 'Custo', align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
       { campo: 'preco_venda_a', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
@@ -102,6 +104,7 @@ async function abrirDetalheProduto(id) {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:0.85rem">
             <div><span class="nfe-label">Nome</span><br><strong>${p.nome}</strong></div>
             <div><span class="nfe-label">Código</span><br>${p.codigo||'—'}</div>
+            <div><span class="nfe-label">Cód. barras (EAN)</span><br>${p.ean||'—'}</div>
             <div><span class="nfe-label">Unidade</span><br>${p.unidade||'—'}</div>
             <div><span class="nfe-label">Categoria</span><br>${p.categoria||'—'}</div>
             <div><span class="nfe-label">NCM</span><br>${p.ncm||'—'}</div>
@@ -160,6 +163,7 @@ async function abrirFormProduto(id, empresaId) {
       <div class="form-grid">
         <div class="form-group span2"><label>Nome *</label><input id="fp-nome" type="text" value="${p?.nome||''}" /></div>
         <div class="form-group"><label>Código</label><input id="fp-codigo" type="text" value="${p?.codigo||''}" /></div>
+        <div class="form-group"><label>Código de barras (EAN)</label><input id="fp-ean" type="text" value="${p?.ean||''}" placeholder="leitor / código de barras" /></div>
         <div class="form-group">
           <label>Categoria</label>
           <select id="fp-categoria">
@@ -177,8 +181,15 @@ async function abrirFormProduto(id, empresaId) {
           </select>
         </div>
         <div class="form-group"><label>NCM</label><input id="fp-ncm" type="text" value="${p?.ncm||''}" /></div>
-        <div class="form-group"><label>Preço custo</label><input id="fp-custo" type="number" step="0.0001" value="${p?.preco_custo||0}" /></div>
-        <div class="form-group"><label>Preço venda</label><input id="fp-venda" type="number" step="0.01" value="${p?.preco_venda_a||0}" /></div>
+        <div class="form-group"><label>Preço custo</label><input id="fp-custo" type="number" step="0.0001" value="${p?.preco_custo||0}" oninput="produtoCalcMargem()" /></div>
+        <div class="form-group">
+          <label>Margem (%)</label>
+          <div style="display:flex;gap:6px">
+            <input id="fp-margem" type="number" step="0.01" value="" placeholder="ex: 30" style="flex:1" />
+            <button type="button" onclick="produtoAplicarMargem()" title="Calcular preço de venda pela margem" style="padding:0 12px;border-radius:6px;border:1px solid #2a5a3a;background:transparent;color:#7be0a0;cursor:pointer;white-space:nowrap">💰 Aplicar</button>
+          </div>
+        </div>
+        <div class="form-group"><label>Preço venda</label><input id="fp-venda" type="number" step="0.01" value="${p?.preco_venda_a||0}" oninput="produtoCalcMargem()" /></div>
         <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque||0}" /></div>
         <div class="form-group"><label>Estoque mínimo</label><input id="fp-estoque-min" type="number" step="0.001" value="${p?.estoque_minimo||0}" /></div>
         <div class="form-group">
@@ -251,6 +262,7 @@ async function salvarProduto(id, empresaId) {
   const dados = {
     empresa_id: empresaId, nome,
     codigo:        document.getElementById('fp-codigo').value.trim() || null,
+    ean:           document.getElementById('fp-ean')?.value.trim() || null,
     categoria:     document.getElementById('fp-categoria').value,
     unidade:       document.getElementById('fp-unidade').value,
     ncm:           document.getElementById('fp-ncm').value.trim() || null,
@@ -310,5 +322,134 @@ function produtoToggleComb() {
     if (adremGrp) adremGrp.style.outline = '1px solid #2a5a2a';
   } else {
     if (adremGrp) adremGrp.style.outline = 'none';
+  }
+}
+
+// ---------- #3 PRECIFICAÇÃO POR MARGEM ----------
+// Margem sobre o custo: venda = custo * (1 + margem/100)
+function produtoAplicarMargem() {
+  const custo = parseFloat(document.getElementById('fp-custo')?.value) || 0;
+  const margem = parseFloat(document.getElementById('fp-margem')?.value);
+  const vendaEl = document.getElementById('fp-venda');
+  if (!vendaEl) return;
+  if (isNaN(margem)) { alert('Informe a margem (%) desejada.'); return; }
+  if (custo <= 0) { alert('Informe o preço de custo antes de calcular pela margem.'); return; }
+  const venda = custo * (1 + margem / 100);
+  vendaEl.value = venda.toFixed(2);
+  produtoCalcMargem();
+}
+// Mostra a margem atual (a partir de custo e venda já preenchidos)
+function produtoCalcMargem() {
+  const custo = parseFloat(document.getElementById('fp-custo')?.value) || 0;
+  const venda = parseFloat(document.getElementById('fp-venda')?.value) || 0;
+  const margemEl = document.getElementById('fp-margem');
+  if (!margemEl) return;
+  if (custo > 0 && venda > 0) {
+    const m = ((venda / custo) - 1) * 100;
+    margemEl.placeholder = `atual: ${m.toFixed(1)}%`;
+  }
+}
+
+// ---------- #5 EDIÇÃO EM LOTE ----------
+async function abrirEdicaoLote(selecionados, empresaId) {
+  if (!selecionados || !selecionados.length) return;
+  const div = document.getElementById('form-produto');
+  div.style.display = 'block';
+  div.scrollIntoView({ behavior: 'smooth' });
+
+  const ids = selecionados.map(p => p.id);
+  window._loteIds = ids;
+  const nomes = selecionados.slice(0, 8).map(p => '• ' + p.nome).join('<br>') + (selecionados.length > 8 ? `<br>… e mais ${selecionados.length - 8}` : '');
+
+  div.innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a5a3a;border-radius:12px;padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="color:#7be0a0;font-size:0.95rem">✏️ Editar ${ids.length} produtos em lote</h3>
+        <button onclick="document.getElementById('form-produto').style.display='none'" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.3rem">✕</button>
+      </div>
+      <div style="background:#0f1a14;border:1px solid #2a5a3a;border-radius:6px;padding:8px 10px;margin-bottom:14px;font-size:0.74rem;color:#9fd0b0;max-height:90px;overflow:auto">${nomes}</div>
+      <div style="background:#1a1500;border:1px solid #5a4a00;border-radius:6px;padding:8px 10px;margin-bottom:14px;font-size:0.76rem;color:#fbbf24">
+        ⚠️ Só os campos marcados serão alterados. Os demais permanecem como estão em cada produto.
+      </div>
+      <div class="form-grid">
+        ${loteCampo('cat', 'Categoria', `<select id="lote-categoria">
+          ${['combustivel','lubrificante','filtro','aditivo','mercadoria','material','servico'].map(c=>`<option value="${c}">${c}</option>`).join('')}
+        </select>`)}
+        ${loteCampo('uni', 'Unidade', `<select id="lote-unidade">${['UN','LTS','KG','CX','PC','M','L','ML','G'].map(u=>`<option value="${u}">${u}</option>`).join('')}</select>`)}
+        ${loteCampo('cfop', 'CFOP venda', `<input id="lote-cfop" type="text" placeholder="ex 5102, 5656" />`)}
+        ${loteCampo('cst', 'CST ICMS', `<input id="lote-cst-icms" type="text" placeholder="ex 60, 61" />`)}
+        ${loteCampo('pis', 'CST PIS', `<input id="lote-cst-pis" type="text" placeholder="ex 01, 04" />`)}
+        ${loteCampo('cofins', 'CST COFINS', `<input id="lote-cst-cofins" type="text" placeholder="ex 01, 04" />`)}
+        ${loteCampo('ncm', 'NCM', `<input id="lote-ncm" type="text" />`)}
+        ${loteCampo('origem', 'Origem', `<input id="lote-origem" type="text" placeholder="0=nacional" />`)}
+        ${loteCampo('margem', 'Margem % (recalcula venda p/ cada custo)', `<input id="lote-margem" type="number" step="0.01" placeholder="ex 30" />`)}
+      </div>
+      <div class="form-acoes" style="margin-top:16px">
+        <button onclick="salvarEdicaoLote('${empresaId}')" class="btn-salvar">💾 Aplicar aos ${ids.length} produtos</button>
+        <button onclick="document.getElementById('form-produto').style.display='none'" style="padding:10px 20px;border-radius:6px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">Cancelar</button>
+        <span id="lote-msg" class="form-msg"></span>
+      </div>
+    </div>
+  `;
+}
+// monta um campo com checkbox de "alterar este campo"
+function loteCampo(key, label, inputHtml) {
+  return `<div class="form-group">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="lote-chk-${key}" /> <span>${label}</span>
+    </label>
+    ${inputHtml}
+  </div>`;
+}
+async function salvarEdicaoLote(empresaId) {
+  const msg = document.getElementById('lote-msg');
+  const ids = window._loteIds || [];
+  if (!ids.length) { msg.textContent = 'Nenhum produto selecionado.'; msg.style.color = '#f44'; return; }
+
+  const set = {};
+  const chk = (k) => document.getElementById('lote-chk-' + k)?.checked;
+  if (chk('cat'))    set.categoria   = document.getElementById('lote-categoria').value;
+  if (chk('uni'))    set.unidade     = document.getElementById('lote-unidade').value;
+  if (chk('cfop'))   set.cfop        = document.getElementById('lote-cfop').value.trim() || null;
+  if (chk('cst'))    set.cst_icms    = document.getElementById('lote-cst-icms').value.trim() || null;
+  if (chk('pis'))    set.cst_pis     = document.getElementById('lote-cst-pis').value.trim() || null;
+  if (chk('cofins')) set.cst_cofins  = document.getElementById('lote-cst-cofins').value.trim() || null;
+  if (chk('ncm'))    set.ncm         = document.getElementById('lote-ncm').value.trim() || null;
+  if (chk('origem')) set.origem      = document.getElementById('lote-origem').value.trim() || null;
+
+  const aplicarMargem = chk('margem');
+  const margem = parseFloat(document.getElementById('lote-margem')?.value);
+
+  if (Object.keys(set).length === 0 && !aplicarMargem) {
+    msg.textContent = 'Marque ao menos um campo para alterar.'; msg.style.color = '#fbbf24'; return;
+  }
+  if (aplicarMargem && isNaN(margem)) {
+    msg.textContent = 'Informe a margem (%) ou desmarque o campo.'; msg.style.color = '#f44'; return;
+  }
+
+  if (!confirm(`Aplicar as alterações marcadas a ${ids.length} produtos?`)) return;
+  msg.textContent = 'Aplicando...'; msg.style.color = '#aaa';
+
+  try {
+    // campos comuns: um único update para todos os ids
+    if (Object.keys(set).length > 0) {
+      const { error } = await sb.from('oct_produtos').update(set).in('id', ids);
+      if (error) throw error;
+    }
+    // margem: cada produto recalcula venda a partir do seu custo
+    if (aplicarMargem) {
+      const { data: prods } = await sb.from('oct_produtos').select('id,preco_custo').in('id', ids);
+      for (const p of (prods || [])) {
+        const custo = Number(p.preco_custo) || 0;
+        if (custo > 0) {
+          const venda = +(custo * (1 + margem / 100)).toFixed(2);
+          await sb.from('oct_produtos').update({ preco_venda_a: venda }).eq('id', p.id);
+        }
+      }
+    }
+    msg.textContent = `✅ ${ids.length} produtos atualizados!`; msg.style.color = '#4caf50';
+    setTimeout(() => moduloProdutos(), 1000);
+  } catch (e) {
+    msg.textContent = 'Erro: ' + (e.message || e); msg.style.color = '#f44';
   }
 }
