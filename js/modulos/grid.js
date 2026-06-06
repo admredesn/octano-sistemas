@@ -88,7 +88,7 @@
     const porPagina = cfg.porPagina || 200;
     const inst = {
       cfg, dados: cfg.dados || [], pagina: 0, porPagina,
-      filtros: {}, buscaGlobal: ''
+      filtros: {}, buscaGlobal: '', selecionados: new Set()
     };
     window._ogInstancias[idInst] = inst;
 
@@ -114,18 +114,34 @@
           <span style="color:#555;font-size:0.78rem">Busca rápida:</span>
           <input id="og-busca-${idInst}" type="text" placeholder="Pesquisar em tudo..." oninput="_ogRender('${idInst}')" />
         </div>
+        ${cfg.selecaoMultipla?`<div id="og-lote-bar-${idInst}" style="display:none;align-items:center;gap:10px;padding:8px 16px;background:#1a2a1a;border-bottom:1px solid #2a5a3a">
+          <span id="og-lote-cont-${idInst}" style="color:#7be0a0;font-size:0.82rem;font-weight:600"></span>
+          <button class="og-tb-btn" style="flex-direction:row;min-width:auto;border-color:#2a5a3a;color:#7be0a0" onclick="${cfg.aoEditarLote?`_ogEditarLote('${idInst}')`:''}">✏️ Editar em lote</button>
+          <button class="og-tb-btn" style="flex-direction:row;min-width:auto" onclick="_ogSelecionarTodos('${idInst}',false)">Limpar seleção</button>
+        </div>`:''}
         ${cfg.htmlExtra ? `<div class="og-extra" id="og-extra-${idInst}">${cfg.htmlExtra}</div>` : ''}
         <div class="og-scroll">
           <table class="og-tabela">
             <thead>
               <tr class="og-head">
+                ${cfg.selecaoMultipla?`<th style="width:36px;text-align:center"><input type="checkbox" id="og-selall-${idInst}" onclick="_ogSelecionarTodos('${idInst}',this.checked)" title="Selecionar todos" /></th>`:''}
                 <th style="width:54px">Seq.</th>
                 ${colsComFiltro.map(c=>`<th style="${c.largura?`width:${c.largura};`:''}${c.align?`text-align:${c.align};`:''}">${esc(c.titulo)}</th>`).join('')}
                 ${cfg.botaoExcluir?'<th style="width:50px"></th>':''}
               </tr>
               <tr class="og-filtros">
+                ${cfg.selecaoMultipla?'<th></th>':''}
                 <th></th>
-                ${colsComFiltro.map((c,ci)=>`<th>${c.semFiltro?'':`<input data-fcol="${ci}" oninput="_ogRender('${idInst}')" />`}</th>`).join('')}
+                ${colsComFiltro.map((c,ci)=>{
+                  if (c.semFiltro) return '<th></th>';
+                  if (c.filtroOpcoes) {
+                    const opts = ['<option value="">Todas</option>'].concat(
+                      c.filtroOpcoes.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`)
+                    ).join('');
+                    return `<th><select data-fcol="${ci}" data-exato="1" onchange="_ogRender('${idInst}')" style="width:100%;padding:3px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.76rem">${opts}</select></th>`;
+                  }
+                  return `<th><input data-fcol="${ci}" oninput="_ogRender('${idInst}')" /></th>`;
+                }).join('')}
                 ${cfg.botaoExcluir?'<th></th>':''}
               </tr>
             </thead>
@@ -153,8 +169,11 @@
     const janela = corpo.closest('.og-janela');
     const bg = (janela.querySelector('#og-busca-'+idInst)?.value||'').toLowerCase().trim();
     const fcols = {};
-    janela.querySelectorAll('.og-filtros input[data-fcol]').forEach(inp=>{
-      fcols[inp.getAttribute('data-fcol')] = (inp.value||'').toLowerCase().trim();
+    const fexatos = {};
+    janela.querySelectorAll('.og-filtros input[data-fcol], .og-filtros select[data-fcol]').forEach(inp=>{
+      const ci = inp.getAttribute('data-fcol');
+      fcols[ci] = (inp.value||'').toLowerCase().trim();
+      if (inp.getAttribute('data-exato')==='1') fexatos[ci] = true;
     });
 
     const filtradas = inst.dados.filter(linha=>{
@@ -164,7 +183,9 @@
       }
       for (const ci in fcols){
         if (!fcols[ci]) continue;
-        if (!textoFiltro(cfg.colunas[ci],linha).includes(fcols[ci])) return false;
+        const txt = textoFiltro(cfg.colunas[ci],linha);
+        if (fexatos[ci]) { if (txt !== fcols[ci]) return false; }
+        else if (!txt.includes(fcols[ci])) return false;
       }
       return true;
     });
@@ -175,12 +196,13 @@
     const ini = inst.pagina*inst.porPagina;
     const pagina = filtradas.slice(ini, ini+inst.porPagina);
 
-    const nCols = cfg.colunas.length + 1 + (cfg.botaoExcluir?1:0);
+    const nCols = cfg.colunas.length + 1 + (cfg.botaoExcluir?1:0) + (cfg.selecaoMultipla?1:0);
     if (pagina.length===0){
       corpo.innerHTML = `<tr><td colspan="${nCols}" style="text-align:center;padding:40px;color:#555">Nenhum registro encontrado.</td></tr>`;
     } else {
       corpo.innerHTML = pagina.map((linha,idx)=>{
         const seq = ini+idx+1;
+        const idxAbs = ini+idx;
         const tds = cfg.colunas.map(c=>{
           const v = valorCelula(c, linha);
           const render = c.render ? c.render(v, linha) : esc(v);
@@ -188,9 +210,12 @@
           const extra = c.tdStyle ? c.tdStyle : '';
           return `<td style="${align}${extra}">${render}</td>`;
         }).join('');
-        const dbl = cfg.aoClicarLinha ? `ondblclick="_ogClicarLinha('${idInst}',${ini+idx})"` : '';
-        const del = cfg.botaoExcluir ? `<td><button class="og-del" onclick="event.stopPropagation();_ogExcluir('${idInst}',${ini+idx})">✕</button></td>` : '';
-        return `<tr ${dbl}><td style="color:#666;text-align:center">${seq}</td>${tds}${del}</tr>`;
+        const dbl = cfg.aoClicarLinha ? `onclick="_ogClicarLinha('${idInst}',${idxAbs})"` : '';
+        const del = cfg.botaoExcluir ? `<td><button class="og-del" onclick="event.stopPropagation();_ogExcluir('${idInst}',${idxAbs})">✕</button></td>` : '';
+        const chave = linha.id != null ? linha.id : idxAbs;
+        const marcado = inst.selecionados && inst.selecionados.has(chave) ? 'checked' : '';
+        const chk = cfg.selecaoMultipla ? `<td style="text-align:center"><input type="checkbox" ${marcado} onclick="event.stopPropagation();_ogToggleSel('${idInst}',${idxAbs},this.checked)" /></td>` : '';
+        return `<tr ${dbl}>${chk}<td style="color:#666;text-align:center">${seq}</td>${tds}${del}</tr>`;
       }).join('');
     }
     // guarda a lista filtrada atual para os callbacks de indice
@@ -219,6 +244,7 @@
     const inst = window._ogInstancias[idInst]; if(!inst) return;
     const janela = document.getElementById('og-corpo-'+idInst).closest('.og-janela');
     janela.querySelectorAll('.og-filtros input').forEach(i=>i.value='');
+    janela.querySelectorAll('.og-filtros select').forEach(s=>s.value='');
     const g = janela.querySelector('#og-busca-'+idInst); if(g) g.value='';
     inst.pagina = 0;
     _ogRender(idInst);
@@ -232,6 +258,43 @@
     const inst = window._ogInstancias[idInst]; if(!inst||!inst.cfg.botaoExcluir) return;
     const linha = (inst._filtradas||inst.dados)[idxFiltrado];
     if (linha) inst.cfg.botaoExcluir(linha);
+  };
+
+  window._ogToggleSel = function(idInst, idxAbs, marcado){
+    const inst = window._ogInstancias[idInst]; if(!inst) return;
+    const linha = (inst._filtradas||inst.dados)[idxAbs];
+    if (!linha) return;
+    const chave = linha.id != null ? linha.id : idxAbs;
+    if (marcado) inst.selecionados.add(chave); else inst.selecionados.delete(chave);
+    _ogAtualizarBarraLote(idInst);
+  };
+  window._ogSelecionarTodos = function(idInst, marcado){
+    const inst = window._ogInstancias[idInst]; if(!inst) return;
+    const lista = inst._filtradas||inst.dados;
+    if (marcado) lista.forEach(l=>inst.selecionados.add(l.id!=null?l.id:lista.indexOf(l)));
+    else inst.selecionados.clear();
+    _ogRender(idInst);
+    _ogAtualizarBarraLote(idInst);
+    const selall = document.getElementById('og-selall-'+idInst);
+    if (selall) selall.checked = marcado;
+  };
+  window._ogAtualizarBarraLote = function(idInst){
+    const inst = window._ogInstancias[idInst]; if(!inst) return;
+    const bar = document.getElementById('og-lote-bar-'+idInst);
+    const cont = document.getElementById('og-lote-cont-'+idInst);
+    const n = inst.selecionados.size;
+    if (bar) bar.style.display = n>0 ? 'flex' : 'none';
+    if (cont) cont.textContent = `${n} produto${n!==1?'s':''} selecionado${n!==1?'s':''}`;
+  };
+  window._ogSelecionados = function(idInst){
+    const inst = window._ogInstancias[idInst]; if(!inst) return [];
+    const ids = inst.selecionados;
+    return (inst.dados||[]).filter(l=> ids.has(l.id!=null?l.id:null));
+  };
+  window._ogEditarLote = function(idInst){
+    const inst = window._ogInstancias[idInst]; if(!inst||!inst.cfg.aoEditarLote) return;
+    const sel = window._ogSelecionados(idInst);
+    if (sel.length) inst.cfg.aoEditarLote(sel);
   };
 
 })();
