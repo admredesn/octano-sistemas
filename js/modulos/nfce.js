@@ -51,7 +51,10 @@ function nfceRenderTela() {
 
   conteudo.innerHTML = `
     <div style="max-width:1100px;margin:0 auto">
-      <h2 style="color:#f97316;margin-bottom:14px">🧾 NFC-e — Venda no balcão</h2>
+      <h2 style="color:#f97316;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between">
+        <span>🧾 NFC-e — Venda no balcão</span>
+        <button onclick="nfceAbrirHistorico()" style="font-size:0.8rem;padding:6px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#60a5fa;cursor:pointer">📋 Histórico / Cancelar</button>
+      </h2>
       ${avisoCsc}
       <div style="display:grid;grid-template-columns:1fr 360px;gap:16px">
         <!-- esquerda: produto + itens -->
@@ -269,6 +272,13 @@ async function nfceEmitir() {
 function nfceMostrarResultado(r, total) {
   const div = document.getElementById('nfce-resultado');
   if (!div) return;
+  // guarda a última NFC-e emitida (para imprimir/cancelar)
+  window._nfceUltima = {
+    chave: r.chave, protocolo: r.protocolo,
+    xml: r.nfe_proc || r.xml_assinado || null,
+    ambiente: document.getElementById('nfce-ambiente')?.value || 'homologacao',
+    total: total,
+  };
   div.innerHTML = `
     <div style="background:#0f1a14;border:1px solid #2a5a3a;border-radius:10px;padding:16px;display:flex;gap:20px;align-items:center;flex-wrap:wrap">
       <div style="flex:1;min-width:260px">
@@ -278,6 +288,11 @@ function nfceMostrarResultado(r, total) {
           <div><strong>Protocolo:</strong> ${r.protocolo||'—'}</div>
           <div><strong>Total:</strong> R$ ${total.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
         </div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="nfceImprimirCupom()" style="padding:8px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">🖨️ Imprimir cupom</button>
+          <button onclick="nfceCancelar('${r.chave}','${r.protocolo}')" style="padding:8px 16px;border-radius:6px;border:1px solid #5a2a2a;background:transparent;color:#f87171;font-weight:600;cursor:pointer">✕ Cancelar NFC-e</button>
+        </div>
+        <div id="nfce-acao-msg" style="margin-top:8px;font-size:0.8rem"></div>
         ${r.qrcode ? `<div style="margin-top:8px;font-size:0.7rem;color:#666;word-break:break-all">${r.qrcode}</div>` : ''}
       </div>
       ${r.qrcode ? `<div style="text-align:center">
@@ -286,4 +301,203 @@ function nfceMostrarResultado(r, total) {
       </div>` : ''}
     </div>
   `;
+}
+
+// Gera e baixa o cupom (DANFCE) em PDF
+async function nfceImprimirCupom(xmlOverride, chaveOverride) {
+  const msgEl = document.getElementById('nfce-acao-msg');
+  const xml = xmlOverride || (window._nfceUltima && window._nfceUltima.xml);
+  const chave = chaveOverride || (window._nfceUltima && window._nfceUltima.chave) || 'cupom';
+  if (!xml) {
+    if (msgEl) { msgEl.textContent = 'XML da nota não disponível para impressão.'; msgEl.style.color = '#f87171'; }
+    else alert('XML da nota não disponível para impressão.');
+    return;
+  }
+  if (msgEl) { msgEl.textContent = '🖨️ Gerando cupom...'; msgEl.style.color = '#888'; }
+  try {
+    const resp = await fetch(`${SEFAZ_URL}/danfce`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    });
+    if (!resp.ok) {
+      let det = ''; try { det = (await resp.json()).erro || ''; } catch(e){}
+      throw new Error(det || ('HTTP ' + resp.status));
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    // abre em nova aba para impressão e também disponibiliza download
+    const w = window.open(url, '_blank');
+    if (!w) {
+      const a = document.createElement('a');
+      a.href = url; a.download = `cupom_${chave}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    if (msgEl) { msgEl.textContent = '✓ Cupom gerado.'; msgEl.style.color = '#4caf50'; }
+  } catch (e) {
+    if (msgEl) { msgEl.textContent = 'Erro ao gerar cupom: ' + e.message; msgEl.style.color = '#f87171'; }
+    else alert('Erro ao gerar cupom: ' + e.message);
+  }
+}
+
+// Cancela a NFC-e (evento 110111). Pede justificativa (15-255 chars).
+async function nfceCancelar(chave, protocolo, ambienteOverride) {
+  const msgEl = document.getElementById('nfce-acao-msg');
+  const setMsg = (t, c) => { if (msgEl) { msgEl.textContent = t; msgEl.style.color = c; } };
+  if (!chave || !protocolo) { setMsg('Chave/protocolo ausentes para cancelar.', '#f87171'); return; }
+  if (!_nfceEmpresa?.cert_path) { setMsg('Certificado não configurado.', '#f87171'); return; }
+  const senha = (typeof getCertSenha === 'function') ? getCertSenha() : null;
+  if (!senha) { setMsg('Senha do certificado não encontrada.', '#f87171'); return; }
+
+  const just = prompt('Justificativa do cancelamento (mínimo 15 caracteres):', '');
+  if (just === null) return; // cancelou o prompt
+  if (just.trim().length < 15) { setMsg('Justificativa deve ter ao menos 15 caracteres.', '#f87171'); return; }
+
+  const ambiente = ambienteOverride || (window._nfceUltima && window._nfceUltima.ambiente) || 'homologacao';
+  setMsg('📡 Cancelando NFC-e...', '#888');
+  try {
+    const { data: cb } = await sb.storage.from('octano-certs').download(_nfceEmpresa.cert_path);
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(await cb.arrayBuffer())));
+    const resp = await fetch(`${SEFAZ_URL}/cancelar-nfce`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chave, protocolo, justificativa: just.trim(),
+        cnpj: (_nfceEmpresa.cnpj || '').replace(/\D/g, ''),
+        cert_base64: b64, cert_senha: senha, ambiente,
+      }),
+    });
+    const r = await resp.json();
+    if (r.ok) {
+      setMsg(`✓ NFC-e cancelada! Protocolo ${r.protocolo_cancelamento || ''}`, '#4caf50');
+      // atualiza status no banco
+      try {
+        await sb.from('oct_nfce').update({
+          status: 'cancelada', motivo_rejeicao: just.trim(),
+        }).eq('chave_nfe', chave).eq('empresa_id', _nfceEmpresaId);
+      } catch(e) { console.error('Erro ao atualizar status:', e); }
+    } else {
+      setMsg(`❌ ${r.cstat_evento || r.cstat_lote || ''} ${r.xmotivo || r.erro || 'falha'}`, '#f87171');
+      console.error('Retorno /cancelar-nfce:', r);
+    }
+  } catch (e) {
+    setMsg('Erro ao cancelar: ' + e.message, '#f87171');
+  }
+}
+
+// ---------- HISTÓRICO DE NFC-e (listar / imprimir / cancelar) ----------
+async function nfceAbrirHistorico() {
+  const conteudo = document.getElementById('conteudo');
+  conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando histórico...</p>';
+  const { data: notas } = await sb.from('oct_nfce')
+    .select('id,numero,serie,chave_nfe,protocolo,valor_total,status,ambiente,cpf_consumidor,data_emissao,xml_autorizado')
+    .eq('empresa_id', _nfceEmpresaId).order('data_emissao', { ascending: false }).limit(100);
+
+  window._nfceHist = notas || [];
+  const linhas = (notas || []).map((n, i) => {
+    const dt = n.data_emissao ? new Date(n.data_emissao).toLocaleString('pt-BR') : '—';
+    const statusCor = n.status === 'autorizada' ? '#4caf50' : n.status === 'cancelada' ? '#f87171' : '#888';
+    const podeCancelar = n.status === 'autorizada' && n.chave_nfe && n.protocolo;
+    return `<tr style="border-bottom:1px solid #1a1d2e">
+      <td style="padding:7px 8px">${n.numero || '—'}</td>
+      <td style="padding:7px 8px">${dt}</td>
+      <td style="padding:7px 8px;text-align:right">R$ ${Number(n.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</td>
+      <td style="padding:7px 8px"><span style="color:${statusCor};font-weight:600">${n.status||'—'}</span></td>
+      <td style="padding:7px 8px;font-size:0.7rem;color:#888">${n.ambiente||''}</td>
+      <td style="padding:7px 8px;font-size:0.68rem;color:#666;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.chave_nfe||'—'}</td>
+      <td style="padding:7px 8px;text-align:center;white-space:nowrap">
+        <button onclick="nfceHistImprimir(${i})" title="Imprimir cupom" style="padding:4px 8px;border-radius:4px;border:none;background:#2563eb;color:#fff;cursor:pointer;font-size:0.72rem">🖨️</button>
+        ${podeCancelar ? `<button onclick="nfceHistCancelar(${i})" title="Cancelar" style="padding:4px 8px;border-radius:4px;border:1px solid #5a2a2a;background:transparent;color:#f87171;cursor:pointer;font-size:0.72rem;margin-left:4px">✕</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  conteudo.innerHTML = `
+    <div style="max-width:1100px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h2 style="color:#f97316">📋 Histórico de NFC-e</h2>
+        <button onclick="navegarPara('nfce')" style="font-size:0.8rem;padding:6px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#60a5fa;cursor:pointer">← Voltar à venda</button>
+      </div>
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+          <thead><tr style="color:#888;text-align:left;background:#1a1d2e">
+            <th style="padding:8px">Nº</th><th style="padding:8px">Emissão</th>
+            <th style="padding:8px;text-align:right">Total</th><th style="padding:8px">Status</th>
+            <th style="padding:8px">Amb.</th><th style="padding:8px">Chave</th><th style="padding:8px;text-align:center">Ações</th>
+          </tr></thead>
+          <tbody>${linhas || `<tr><td colspan="7" style="text-align:center;padding:30px;color:#555">Nenhuma NFC-e emitida ainda.</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div id="nfce-hist-msg" style="margin-top:10px;font-size:0.82rem;text-align:center"></div>
+    </div>
+  `;
+}
+
+function nfceHistImprimir(i) {
+  const n = (window._nfceHist || [])[i];
+  if (!n) return;
+  const msg = document.getElementById('nfce-hist-msg');
+  if (!n.xml_autorizado) {
+    if (msg) { msg.textContent = 'Esta nota não tem XML salvo para impressão.'; msg.style.color = '#f87171'; }
+    return;
+  }
+  // reusa a função de impressão, passando o xml e a chave desta nota
+  const fakeMsg = document.getElementById('nfce-hist-msg');
+  window._nfceUltima = { xml: n.xml_autorizado, chave: n.chave_nfe };
+  nfceImprimirCupomHist(n.xml_autorizado, n.chave_nfe);
+}
+
+async function nfceImprimirCupomHist(xml, chave) {
+  const msg = document.getElementById('nfce-hist-msg');
+  if (msg) { msg.textContent = '🖨️ Gerando cupom...'; msg.style.color = '#888'; }
+  try {
+    const resp = await fetch(`${SEFAZ_URL}/danfce`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    });
+    if (!resp.ok) { let d=''; try{d=(await resp.json()).erro||'';}catch(e){} throw new Error(d||('HTTP '+resp.status)); }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) { const a=document.createElement('a'); a.href=url; a.download=`cupom_${chave}.pdf`; document.body.appendChild(a); a.click(); a.remove(); }
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    if (msg) { msg.textContent = '✓ Cupom gerado.'; msg.style.color = '#4caf50'; }
+  } catch (e) {
+    if (msg) { msg.textContent = 'Erro ao gerar cupom: ' + e.message; msg.style.color = '#f87171'; }
+  }
+}
+
+async function nfceHistCancelar(i) {
+  const n = (window._nfceHist || [])[i];
+  if (!n) return;
+  const msg = document.getElementById('nfce-hist-msg');
+  const setMsg = (t,c)=>{ if(msg){ msg.textContent=t; msg.style.color=c; } };
+  if (!_nfceEmpresa?.cert_path) { setMsg('Certificado não configurado.', '#f87171'); return; }
+  const senha = (typeof getCertSenha === 'function') ? getCertSenha() : null;
+  if (!senha) { setMsg('Senha do certificado não encontrada.', '#f87171'); return; }
+  const just = prompt('Justificativa do cancelamento (mínimo 15 caracteres):', '');
+  if (just === null) return;
+  if (just.trim().length < 15) { setMsg('Justificativa deve ter ao menos 15 caracteres.', '#f87171'); return; }
+  setMsg('📡 Cancelando...', '#888');
+  try {
+    const { data: cb } = await sb.storage.from('octano-certs').download(_nfceEmpresa.cert_path);
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(await cb.arrayBuffer())));
+    const resp = await fetch(`${SEFAZ_URL}/cancelar-nfce`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chave: n.chave_nfe, protocolo: n.protocolo, justificativa: just.trim(),
+        cnpj: (_nfceEmpresa.cnpj||'').replace(/\D/g,''),
+        cert_base64: b64, cert_senha: senha, ambiente: n.ambiente || 'homologacao',
+      }),
+    });
+    const r = await resp.json();
+    if (r.ok) {
+      setMsg(`✓ NFC-e cancelada! Protocolo ${r.protocolo_cancelamento||''}`, '#4caf50');
+      await sb.from('oct_nfce').update({ status:'cancelada', motivo_rejeicao: just.trim() }).eq('id', n.id);
+      setTimeout(() => nfceAbrirHistorico(), 1200);
+    } else {
+      setMsg(`❌ ${r.cstat_evento || r.cstat_lote || ''} ${r.xmotivo || r.erro || 'falha'}`, '#f87171');
+    }
+  } catch (e) {
+    setMsg('Erro ao cancelar: ' + e.message, '#f87171');
+  }
 }
