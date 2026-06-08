@@ -147,11 +147,14 @@ async function salvarBico() {
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
 
   const codigoHex = (document.getElementById('bico-codigo-hex').value || '').trim().toUpperCase();
+  // combustivel vem do tanque (contexto), pois oct_bicos.combustivel e NOT NULL
+  const combustivel = (window.__bicoCtx && window.__bicoCtx.combustivel) || null;
   const dados = {
     empresa_id: perfil.empresa_id,
     tanque_id: document.getElementById('bico-tanque-id').value,
     numero: parseInt(document.getElementById('bico-numero').value),
     codigo_hex: codigoHex || null,
+    combustivel: combustivel,
     bomba: parseInt(document.getElementById('bico-bomba').value) || null,
     ativo: document.getElementById('bico-ativo').value === 'true',
   };
