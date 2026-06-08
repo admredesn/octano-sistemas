@@ -64,7 +64,7 @@ async function moduloTanques() {
 
   const { data: tanques } = await sb
     .from('oct_tanques')
-    .select('*, oct_bicos(*)')
+    .select('*, oct_bicos(id,numero,codigo_hex,bomba,ativo)')
     .eq('empresa_id', empresaId)
     .order('numero');
 
@@ -101,9 +101,13 @@ async function moduloTanques() {
                   ${perc <= 15 ? '<div class="tanque-badge alerta">⚠️ Estoque crítico</div>' :
                     perc <= 30 ? '<div class="tanque-badge aviso">📉 Estoque baixo</div>' : ''}
                   <div class="tanque-bicos">
-                    ${bicos.map(b => `<span class="bico-tag">B${b.numero}</span>`).join('')}
+                    ${bicos.map(b => `<span class="bico-tag">B${b.numero}${b.codigo_hex ? ` <small style="opacity:.6">${b.codigo_hex}</small>` : ''}</span>`).join('')}
                     ${bicos.length === 0 ? '<span style="color:#555;font-size:0.75rem">Sem bicos</span>' : ''}
                   </div>
+                  <button onclick='event.stopPropagation(); abrirBicosTanque("${t.id}", ${t.numero}, "${(t.combustivel||'').replace(/"/g,'&quot;')}")'
+                    style="margin-top:8px;padding:5px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#1a1d2b;color:#f97316;cursor:pointer;font-size:0.78rem;width:100%">
+                    🔫 Gerenciar bicos
+                  </button>
                 </div>
               </div>
             `;
