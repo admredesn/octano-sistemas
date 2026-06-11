@@ -51,8 +51,9 @@ async function afeListar() {
               <td style="padding:9px 12px;text-align:right">${Number(a.litros || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3 })}</td>
               <td style="padding:9px 12px">${afeEsc(a.vendedor) || '—'}</td>
               <td style="padding:9px 12px;color:#9aa">${dh}</td>
-              <td style="padding:9px 12px;text-align:center">
+              <td style="padding:9px 12px;text-align:center;white-space:nowrap">
                 <button onclick="afeAutorizar('${a.id}')" style="padding:5px 12px;border-radius:6px;border:none;background:#16a34a;color:#fff;font-weight:600;cursor:pointer;font-size:0.78rem">✓ Autorizar</button>
+                <button onclick="afeCancelar('${a.id}')" style="padding:5px 12px;border-radius:6px;border:none;background:#dc2626;color:#fff;font-weight:600;cursor:pointer;font-size:0.78rem;margin-left:6px">✕ Cancelar</button>
               </td>
             </tr>`;
           }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:#666">Nenhuma aferição aguardando autorização.</td></tr>'}
@@ -69,6 +70,16 @@ async function afeAutorizar(id) {
               observacao: 'Aferição autorizada - combustível retornado ao tanque' })
     .eq('id', id);
   if (error) { alert('Erro ao autorizar: ' + error.message); return; }
+  await afeListar();
+}
+
+// cancela a aferição: volta o abastecimento para 'pendente' (reaparece normal no PDV)
+async function afeCancelar(id) {
+  if (!confirm('Cancelar esta aferição? O abastecimento volta para a lista normal do PDV e poderá ser transmitido ou cancelado.')) return;
+  const { error } = await sb.from('oct_pdv_abastecimentos')
+    .update({ tipo: 'abastecimento', status: 'pendente', observacao: null })
+    .eq('id', id);
+  if (error) { alert('Erro ao cancelar: ' + error.message); return; }
   await afeListar();
 }
 
