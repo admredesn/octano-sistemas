@@ -302,7 +302,7 @@ async function renderSpedPisCofins(empresaId, empresa) {
     + '<select id="spis-mes" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
     + ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m,i) => '<option value="'+(i+1)+'" '+(i+1===mesAtual?'selected':'')+'>'+m+'</option>').join('')
     + '</select>'
-    + '<button onclick="gerarSpedPisCofins()" class="btn-salvar">Gerar SPED</button>'
+    + '<button onclick="gerarSpedPisCofinsV2()" class="btn-salvar">Gerar SPED</button>'
     + '</div></div>'
     + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">'
     + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco 0</div><div style="color:#60a5fa;font-weight:600;margin-top:4px">Abertura + Cadastros</div><div style="font-size:0.75rem;color:#555">0000, 0100, 0110, 0140, 0150, 0190, 0200</div></div>'
