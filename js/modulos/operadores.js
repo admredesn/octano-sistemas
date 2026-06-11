@@ -105,10 +105,13 @@ async function opSalvar() {
   // e-mail interno derivado do usuário (operador nunca o vê)
   const emailLogin = `${usuario}.${empresaId.slice(0, 8)}@octano.local`;
 
-  // client secundário para NÃO trocar a sessão do gerente
+  // client secundário para NÃO trocar a sessão do gerente.
+  // SUPABASE_URL/ANON_KEY são const globais do config.js (não ficam em window).
+  const _url = (typeof SUPABASE_URL !== 'undefined') ? SUPABASE_URL : (window.SUPABASE_URL || '');
+  const _key = (typeof SUPABASE_ANON_KEY !== 'undefined') ? SUPABASE_ANON_KEY : (window.SUPABASE_ANON_KEY || '');
   let sb2;
   try {
-    sb2 = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+    sb2 = window.supabase.createClient(_url, _key, {
       auth: { persistSession: false, autoRefreshToken: false, storageKey: 'octano-op-temp' }
     });
   } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao iniciar criação: ' + e.message; return; }
