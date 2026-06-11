@@ -14,6 +14,7 @@ const MODULOS = [
   { id: 'importar_sped', label: 'Importar SPED', breve: false },
   { id: 'operadores',    label: 'Operadores',     breve: false },
   { id: 'afericoes',     label: 'Aferições',      breve: false },
+  { id: 'notas_prazo',   label: 'Notas a Prazo',  breve: false },
   { id: 'formas_pagamento', label: 'Formas de Pagamento', breve: false },
   { id: 'lmc',           label: 'LMC',            breve: false },
   { id: 'despesas',      label: 'Despesas',       breve: true  },
@@ -119,6 +120,7 @@ function navegarPara(modulo){
     importar_sped: moduloImportarSped,
     operadores: moduloOperadores,
     afericoes: moduloAfericoes,
+    notas_prazo: moduloNotasPrazo,
     formas_pagamento: moduloFormasPagamento,
     lmc:           moduloLmc,
   };
