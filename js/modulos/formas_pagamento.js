@@ -169,10 +169,27 @@ async function fpPrecoListar() {
     <div id="fp-excecoes"></div>`;
 }
 
-function fpPrecoForm(t) {
+async function fpPrecoForm(t) {
   t = t || {};
   const div = document.getElementById('fp-preco-form');
   const formas = window._fpFormas || [];
+  const eid = window._fpEmpresaId;
+  div.innerHTML = '<p style="color:#888;padding:10px">Carregando...</p>';
+
+  // carrega clientes da empresa e vínculos existentes desta tabela
+  const [cliRes, vincCliRes, vincFormaRes] = await Promise.all([
+    sb.from('oct_pessoas').select('id,nome,documento,classificacoes,tipo').eq('empresa_id', eid).eq('ativo', true).order('nome'),
+    t.id ? sb.from('oct_tabela_preco_clientes').select('cliente_id').eq('tabela_id', t.id) : Promise.resolve({ data: [] }),
+    t.id ? sb.from('oct_tabela_preco_formas').select('forma_id').eq('tabela_id', t.id) : Promise.resolve({ data: [] }),
+  ]);
+  const todosClientes = (cliRes.data || []).filter(p => {
+    const c = Array.isArray(p.classificacoes) ? p.classificacoes : (p.tipo ? [p.tipo] : []);
+    return c.includes('cliente') || c.includes('ambos');
+  });
+  const cliVinculados = new Set((vincCliRes.data || []).map(v => v.cliente_id));
+  const formaVinculadas = new Set((vincFormaRes.data || []).map(v => v.forma_id));
+  window._fpClientesCache = todosClientes;
+
   div.innerHTML = `
     <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;margin-bottom:8px">
       <h3 style="color:#ddd;margin-bottom:12px">${t.id ? 'Editar' : 'Nova'} condição de pagamento</h3>
@@ -205,6 +222,32 @@ function fpPrecoForm(t) {
         <strong style="color:#ddd">Exemplo:</strong> produto com preço R$ 5,00 →
         <span id="fpp-exemplo" style="color:#4ade80">R$ 5,00</span>
       </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <div style="background:#0f1119;border-radius:8px;padding:12px">
+          <label style="color:#ddd;font-size:0.82rem;display:block;margin-bottom:8px">👤 Clientes desta tabela</label>
+          <p style="color:#666;font-size:0.72rem;margin-bottom:8px">A condição só se aplica a estes clientes. Vazio = não aplica a ninguém.</p>
+          <div style="max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
+            ${todosClientes.length ? todosClientes.map(c => `
+              <label style="color:#ddd;font-size:0.82rem;display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+                <input type="checkbox" class="fpp-cli" value="${c.id}" ${cliVinculados.has(c.id) ? 'checked' : ''}>
+                ${fpEsc(c.nome)}
+              </label>`).join('') : '<span style="color:#666;font-size:0.78rem">Nenhum cliente cadastrado.</span>'}
+          </div>
+        </div>
+        <div style="background:#0f1119;border-radius:8px;padding:12px">
+          <label style="color:#ddd;font-size:0.82rem;display:block;margin-bottom:8px">💳 Formas que disparam esta tabela</label>
+          <p style="color:#666;font-size:0.72rem;margin-bottom:8px">Só aplica se a forma escolhida no PDV estiver marcada aqui.</p>
+          <div style="max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
+            ${formas.length ? formas.map(fm => `
+              <label style="color:#ddd;font-size:0.82rem;display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+                <input type="checkbox" class="fpp-forma-vinc" value="${fm.id}" ${formaVinculadas.has(fm.id) ? 'checked' : ''}>
+                ${fpEsc(fm.nome)}
+              </label>`).join('') : '<span style="color:#666;font-size:0.78rem">Cadastre formas de recebimento primeiro.</span>'}
+          </div>
+        </div>
+      </div>
+
       <div style="display:flex;gap:8px;margin-top:14px">
         <button onclick="fpPrecoSalvar('${t.id || ''}')" class="btn-salvar">Salvar</button>
         <button onclick="document.getElementById('fp-preco-form').innerHTML=''" class="nfe-aba">Cancelar</button>
@@ -244,10 +287,25 @@ async function fpPrecoSalvar(id) {
     forma_padrao: document.getElementById('fpp-forma').value || null,
     ativo: document.getElementById('fpp-ativo').checked,
   };
-  const q = id ? sb.from('oct_tabelas_preco').update(reg).eq('id', id)
-               : sb.from('oct_tabelas_preco').insert(reg);
-  const { error } = await q;
+  const q = id ? sb.from('oct_tabelas_preco').update(reg).eq('id', id).select().single()
+               : sb.from('oct_tabelas_preco').insert(reg).select().single();
+  const { data: salvo, error } = await q;
   if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
+
+  const tabelaId = salvo.id;
+  // grava vínculos de clientes (substitui os existentes)
+  const cliIds = [...document.querySelectorAll('.fpp-cli:checked')].map(c => c.value);
+  await sb.from('oct_tabela_preco_clientes').delete().eq('tabela_id', tabelaId);
+  if (cliIds.length) {
+    await sb.from('oct_tabela_preco_clientes').insert(cliIds.map(cid => ({ empresa_id: eid, tabela_id: tabelaId, cliente_id: cid })));
+  }
+  // grava vínculos de formas (substitui os existentes)
+  const formaIds = [...document.querySelectorAll('.fpp-forma-vinc:checked')].map(c => c.value);
+  await sb.from('oct_tabela_preco_formas').delete().eq('tabela_id', tabelaId);
+  if (formaIds.length) {
+    await sb.from('oct_tabela_preco_formas').insert(formaIds.map(fid => ({ empresa_id: eid, tabela_id: tabelaId, forma_id: fid })));
+  }
+
   document.getElementById('fp-preco-form').innerHTML = '';
   fpPrecoListar();
 }
