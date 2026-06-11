@@ -121,11 +121,15 @@ async function opSalvar() {
   const novoUid = signUpData?.user?.id;
   if (!novoUid) { msg.style.color = '#f87171'; msg.textContent = 'Não foi possível obter o ID do novo usuário (verifique confirmação de e-mail no Supabase).'; return; }
 
-  // grava o perfil vinculado (usando a sessão do gerente, que continua ativa em sb)
-  const { error: errPerfil } = await sb.from('oct_perfis').insert({
+  // grava o perfil vinculado (usando a sessão do gerente, que continua ativa em sb).
+  // A coluna 'perfil' tem check constraint que aceita 'master'; o nível de acesso
+  // (gerente x operador) é distinguido pelo boolean 'master'.
+  // Usa upsert para ser idempotente (permite retry se um login ficou órfão antes).
+  const ehGerente = (perfil === 'gerente');
+  const { error: errPerfil } = await sb.from('oct_perfis').upsert({
     id: novoUid, empresa_id: empresaId, nome, usuario, email_login: emailLogin,
-    perfil, master: perfil === 'gerente', ativo: true,
-  });
+    perfil: 'master', master: ehGerente, ativo: true,
+  }, { onConflict: 'id' });
   if (errPerfil) { msg.style.color = '#f87171'; msg.textContent = 'Login criado, mas falhou ao gravar o perfil: ' + errPerfil.message; return; }
 
   msg.style.color = '#4caf50'; msg.textContent = `Operador "${nome}" criado! Usuário: ${usuario}`;
