@@ -12,6 +12,7 @@ const MODULOS = [
   { id: 'contas_pagar',  label: 'Ctas.Pagar',     breve: false },
   { id: 'contabilidade', label: 'Contabilidade',  breve: false },
   { id: 'importar_sped', label: 'Importar SPED', breve: false },
+  { id: 'operadores',    label: 'Operadores',     breve: false },
   { id: 'lmc',           label: 'LMC',            breve: false },
   { id: 'despesas',      label: 'Despesas',       breve: true  },
   { id: 'dre',           label: 'DRE',            breve: true  },
@@ -114,6 +115,7 @@ function navegarPara(modulo){
     contas_pagar:  moduloContasPagar,
     contabilidade: moduloContabilidade,
     importar_sped: moduloImportarSped,
+    operadores: moduloOperadores,
     lmc:           moduloLmc,
   };
   if(fns[modulo]) fns[modulo]();
