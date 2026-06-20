@@ -16,9 +16,35 @@ async function moduloAfericoes() {
   if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
   window._afeEmpresaId = perfil.empresa_id;
   await afeListar();
+  afeIniciarAutoRefresh();
 }
 
-async function afeListar() {
+// ---- auto-refresh (polling) -------------------------------------------------
+// O retaguarda nao tinha atualizacao automatica: afericoes novas vindas do PDV
+// so apareciam apos F5. Este polling recarrega a lista a cada 10s ENQUANTO o
+// modulo de afericoes estiver aberto, e so redesenha quando o conjunto de
+// pendentes muda (nao pisca a tela nem atrapalha cliques).
+let _afeTimer = null;
+let _afeAssinatura = null;   // "impressao digital" da lista atual (ids+status)
+
+function afeIniciarAutoRefresh() {
+  if (_afeTimer) clearInterval(_afeTimer);
+  _afeTimer = setInterval(async () => {
+    // parou de ver afericoes? encerra o polling.
+    if (typeof _moduloAtual !== 'undefined' && _moduloAtual !== 'afericoes') {
+      clearInterval(_afeTimer); _afeTimer = null; _afeAssinatura = null; return;
+    }
+    // se um dialogo (confirm) estiver aberto, nao redesenha agora
+    await afeListar(true);  // modo silencioso: so redesenha se mudou
+  }, 10000);
+}
+
+function _afeFingerprint(rows) {
+  // identifica o estado da lista: se mudou (entrou/saiu afericao), redesenha
+  return (rows || []).map(r => r.id + ':' + r.status).sort().join('|');
+}
+
+async function afeListar(silencioso) {
   const conteudo = document.getElementById('conteudo');
   const empresaId = window._afeEmpresaId;
   const { data, error } = await sb.from('oct_pdv_abastecimentos')
@@ -27,6 +53,17 @@ async function afeListar() {
     .order('data_mov', { ascending: false });
 
   const rows = data || [];
+
+  // no modo silencioso (polling), so redesenha se o conjunto mudou — evita
+  // piscar a tela e nao atrapalha quem esta clicando.
+  if (silencioso && !error) {
+    const fp = _afeFingerprint(rows);
+    if (fp === _afeAssinatura) return;   // nada mudou
+    _afeAssinatura = fp;
+  } else {
+    _afeAssinatura = _afeFingerprint(rows);
+  }
+
   conteudo.innerHTML = `
     <div style="max-width:1000px;padding:18px 20px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
