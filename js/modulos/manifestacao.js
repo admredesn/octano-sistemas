@@ -22,7 +22,7 @@ async function moduloManifestacao() {
 
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
-  _manifEmpresaId = perfil?.empresa_id;
+  _manifEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id);
   _manifEmpresa = perfil?.oct_empresas;
 
   if (!_manifEmpresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
