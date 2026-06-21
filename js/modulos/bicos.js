@@ -14,7 +14,7 @@
 async function abrirBicosTanque(tanqueId, tanqueNumero, combustivel) {
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
 
   const { data: bicos } = await sb
     .from('oct_bicos')
@@ -150,7 +150,7 @@ async function salvarBico() {
   // combustivel vem do tanque (contexto), pois oct_bicos.combustivel e NOT NULL
   const combustivel = (window.__bicoCtx && window.__bicoCtx.combustivel) || null;
   const dados = {
-    empresa_id: perfil.empresa_id,
+    empresa_id: ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id),
     tanque_id: document.getElementById('bico-tanque-id').value,
     numero: parseInt(document.getElementById('bico-numero').value),
     codigo_hex: codigoHex || null,
