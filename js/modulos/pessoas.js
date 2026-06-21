@@ -9,7 +9,7 @@ async function moduloPessoas() {
 
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(nome)').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
   window._pessoasEmpresaId = empresaId;
 
