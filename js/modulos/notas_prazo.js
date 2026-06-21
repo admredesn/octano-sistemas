@@ -7,7 +7,7 @@ async function moduloNotasPrazo() {
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
   if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
-  window._npEmpresaId = perfil.empresa_id;
+  window._npEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id);
   await npListar();
 }
 
