@@ -22,7 +22,7 @@ async function moduloNfe() {
     .from('oct_perfis').select('empresa_id, oct_empresas(*)')
     .eq('id', session.user.id).single();
 
-  _empresaId = perfil?.empresa_id;
+  _empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   _empresa = perfil?.oct_empresas;
 
   if (!_empresaId) {
