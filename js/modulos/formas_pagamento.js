@@ -15,7 +15,7 @@ async function moduloFormasPagamento() {
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
   if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
-  window._fpEmpresaId = perfil.empresa_id;
+  window._fpEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id);
 
   conteudo.innerHTML = `
     <div style="padding:14px 20px">
