@@ -63,21 +63,18 @@ async function fazerLogout(){
 }
 
 async function renderApp(session){
-  const { data: perfil } = await sb
-    .from('oct_perfis')
-    .select('empresa_id, oct_empresas(nome, nome_fantasia)')
-    .eq('id', session.user.id).single();
-  const emp = perfil?.oct_empresas;
-  const nomeEmpresa = emp?.nome_fantasia || emp?.nome || 'Minha Empresa';
+  // carrega o contexto multi-empresa (perfil, lista de empresas, empresa ativa)
+  await empresaCarregarContexto(session);
   document.getElementById('app').innerHTML =
     '<div class="topbar">' +
       '<div class="logo">OCTANO SISTEMAS</div>' +
-      '<div class="empresa-info" onclick="navegarPara(\'empresa\')">🏢 ' + nomeEmpresa + '</div>' +
+      '<div class="empresa-info" id="empresa-seletor"></div>' +
       '<div class="usuario"><span>' + (session.user.email?.replace('@octano.interno','')) + '</span>' +
       '<button onclick="fazerLogout()">Sair</button></div>' +
     '</div>' +
     '<div class="toolbar" id="toolbar"></div>' +
     '<div class="conteudo" id="conteudo"></div>';
+  empresaRenderSeletor();
   renderToolbar();
   if(!document.getElementById('style-extra')){
     const s=document.createElement('style');s.id='style-extra';
