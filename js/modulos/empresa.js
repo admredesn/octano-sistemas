@@ -352,8 +352,7 @@ async function uploadCertificado() {
   msg.textContent = '📤 Enviando...'; msg.style.color = '#888';
 
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : null;
   if (!empresaId) { msg.textContent = 'Salve os dados da empresa primeiro.'; msg.style.color = '#f44'; return; }
 
   const path = `certificados/${empresaId}/${certFile.name}`;
@@ -376,10 +375,10 @@ async function uploadCertificado() {
 async function removerCertificado() {
   if (!confirm('Remover certificado digital?')) return;
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
+  const _eid = (typeof empresaAtiva==='function') ? empresaAtiva() : null;
   await sb.from('oct_empresas').update({
     cert_nome: null, cert_path: null, cert_validade: null, cert_titular: null, cert_emissao: null
-  }).eq('id', perfil.empresa_id);
+  }).eq('id', _eid);
   // limpa a senha guardada ao remover o certificado
   if (typeof setCertSenha === 'function') setCertSenha(null);
   location.reload();
