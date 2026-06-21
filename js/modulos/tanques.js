@@ -55,7 +55,7 @@ async function moduloTanques() {
 
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
 
   if (!empresaId) {
     conteudo.innerHTML = '<p style="color:#f44">Configure sua empresa primeiro.</p>';
@@ -202,7 +202,7 @@ async function salvarTanque() {
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
 
   const dados = {
-    empresa_id: perfil.empresa_id,
+    empresa_id: ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id),
     numero: parseInt(document.getElementById('tanque-numero').value),
     combustivel: document.getElementById('tanque-combustivel').value,
     capacidade: parseFloat(document.getElementById('tanque-capacidade').value) || 0,
