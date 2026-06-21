@@ -13,7 +13,7 @@ async function moduloContabilidade(subaba) {
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   const empresa = perfil?.oct_empresas;
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
   window._contab_empresa_id = empresaId;
