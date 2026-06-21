@@ -12,9 +12,10 @@ async function moduloAfericoes() {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
-  if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
-  window._afeEmpresaId = perfil.empresa_id;
+  // multi-empresa: usa a empresa ATIVA (seletor), nao a fixa do perfil
+  const _empId = (typeof empresaAtiva==='function') ? empresaAtiva() : null;
+  if (!_empId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Selecione uma empresa.</p>'; return; }
+  window._afeEmpresaId = _empId;
   await afeListar();
   afeIniciarAutoRefresh();
 }
