@@ -21,9 +21,18 @@ async function moduloManifestacao() {
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
 
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
-  _manifEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id);
-  _manifEmpresa = perfil?.oct_empresas;
+  _manifEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():null);
+  if (!_manifEmpresaId) {
+    const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
+    _manifEmpresaId = perfil?.empresa_id;
+  }
+  // carrega o OBJETO COMPLETO da empresa ATIVA (inclui certificado).
+  // Antes pegava perfil.oct_empresas (sempre a do perfil = Gloria), causando
+  // carregar o certificado da empresa errada. Agora busca pela empresa ativa.
+  if (_manifEmpresaId) {
+    const { data: empAtiva } = await sb.from('oct_empresas').select('*').eq('id', _manifEmpresaId).single();
+    _manifEmpresa = empAtiva || {};
+  }
 
   if (!_manifEmpresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
 

@@ -24,6 +24,7 @@ async function moduloImportarSped() {
   if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
   window._imp_empresa_id = ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id);
   window._imp_empresa = perfil.oct_empresas;
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single(); if(_ea) window._imp_empresa=_ea; }
   _spedParsed = null;
 
   conteudo.innerHTML = `

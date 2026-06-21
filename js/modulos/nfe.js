@@ -24,6 +24,7 @@ async function moduloNfe() {
 
   _empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   _empresa = perfil?.oct_empresas;
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single(); if(_ea) _empresa=_ea; }
 
   if (!_empresaId) {
     conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>';

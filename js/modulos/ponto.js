@@ -17,6 +17,7 @@ async function moduloPonto() {
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
   window._pontoEmpresaId = empresaId;
   window._pontoEmpresaNome = perfil?.oct_empresas?.nome || '';
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('nome').eq('id',empresaAtiva()).single(); if(_ea) window._pontoEmpresaNome=_ea.nome; }
 
   // funcionarios (para o filtro e para listar o quadro)
   const { data: pessoas } = await sb.from('oct_pessoas')

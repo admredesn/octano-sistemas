@@ -29,6 +29,7 @@ async function moduloNfeSaida() {
     .eq('id', session.user.id).single();
   _saidaEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id);
   _saidaEmpresa = perfil?.oct_empresas;
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single(); if(_ea) _saidaEmpresa=_ea; }
   if (!_saidaEmpresaId) {
     conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>';
     return;

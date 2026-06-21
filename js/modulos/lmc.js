@@ -4,6 +4,7 @@ conteudo.innerHTML="<p style='color:#888;padding:20px'>Carregando LMC...</p>";
 var session=await getSession();
 var p=await sb.from("oct_perfis").select("empresa_id,oct_empresas(nome,cnpj,ie,uf)").eq("id",session.user.id).single();
 var empresaId=(typeof empresaAtiva==='function')?empresaAtiva():p.data?.empresa_id;var empresa=p.data?.oct_empresas;
+if(typeof empresaAtiva==='function'&&empresaAtiva()){const r=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single();if(r.data)empresa=r.data;}
 if(!empresaId){conteudo.innerHTML="<p style='color:#f44'>Configure sua empresa.</p>";return;}
 var hoje=new Date().toISOString().split("T")[0];
 var mesIni=hoje.substring(0,7)+"-01";

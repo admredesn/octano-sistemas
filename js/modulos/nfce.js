@@ -29,6 +29,7 @@ async function moduloNfce() {
     .select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
   _nfceEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id);
   _nfceEmpresa = perfil?.oct_empresas;
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single(); if(_ea) _nfceEmpresa=_ea; }
   if (!_nfceEmpresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
 
   if (!_nfceProdutos.length || _nfceCacheEmpresa !== _nfceEmpresaId) {

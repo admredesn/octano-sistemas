@@ -14,7 +14,8 @@ async function moduloContabilidade(subaba) {
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
   const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
-  const empresa = perfil?.oct_empresas;
+  let empresa = perfil?.oct_empresas;
+  if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('*').eq('id',empresaAtiva()).single(); if(_ea) empresa=_ea; }
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
   window._contab_empresa_id = empresaId;
   window._contab_empresa = empresa;
