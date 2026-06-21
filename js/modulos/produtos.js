@@ -5,7 +5,7 @@ async function moduloProdutos() {
 
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis').select('empresa_id, oct_empresas(nome)').eq('id', session.user.id).single();
-  const empresaId = perfil?.empresa_id;
+  const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
   window._produtosEmpresaId = empresaId;
 
@@ -93,7 +93,7 @@ async function abrirDetalheProduto(id) {
           <div style="font-size:0.75rem;color:#888;margin-top:2px">${p.codigo||'Sem código'} · <span style="color:${CORES_CAT[p.categoria]||'#888'}">${p.categoria||'—'}</span></div>
         </div>
         <div style="display:flex;gap:8px">
-          <button onclick="abrirFormProduto('${id}','${perfil.empresa_id}')" style="padding:6px 14px;border-radius:6px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer;font-size:0.82rem">✏️ Editar</button>
+          <button onclick="abrirFormProduto('${id}','${(typeof empresaAtiva==="function")?empresaAtiva():perfil.empresa_id}')" style="padding:6px 14px;border-radius:6px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer;font-size:0.82rem">✏️ Editar</button>
           <button onclick="document.getElementById('detalhe-produto').style.display='none'" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.3rem">✕</button>
         </div>
       </div>
