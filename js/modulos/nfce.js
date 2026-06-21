@@ -27,7 +27,7 @@ async function moduloNfce() {
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis')
     .select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
-  _nfceEmpresaId = perfil?.empresa_id;
+  _nfceEmpresaId = ((typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id);
   _nfceEmpresa = perfil?.oct_empresas;
   if (!_nfceEmpresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
 
