@@ -4,7 +4,7 @@ async function moduloContasPagar(){
   conteudo.innerHTML='<p style="color:#888;padding:20px">Carregando...</p>';
   const session=await getSession();
   const{data:perfil}=await sb.from('oct_perfis').select('empresa_id').eq('id',session.user.id).single();
-  const empresaId=perfil?.empresa_id;
+  const empresaId=(typeof empresaAtiva==='function')?empresaAtiva():perfil?.empresa_id;
   if(!empresaId){conteudo.innerHTML='<p style="color:#f44">Configure sua empresa.</p>';return;}
   window._empresaIdContas=empresaId;
   const hoje=new Date().toISOString().split('T')[0];
