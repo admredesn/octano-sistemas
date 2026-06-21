@@ -1,6 +1,11 @@
 async function moduloEmpresa() {
   const conteudo = document.getElementById('conteudo');
 
+  // dados do usuario logado (usados nos campos "Seu nome" e "perfil")
+  const session = await getSession();
+  const { data: perfil } = await sb.from('oct_perfis')
+    .select('nome, perfil, master').eq('id', session.user.id).single();
+
   // modo de criacao: quando true, o formulario abre vazio para cadastrar
   // uma empresa NOVA (sem sobrescrever a atual). Controlado por _empNova.
   const criando = window._empNova === true;
