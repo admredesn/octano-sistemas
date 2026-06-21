@@ -1,13 +1,21 @@
 async function moduloEmpresa() {
   const conteudo = document.getElementById('conteudo');
-  const session = await getSession();
-  const { data: perfil } = await sb
-    .from('oct_perfis')
-    .select('*, oct_empresas(*)')
-    .eq('id', session.user.id)
-    .single();
 
-  const emp = perfil?.oct_empresas || {};
+  // modo de criacao: quando true, o formulario abre vazio para cadastrar
+  // uma empresa NOVA (sem sobrescrever a atual). Controlado por _empNova.
+  const criando = window._empNova === true;
+
+  let emp = {};
+  if (!criando) {
+    // carrega a empresa ATIVA (a selecionada no seletor do topo), nao mais
+    // a empresa fixa do perfil — assim a tela acompanha o multi-empresa.
+    const empId = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+    if (empId) {
+      const { data } = await sb.from('oct_empresas').select('*').eq('id', empId).single();
+      emp = data || {};
+    }
+  }
+
   const UFS = ['AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO'];
 
   // Calcula badge do certificado
@@ -25,10 +33,18 @@ async function moduloEmpresa() {
     }
   }
 
+  // botao "Nova empresa" so aparece para usuario master (que gerencia varias)
+  const podeNova = (typeof EMPRESA !== 'undefined' && EMPRESA.ehMaster);
+  const cabecalho = criando
+    ? `<h2>➕ Nova Empresa</h2><button onclick="empCancelarNova()" style="padding:6px 14px;border-radius:6px;border:1px solid #888;background:transparent;color:#aaa;cursor:pointer">← Cancelar</button>`
+    : `<h2>⚙️ Cadastro da Empresa</h2>` + (podeNova
+        ? `<button onclick="empAbrirNova()" style="padding:6px 14px;border-radius:6px;border:none;background:#22c55e;color:#fff;cursor:pointer;font-weight:600">➕ Nova empresa</button>`
+        : '');
+
   conteudo.innerHTML = `
     <div class="modulo-container">
 
-      <div class="modulo-header"><h2>⚙️ Cadastro da Empresa</h2></div>
+      <div class="modulo-header" style="display:flex;justify-content:space-between;align-items:center">${cabecalho}</div>
       <div class="form-grid">
 
         <div class="form-group">
@@ -369,7 +385,6 @@ async function salvarEmpresa() {
   const msg = document.getElementById('emp-msg');
   msg.textContent = 'Salvando...'; msg.style.color = '#aaa';
   const session = await getSession();
-  const { data: perfil } = await sb.from('oct_perfis').select('*').eq('id', session.user.id).single();
 
   const dadosEmpresa = {
     nome: document.getElementById('emp-nome').value.trim(),
@@ -387,23 +402,47 @@ async function salvarEmpresa() {
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
 
-  let empresaId = perfil?.empresa_id;
-  if (empresaId) {
-    const { error } = await sb.from('oct_empresas').update(dadosEmpresa).eq('id', empresaId);
-    if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
-  } else {
+  const criando = window._empNova === true;
+
+  if (criando) {
+    // CRIA empresa nova. NAO mexe no perfil (o master nao fica preso a ela).
     const { data: nova, error } = await sb.from('oct_empresas').insert(dadosEmpresa).select().single();
     if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
-    empresaId = nova.id;
+    window._empNova = false;
+    // recarrega a lista de empresas e ja deixa a nova como ativa
+    msg.textContent = '✅ Empresa criada! Atualizando lista...'; msg.style.color = '#4caf50';
+    const sess = await getSession();
+    if (typeof empresaCarregarContexto === 'function') await empresaCarregarContexto(sess);
+    if (typeof EMPRESA !== 'undefined') { EMPRESA.ativaId = nova.id; sessionStorage.setItem('octano_empresa_ativa', nova.id); }
+    if (typeof empresaRenderSeletor === 'function') empresaRenderSeletor();
+    setTimeout(() => navegarPara('empresa'), 800);
+    return;
   }
 
-  const nomePerfil = document.getElementById('perf-nome').value.trim();
-  if (perfil) {
-    await sb.from('oct_perfis').update({ nome: nomePerfil, empresa_id: empresaId }).eq('id', session.user.id);
-  } else {
-    await sb.from('oct_perfis').insert({ id: session.user.id, nome: nomePerfil, empresa_id: empresaId, perfil: 'master', master: true });
+  // EDITA a empresa ATIVA (a selecionada no seletor)
+  const empresaId = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  if (!empresaId) { msg.textContent = 'Nenhuma empresa ativa para editar.'; msg.style.color = '#f44'; return; }
+  const { error } = await sb.from('oct_empresas').update(dadosEmpresa).eq('id', empresaId);
+  if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
+
+  // atualiza so o nome do perfil (NAO muda mais a empresa do perfil)
+  const nomePerfil = (document.getElementById('perf-nome') || {}).value;
+  if (nomePerfil != null) {
+    await sb.from('oct_perfis').update({ nome: nomePerfil.trim() }).eq('id', session.user.id);
   }
+  // atualiza o rotulo do seletor (nome/fantasia podem ter mudado)
+  if (typeof empresaCarregarContexto === 'function') { await empresaCarregarContexto(session); empresaRenderSeletor(); }
 
   msg.textContent = '✅ Salvo com sucesso!'; msg.style.color = '#4caf50';
-  setTimeout(() => location.reload(), 1000);
+}
+
+// abre o formulario em modo "nova empresa" (vazio)
+function empAbrirNova() {
+  window._empNova = true;
+  navegarPara('empresa');
+}
+// cancela a criacao e volta para a empresa ativa
+function empCancelarNova() {
+  window._empNova = false;
+  navegarPara('empresa');
 }
