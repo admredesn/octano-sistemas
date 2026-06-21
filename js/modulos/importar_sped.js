@@ -22,7 +22,7 @@ async function moduloImportarSped() {
   const { data: perfil } = await sb.from('oct_perfis')
     .select('empresa_id, oct_empresas(*)').eq('id', session.user.id).single();
   if (!perfil?.empresa_id) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa.</p>'; return; }
-  window._imp_empresa_id = perfil.empresa_id;
+  window._imp_empresa_id = ((typeof empresaAtiva==='function')?empresaAtiva():perfil.empresa_id);
   window._imp_empresa = perfil.oct_empresas;
   _spedParsed = null;
 
