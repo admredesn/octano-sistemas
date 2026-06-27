@@ -165,6 +165,23 @@ async function moduloEmpresa() {
         </div>
       </div>
 
+      <!-- CSC (NFC-e) -->
+      <div class="modulo-header" style="margin-top:28px"><h2>🔑 CSC — Código de Segurança (NFC-e)</h2></div>
+      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
+        Necessário para emitir NFC-e (gera o QR Code). Obtenha no portal da SEFAZ do seu estado
+        (em MG: SIARE → Credenciamento NFC-e). O CSC é um código; o ID do CSC é o número de identificação dele (ex: 000001).
+      </p>
+      <div class="form-grid">
+        <div class="form-group span2">
+          <label>CSC (Código de Segurança do Contribuinte)</label>
+          <input id="emp-csc" type="text" value="${emp.csc || ''}" placeholder="Cole aqui o código CSC" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label>ID do CSC (cIdToken)</label>
+          <input id="emp-csc-id" type="text" value="${emp.csc_id || ''}" placeholder="Ex: 000001" autocomplete="off" />
+        </div>
+      </div>
+
       <!-- PERFIL -->
       <div class="modulo-header" style="margin-top:28px"><h2>👤 Meu Perfil</h2></div>
       <div class="form-grid">
@@ -402,6 +419,8 @@ async function salvarEmpresa() {
     uf: document.getElementById('emp-uf').value,
     cep: document.getElementById('emp-cep').value.trim(),
     regime_tributario: document.getElementById('emp-regime').value,
+    csc: (document.getElementById('emp-csc')?.value || '').trim(),
+    csc_id: (document.getElementById('emp-csc-id')?.value || '').trim(),
   };
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
