@@ -182,6 +182,24 @@ async function moduloEmpresa() {
         </div>
       </div>
 
+      <!-- NUMERACAO DA NFC-e -->
+      <div class="modulo-header" style="margin-top:28px"><h2>🔢 Numeração da NFC-e</h2></div>
+      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
+        Série e próximo número do cupom (NFC-e modelo 65). Na maioria dos casos a série é <strong>1</strong>.
+        Se a empresa já emitia em outro sistema, informe o <strong>próximo número</strong> a usar
+        (último número emitido + 1) para não duplicar e ser rejeitada pela SEFAZ.
+      </p>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Série da NFC-e</label>
+          <input id="emp-nfce-serie" type="number" min="1" value="${emp.nfce_serie != null ? emp.nfce_serie : 1}" placeholder="1" />
+        </div>
+        <div class="form-group">
+          <label>Próximo número a emitir</label>
+          <input id="emp-nfce-num" type="number" min="1" value="${emp.nfce_proximo_numero != null ? emp.nfce_proximo_numero : 1}" placeholder="1" />
+        </div>
+      </div>
+
       <!-- PERFIL -->
       <div class="modulo-header" style="margin-top:28px"><h2>👤 Meu Perfil</h2></div>
       <div class="form-grid">
@@ -421,6 +439,8 @@ async function salvarEmpresa() {
     regime_tributario: document.getElementById('emp-regime').value,
     csc: (document.getElementById('emp-csc')?.value || '').trim(),
     csc_id: (document.getElementById('emp-csc-id')?.value || '').trim(),
+    nfce_serie: parseInt(document.getElementById('emp-nfce-serie')?.value, 10) || 1,
+    nfce_proximo_numero: parseInt(document.getElementById('emp-nfce-num')?.value, 10) || 1,
   };
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
