@@ -399,10 +399,31 @@ async function uploadCertificado() {
     cert_path: path,
   }).eq('id', empresaId);
 
+  // cifra e grava a SENHA do certificado no banco (cert_senha_cifrada).
+  // A cifragem usa a CHAVE_MESTRA, que só existe no servidor SEFAZ — por isso
+  // mandamos a senha para a rota /cadastrar-cert (única que recebe a senha em texto).
+  try {
+    const resp = await fetch(`${SEFAZ_URL}/cadastrar-cert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ empresa_id: empresaId, senha }),
+    });
+    const r = await resp.json().catch(() => ({}));
+    if (!resp.ok || r.ok === false) {
+      msg.textContent = 'Arquivo enviado, mas falhou ao salvar a senha: ' + (r.erro || resp.status);
+      msg.style.color = '#f44';
+      return;
+    }
+  } catch (e) {
+    msg.textContent = 'Arquivo enviado, mas erro ao salvar a senha: ' + e.message;
+    msg.style.color = '#f44';
+    return;
+  }
+
   // guarda a senha do certificado para reaproveitar na manifestacao de NF-e
   if (typeof setCertSenha === 'function') setCertSenha(senha);
 
-  msg.textContent = '✅ Certificado salvo com sucesso!';
+  msg.textContent = '✅ Certificado e senha salvos com sucesso!';
   msg.style.color = '#4caf50';
   setTimeout(() => location.reload(), 1200);
 }
