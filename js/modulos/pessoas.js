@@ -121,8 +121,11 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>WhatsApp <span style="color:#999;font-weight:normal;font-size:0.75rem">(p/ envio de nota a prazo)</span></label><input id="fpe-whatsapp" type="text" value="${p?.whatsapp||''}" placeholder="DDD + número, ex: 31999998888" /></div>
         <div class="form-group span2"><label>E-mail</label><input id="fpe-email" type="text" value="${p?.email||''}" /></div>
         <div class="form-group span2"><label>Endereço</label><input id="fpe-end" type="text" value="${p?.endereco||''}" /></div>
+        <div class="form-group"><label>Bairro</label><input id="fpe-bairro" type="text" value="${p?.bairro||''}" /></div>
+        <div class="form-group"><label>CEP</label><input id="fpe-cep" type="text" value="${p?.cep||''}" /></div>
         <div class="form-group"><label>Cidade</label><input id="fpe-cidade" type="text" value="${p?.cidade||''}" /></div>
         <div class="form-group"><label>UF</label><input id="fpe-uf" type="text" maxlength="2" value="${p?.uf||''}" style="text-transform:uppercase" /></div>
+        <div class="form-group"><label>Data de nascimento</label><input id="fpe-nasc" type="date" value="${p?.data_nascimento||''}" /></div>
         <div class="form-group span2"><label>Observações</label><input id="fpe-obs" type="text" value="${p?.observacoes||''}" /></div>
       </div>
       <div class="form-acoes">
@@ -194,8 +197,11 @@ async function salvarPessoa(id, empresaId) {
     whatsapp:    document.getElementById('fpe-whatsapp')?.value.trim() || null,
     email:       document.getElementById('fpe-email').value.trim() || null,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
+    bairro:      document.getElementById('fpe-bairro')?.value.trim() || null,
+    cep:         document.getElementById('fpe-cep')?.value.trim() || null,
     cidade:      document.getElementById('fpe-cidade').value.trim() || null,
     uf:          document.getElementById('fpe-uf').value.trim().toUpperCase() || null,
+    data_nascimento: document.getElementById('fpe-nasc')?.value || null,
     observacoes: document.getElementById('fpe-obs').value.trim() || null,
   };
 
