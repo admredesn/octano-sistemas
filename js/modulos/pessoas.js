@@ -181,10 +181,14 @@ async function salvarPessoa(id, empresaId) {
   // coleta as classificacoes marcadas (checkboxes)
   const classif = Array.from(document.querySelectorAll('.fpe-classif:checked')).map(c => c.value);
   // mantem o 'tipo' antigo coerente (compatibilidade com telas que ainda usam):
-  // ambos -> se tem cliente+fornecedor; senao a primeira marcada.
+  // tipo = campo de compatibilidade. O banco so aceita
+  // cliente/fornecedor/funcionario/transportadora/NULL (constraint oct_pessoas_tipo_check).
+  // 'ambos' e 'contador' NAO sao validos aqui — ficam so no array classificacoes.
+  // Prioridade: cliente > fornecedor > funcionario > transportadora.
   let tipoCompat = null;
-  if (classif.includes('cliente') && classif.includes('fornecedor')) tipoCompat = 'ambos';
-  else if (classif.length) tipoCompat = classif[0];
+  for (const t of ['cliente','fornecedor','funcionario','transportadora']) {
+    if (classif.includes(t)) { tipoCompat = t; break; }
+  }
 
   const dados = {
     empresa_id: empresaId, nome,
