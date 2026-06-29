@@ -118,6 +118,7 @@ async function abrirFormPessoa(id, empresaId) {
         </div>
         <div class="form-group"><label>Inscrição Estadual</label><input id="fpe-ie" type="text" value="${p?.ie||''}" /></div>
         <div class="form-group"><label>Telefone</label><input id="fpe-tel" type="text" value="${p?.telefone||''}" /></div>
+        <div class="form-group"><label>WhatsApp <span style="color:#999;font-weight:normal;font-size:0.75rem">(p/ envio de nota a prazo)</span></label><input id="fpe-whatsapp" type="text" value="${p?.whatsapp||''}" placeholder="DDD + número, ex: 31999998888" /></div>
         <div class="form-group span2"><label>E-mail</label><input id="fpe-email" type="text" value="${p?.email||''}" /></div>
         <div class="form-group span2"><label>Endereço</label><input id="fpe-end" type="text" value="${p?.endereco||''}" /></div>
         <div class="form-group"><label>Cidade</label><input id="fpe-cidade" type="text" value="${p?.cidade||''}" /></div>
@@ -190,6 +191,7 @@ async function salvarPessoa(id, empresaId) {
     documento:   document.getElementById('fpe-doc').value.trim() || null,
     ie:          document.getElementById('fpe-ie').value.trim() || null,
     telefone:    document.getElementById('fpe-tel').value.trim() || null,
+    whatsapp:    document.getElementById('fpe-whatsapp')?.value.trim() || null,
     email:       document.getElementById('fpe-email').value.trim() || null,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
     cidade:      document.getElementById('fpe-cidade').value.trim() || null,
