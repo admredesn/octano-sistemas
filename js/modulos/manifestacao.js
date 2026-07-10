@@ -432,27 +432,34 @@ async function manifEnviarLote() {
   const cnpj = _manifEmpresa.cnpj?.replace(/\D/g, '');
 
   let ok = 0, falhas = 0;
+  const motivos = [];  // acumula os motivos das falhas para o log/mensagem
   for (let i = 0; i < ids.length; i++) {
     const nota = _manifDados.find(n => n.id === ids[i]);
-    if (!nota?.chave_nfe) { falhas++; continue; }
+    if (!nota?.chave_nfe) { falhas++; motivos.push('sem chave'); continue; }
     if (prog) prog.textContent = `Enviando ${i+1}/${ids.length}...`;
     try {
       const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, chave_nfe:nota.chave_nfe, cert_base64:b64, cert_senha:senha, ambiente }) });
       const dados = await resp.json();
-      // o servidor pode retornar cstat (135/136/573 = ok) ou apenas tipo/descricao do evento
+      // 135 = registrado e vinculado; 136 = registrado nao vinculado; 573 = ja manifestado (duplicidade)
       const cstatOk = dados.cstat && ['135','136','573'].includes(String(dados.cstat));
-      const eventoEnviado = !dados.erro && (dados.tipo || dados.descricao) && resp.status === 200;
-      if (cstatOk || eventoEnviado) {
+      const registrado = dados.ok === true || cstatOk;
+      if (registrado) {
         await sb.from('oct_nfe_manifestadas').update({ status:'ciencia' }).eq('id', nota.id);
         ok++;
       } else {
         falhas++;
+        // motivo real: cStat + xMotivo da SEFAZ, ou erro do servidor
+        const motivo = dados.xmotivo ? `${dados.cstat||''} ${dados.xmotivo}`.trim()
+                     : (dados.erro || `HTTP ${resp.status}`);
+        motivos.push(motivo);
       }
-    } catch(e) { falhas++; }
+    } catch(e) { falhas++; motivos.push('rede: ' + e.message); }
   }
-  await manifRegistrarLog(`Manifestação em lote (${evento}): ${ok} ok, ${falhas} falha(s)`);
+  const motivosUnicos = [...new Set(motivos)].slice(0, 3);
+  const detalhe = motivosUnicos.length ? ' — ' + motivosUnicos.join(' | ') : '';
+  await manifRegistrarLog(`Manifestação em lote (${evento}): ${ok} ok, ${falhas} falha(s)${detalhe}`);
   if (prog) prog.textContent = '';
-  manifMsg(`✓ ${ok} manifestada(s)${falhas?`, ${falhas} falha(s)`:''}.`, falhas?'info':'ok');
+  manifMsg(`✓ ${ok} manifestada(s)${falhas?`, ${falhas} falha(s)${detalhe}`:''}.`, falhas?'info':'ok');
   _manifSelecionadas.clear();
   manifCarregarAba();
 }
