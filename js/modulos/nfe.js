@@ -629,6 +629,7 @@ async function cadastrarNovoProduto(itemId) {
     codigo: document.getElementById('novo-prod-codigo').value.trim() || null,
     unidade: document.getElementById('novo-prod-unidade').value,
     categoria: document.getElementById('novo-prod-categoria').value,
+    ativo: true,   // senão nasce inativo e não aparece no PDV (que filtra ativo=true)
   }).select().single();
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
   await vincularProdutoExistente(itemId, novo.id, novo.nome);
@@ -1052,6 +1053,7 @@ async function confirmarNfe(){
         preco_custo:custoFinal,
         tanque_id:it.tanqueId||null,
         estoque:0,
+        ativo:true,                               // senão nasce inativo e some do PDV (filtra ativo=true)
         ...perfilFiscal,                          // perfil fiscal do XML
       }).select().single();
       produtoId=np?.id||null;
