@@ -127,26 +127,86 @@ function _monCardPosto(nome, tanksDoPosto, latest, eid, tv) {
   </div>`;
 }
 
+// ---- VENDAS (NFC-e) em tempo real: total do dia + últimas, por posto ----
+function _monBRL(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }); }
+function _monHora(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+const _MON_FORMA = { '01': 'Dinheiro', '03': 'Crédito', '04': 'Débito', '17': 'Pix', '99': 'Outro' };
+
+async function _monVendas(empIds) {
+  const ini = new Date(); ini.setHours(0, 0, 0, 0);
+  const desde = ini.toISOString();
+  const out = {};
+  await Promise.all(empIds.map(async (eid) => {
+    const { data } = await sb.from('oct_pdv_vendas')
+      .select('valor_total,data_venda,pagamentos,status')
+      .eq('empresa_id', eid).gte('data_venda', desde)
+      .order('data_venda', { ascending: false }).limit(500);
+    const vendas = (data || []).filter(v => (v.status || '') !== 'cancelada');
+    out[eid] = {
+      qtd: vendas.length,
+      total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0),
+      ultima: vendas[0] || null,
+      recentes: vendas.slice(0, 5),
+    };
+  }));
+  return out;
+}
+
+function _monCardVendaPosto(nome, v, tv) {
+  v = v || { qtd: 0, total: 0, ultima: null, recentes: [] };
+  const ultH = v.ultima ? _monHora(v.ultima.data_venda) : '—';
+  const recentes = (v.recentes || []).map(r => {
+    const forma = (r.pagamentos && r.pagamentos[0] && _MON_FORMA[r.pagamentos[0].forma]) || '';
+    return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:${tv ? '0.9rem' : '0.72rem'};color:#94a3b8;padding:2px 0">
+      <span>${_monHora(r.data_venda)}${forma ? ' · ' + forma : ''}</span><span style="color:#cbd5e1;font-weight:600">${_monBRL(r.valor_total)}</span></div>`;
+  }).join('') || `<div style="color:#6b7280;font-size:${tv ? '0.9rem' : '0.72rem'};padding:4px 0">Sem vendas hoje.</div>`;
+  return `
+  <div style="background:#0b0f18;border:1px solid #2a3040;border-radius:16px;padding:${tv ? '18px' : '14px'}">
+    <div style="font-size:${tv ? '1.15rem' : '0.95rem'};font-weight:800;color:#22c55e;margin-bottom:8px">${nome || '—'}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+      <span style="font-size:${tv ? '2rem' : '1.5rem'};font-weight:800;color:#f8fafc">${_monBRL(v.total)}</span>
+      <span style="color:#94a3b8;font-size:${tv ? '0.95rem' : '0.78rem'}">${v.qtd} venda(s) hoje · última ${ultH}</span>
+    </div>
+    <div style="border-top:1px solid #1e293b;padding-top:6px">${recentes}</div>
+  </div>`;
+}
+
 async function _monRenderInto(elId, tv) {
   const el = document.getElementById(elId);
   if (!el) return;
   try {
     const { nomes, tanksByEmp, latest, empIds } = await _monDados();
+    const vendas = await _monVendas(empIds);
     const ordenados = empIds.slice().sort((a, b) => (nomes[a] || '').localeCompare(nomes[b] || ''));
     const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const corpo = ordenados.length
-      ? ordenados.map(eid => _monCardPosto(nomes[eid], tanksByEmp[eid], latest, eid, tv)).join('')
-      : '<p style="color:#94a3b8;padding:24px">Nenhum posto com medição encontrado.</p>';
+
+    // seção VENDAS (NFC-e de hoje)
+    const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
+    const colVenda = tv ? '320px' : '250px';
+    const vendasGrid = ordenados.map(eid => _monCardVendaPosto(nomes[eid], vendas[eid], tv)).join('');
+    const secVendas = `
+      <div style="display:flex;align-items:center;gap:12px;margin:${tv ? '4px 0 12px' : '2px 0 8px'}">
+        <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#22c55e">💰 Vendas de hoje (NFC-e)</div>
+        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(${colVenda},1fr));gap:${tv ? '14px' : '10px'};margin-bottom:${tv ? '26px' : '18px'}">${vendasGrid}</div>`;
+
+    // seção TANQUES
+    const secTanques = `
+      <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#e2e8f0;margin:${tv ? '4px 0 12px' : '2px 0 8px'}">🛢️ Tanques</div>
+      ${ordenados.length ? ordenados.map(eid => _monCardPosto(nomes[eid], tanksByEmp[eid], latest, eid, tv)).join('') : '<p style="color:#94a3b8;padding:24px">Nenhum posto com medição encontrado.</p>'}`;
+
     const cab = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:${tv ? '18px' : '12px'}">
-        <div style="font-size:${tv ? '1.7rem' : '1.2rem'};font-weight:800;color:#e2e8f0">🛢️ Monitor de Tanques</div>
+        <div style="font-size:${tv ? '1.7rem' : '1.2rem'};font-weight:800;color:#e2e8f0">📊 Monitor dos Postos</div>
         <div style="flex:1"></div>
         <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">atualizado ${hora} · a cada 30s</div>
         ${tv ? '' : '<button onclick="monitorAtualizar()" style="padding:6px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#ddd;cursor:pointer">↻ Atualizar</button>'}
       </div>`;
+    const corpo = cab + secVendas + secTanques;
     el.innerHTML = (tv
-      ? `<div style="min-height:100vh;background:#070a11;padding:22px">${cab}${corpo}</div>`
-      : `<div style="padding:4px 2px">${cab}${corpo}</div>`);
+      ? `<div style="min-height:100vh;background:#070a11;padding:22px">${corpo}</div>`
+      : `<div style="padding:4px 2px">${corpo}</div>`);
   } catch (e) {
     el.innerHTML = '<p style="color:#f87171;padding:24px">Erro ao carregar medições: ' + (e.message || e) + '</p>';
   }
