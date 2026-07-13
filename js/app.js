@@ -6,6 +6,7 @@ const MODULOS = [
   { id: 'nfce',          label: 'NFC-e',         breve: false },
   { id: 'manifestacao',  label: 'Manifestação',   breve: false },
   { id: 'tanques',       label: 'Tanques',        breve: false },
+  { id: 'monitor',       label: '🛢️ Monitor',     breve: false },
   { id: 'pessoas',       label: 'Pessoas',        breve: false },
   { id: 'ponto',         label: 'Ponto',          breve: false },
   { id: 'produtos',      label: 'Produtos',       breve: false },
@@ -29,6 +30,12 @@ async function getSession(){
 }
 
 async function init(){
+  // MODO TV (link ?tv=1 ou #tv): monitor de tanques em tela cheia, SEM login.
+  const _params = new URLSearchParams(location.search);
+  if((_params.get('tv') === '1' || location.hash === '#tv') && typeof monitorTvBoot === 'function'){
+    monitorTvBoot();
+    return;
+  }
   const session = await getSession();
   if(!session){ renderLogin(); return; }
   renderApp(session);
@@ -109,6 +116,7 @@ function navegarPara(modulo){
     nfe_saida:     moduloNfeSaida,
     manifestacao:  moduloManifestacao,
     tanques:       moduloTanques,
+    monitor:       moduloMonitor,
     pessoas:       moduloPessoas,
     ponto:         moduloPonto,
     produtos:      moduloProdutos,
