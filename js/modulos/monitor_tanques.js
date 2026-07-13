@@ -138,9 +138,27 @@ function _monVolVenda(v) {
   return itens.reduce((s, it) => s + (it && it.tipo === 'abastecimento' ? Number(it.qtd || 0) : 0), 0);
 }
 
+// lucro (margem bruta) de uma venda = soma de (total_item - custo*qtd) por item.
+// custo = preco_custo do produto (mapa produto_id -> custo). Item sem custo conhecido
+// NÃO conta (evita inflar o lucro com margem cheia).
+function _monLucroVenda(v, custoMap) {
+  const itens = Array.isArray(v.itens) ? v.itens : [];
+  return itens.reduce((s, it) => {
+    const c = (it && custoMap[it.produto_id]) || 0;
+    if (c <= 0) return s;
+    return s + (Number(it.total || 0) - c * Number(it.qtd || 0));
+  }, 0);
+}
+
 async function _monVendas(empIds) {
   const ini = new Date(); ini.setHours(0, 0, 0, 0);
   const desde = ini.toISOString();
+  // mapa produto_id -> preco_custo (p/ calcular o lucro)
+  const custoMap = {};
+  try {
+    const { data: prods } = await sb.from('oct_produtos').select('id,preco_custo').in('empresa_id', empIds);
+    (prods || []).forEach(p => { custoMap[p.id] = Number(p.preco_custo || 0); });
+  } catch (e) { /* sem custo: lucro fica 0 */ }
   const out = {};
   await Promise.all(empIds.map(async (eid) => {
     const { data } = await sb.from('oct_pdv_vendas')
@@ -152,6 +170,7 @@ async function _monVendas(empIds) {
       qtd: vendas.length,
       total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0),
       volume: vendas.reduce((s, v) => s + _monVolVenda(v), 0),
+      lucro: vendas.reduce((s, v) => s + _monLucroVenda(v, custoMap), 0),
       ultima: vendas[0] || null,
       recentes: vendas.slice(0, 5),
     };
@@ -175,7 +194,12 @@ function _monCardVendaPosto(nome, v, tv) {
       <span style="font-size:${tv ? '2rem' : '1.5rem'};font-weight:800;color:#f8fafc">${_monBRL(v.total)}</span>
       <span style="font-size:${tv ? '1.6rem' : '1.2rem'};font-weight:800;color:#38bdf8">${_monNum(v.volume, 1)} <span style="font-size:0.6em;color:#94a3b8">L</span></span>
     </div>
-    <div style="color:#94a3b8;font-size:${tv ? '0.95rem' : '0.78rem'};margin-bottom:8px">${v.qtd} venda(s) hoje · última ${ultH}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+      <span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">Lucro:</span>
+      <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(v.lucro)}</span>
+      ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(v.lucro / v.total * 100, 1)}%</span>` : ''}
+    </div>
+    <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${v.qtd} venda(s) hoje · última ${ultH}</div>
     <div style="border-top:1px solid #1e293b;padding-top:6px">${recentes}</div>
   </div>`;
 }
@@ -192,12 +216,13 @@ async function _monRenderInto(elId, tv) {
     // seção VENDAS (NFC-e de hoje)
     const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
     const volGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].volume) || 0), 0);
+    const lucroGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].lucro) || 0), 0);
     const colVenda = tv ? '320px' : '250px';
     const vendasGrid = ordenados.map(eid => _monCardVendaPosto(nomes[eid], vendas[eid], tv)).join('');
     const secVendas = `
       <div style="display:flex;align-items:center;gap:12px;margin:${tv ? '4px 0 12px' : '2px 0 8px'};flex-wrap:wrap">
         <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#22c55e">💰 Vendas de hoje (NFC-e)</div>
-        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong> · <strong style="color:#38bdf8">${_monNum(volGeral, 1)} L</strong></div>
+        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong> · <strong style="color:#38bdf8">${_monNum(volGeral, 1)} L</strong> · lucro <strong style="color:#22c55e">${_monBRL(lucroGeral)}</strong></div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(${colVenda},1fr));gap:${tv ? '14px' : '10px'};margin-bottom:${tv ? '26px' : '18px'}">${vendasGrid}</div>`;
 
