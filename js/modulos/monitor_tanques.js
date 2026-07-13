@@ -14,11 +14,12 @@ let _monTimer = null;
 let _monTv = false;
 
 async function _monDados() {
-  const desde = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const [rEmp, rTank, rRec] = await Promise.all([
     sb.from('oct_empresas').select('id,nome'),
     sb.from('oct_tanques').select('empresa_id,numero,combustivel,capacidade,ativo').eq('ativo', true),
-    sb.from('oct_medicoes').select('empresa_id').gte('medido_em', desde).limit(3000),
+    // postos com medição RECENTE: ordena por mais recente (senão o PostgREST corta em 1000
+    // linhas e um posto que grava muito domina a lista, escondendo os outros).
+    sb.from('oct_medicoes').select('empresa_id').order('medido_em', { ascending: false }).limit(500),
   ]);
   const nomes = {};
   (rEmp.data || []).forEach(e => { nomes[e.id] = e.nome; });
