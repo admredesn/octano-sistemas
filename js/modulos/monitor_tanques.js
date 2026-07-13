@@ -132,19 +132,26 @@ function _monBRL(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { mi
 function _monHora(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
 const _MON_FORMA = { '01': 'Dinheiro', '03': 'Crédito', '04': 'Débito', '17': 'Pix', '99': 'Outro' };
 
+// litros (volume) de uma venda = soma do qtd dos itens de ABASTECIMENTO (combustível)
+function _monVolVenda(v) {
+  const itens = Array.isArray(v.itens) ? v.itens : [];
+  return itens.reduce((s, it) => s + (it && it.tipo === 'abastecimento' ? Number(it.qtd || 0) : 0), 0);
+}
+
 async function _monVendas(empIds) {
   const ini = new Date(); ini.setHours(0, 0, 0, 0);
   const desde = ini.toISOString();
   const out = {};
   await Promise.all(empIds.map(async (eid) => {
     const { data } = await sb.from('oct_pdv_vendas')
-      .select('valor_total,data_venda,pagamentos,status')
+      .select('valor_total,data_venda,pagamentos,status,itens')
       .eq('empresa_id', eid).gte('data_venda', desde)
       .order('data_venda', { ascending: false }).limit(500);
     const vendas = (data || []).filter(v => (v.status || '') !== 'cancelada');
     out[eid] = {
       qtd: vendas.length,
       total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0),
+      volume: vendas.reduce((s, v) => s + _monVolVenda(v), 0),
       ultima: vendas[0] || null,
       recentes: vendas.slice(0, 5),
     };
@@ -153,20 +160,22 @@ async function _monVendas(empIds) {
 }
 
 function _monCardVendaPosto(nome, v, tv) {
-  v = v || { qtd: 0, total: 0, ultima: null, recentes: [] };
+  v = v || { qtd: 0, total: 0, volume: 0, ultima: null, recentes: [] };
   const ultH = v.ultima ? _monHora(v.ultima.data_venda) : '—';
   const recentes = (v.recentes || []).map(r => {
     const forma = (r.pagamentos && r.pagamentos[0] && _MON_FORMA[r.pagamentos[0].forma]) || '';
+    const litros = _monVolVenda(r);
     return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:${tv ? '0.9rem' : '0.72rem'};color:#94a3b8;padding:2px 0">
-      <span>${_monHora(r.data_venda)}${forma ? ' · ' + forma : ''}</span><span style="color:#cbd5e1;font-weight:600">${_monBRL(r.valor_total)}</span></div>`;
+      <span>${_monHora(r.data_venda)}${forma ? ' · ' + forma : ''}${litros > 0 ? ' · ' + _monNum(litros, 1) + ' L' : ''}</span><span style="color:#cbd5e1;font-weight:600">${_monBRL(r.valor_total)}</span></div>`;
   }).join('') || `<div style="color:#6b7280;font-size:${tv ? '0.9rem' : '0.72rem'};padding:4px 0">Sem vendas hoje.</div>`;
   return `
   <div style="background:#0b0f18;border:1px solid #2a3040;border-radius:16px;padding:${tv ? '18px' : '14px'}">
     <div style="font-size:${tv ? '1.15rem' : '0.95rem'};font-weight:800;color:#22c55e;margin-bottom:8px">${nome || '—'}</div>
-    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px">
       <span style="font-size:${tv ? '2rem' : '1.5rem'};font-weight:800;color:#f8fafc">${_monBRL(v.total)}</span>
-      <span style="color:#94a3b8;font-size:${tv ? '0.95rem' : '0.78rem'}">${v.qtd} venda(s) hoje · última ${ultH}</span>
+      <span style="font-size:${tv ? '1.6rem' : '1.2rem'};font-weight:800;color:#38bdf8">${_monNum(v.volume, 1)} <span style="font-size:0.6em;color:#94a3b8">L</span></span>
     </div>
+    <div style="color:#94a3b8;font-size:${tv ? '0.95rem' : '0.78rem'};margin-bottom:8px">${v.qtd} venda(s) hoje · última ${ultH}</div>
     <div style="border-top:1px solid #1e293b;padding-top:6px">${recentes}</div>
   </div>`;
 }
@@ -182,12 +191,13 @@ async function _monRenderInto(elId, tv) {
 
     // seção VENDAS (NFC-e de hoje)
     const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
+    const volGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].volume) || 0), 0);
     const colVenda = tv ? '320px' : '250px';
     const vendasGrid = ordenados.map(eid => _monCardVendaPosto(nomes[eid], vendas[eid], tv)).join('');
     const secVendas = `
-      <div style="display:flex;align-items:center;gap:12px;margin:${tv ? '4px 0 12px' : '2px 0 8px'}">
+      <div style="display:flex;align-items:center;gap:12px;margin:${tv ? '4px 0 12px' : '2px 0 8px'};flex-wrap:wrap">
         <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#22c55e">💰 Vendas de hoje (NFC-e)</div>
-        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong></div>
+        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong> · <strong style="color:#38bdf8">${_monNum(volGeral, 1)} L</strong></div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(${colVenda},1fr));gap:${tv ? '14px' : '10px'};margin-bottom:${tv ? '26px' : '18px'}">${vendasGrid}</div>`;
 
