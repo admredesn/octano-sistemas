@@ -240,18 +240,29 @@ async function _monRenderInto(elId, tv) {
       </div>`;
     const corpo = cab + secVendas + secTanques;
     el.innerHTML = (tv
-      ? `<div style="min-height:100vh;background:#070a11;padding:22px">${corpo}</div>`
-      : `<div style="padding:4px 2px">${corpo}</div>`);
+      ? `<div id="mon-root" style="min-height:100vh;background:#070a11;padding:22px">${corpo}</div>`
+      : `<div id="mon-root" style="padding:4px 2px">${corpo}</div>`);
   } catch (e) {
-    el.innerHTML = '<p style="color:#f87171;padding:24px">Erro ao carregar medições: ' + (e.message || e) + '</p>';
+    el.innerHTML = '<div id="mon-root"><p style="color:#f87171;padding:24px">Erro ao carregar medições: ' + (e.message || e) + '</p></div>';
   }
+}
+
+// re-render GUARDADO: se o usuário saiu do monitor (o #conteudo virou outra tela),
+// o marcador #mon-root some → cancela o timer e NÃO re-desenha por cima. Sem isso,
+// o monitor "puxava" a tela de volta a cada 30s (atrapalhava o trabalho no retaguarda).
+function _monTick(elId, tv) {
+  if (!document.getElementById('mon-root')) {
+    if (_monTimer) { clearInterval(_monTimer); _monTimer = null; }
+    return;
+  }
+  _monRenderInto(elId, tv);
 }
 
 function _monStart(elId, tv) {
   _monTv = tv;
   if (_monTimer) clearInterval(_monTimer);
   _monRenderInto(elId, tv);
-  _monTimer = setInterval(() => _monRenderInto(elId, tv), 30000);
+  _monTimer = setInterval(() => _monTick(elId, tv), 30000);
 }
 
 function monitorAtualizar() { _monRenderInto(_monTv ? 'app' : 'conteudo', _monTv); }
