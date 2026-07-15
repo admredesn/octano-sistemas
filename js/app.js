@@ -137,6 +137,6 @@ MODULOS.forEach(m => {
   if(!m.breve) window['navegarPara_' + m.id] = () => navegarPara(m.id);
 });
 
-function moduloFCaixa(){ document.getElementById('conteudo').innerHTML = '<p style="color:#888;padding:24px">F.Caixa em desenvolvimento.</p>'; }
+// moduloFCaixa() agora é implementado em modulos/fechamento_caixa.js
 
 init();
