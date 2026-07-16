@@ -2,6 +2,7 @@
 const MODULOS = [
   { id: 'empresa',       label: 'Empresa',       breve: false },
   { id: 'fcaixa',        label: 'F.Caixa',       breve: false },
+  { id: 'faturar',       label: 'Faturar',       breve: false },
   { id: 'nfe',           label: 'NF-e',          breve: false },
   { id: 'nfce',          label: 'NFC-e',         breve: false },
   { id: 'manifestacao',  label: 'Manifestação',   breve: false },
@@ -111,6 +112,7 @@ function navegarPara(modulo){
   const fns = {
     empresa:       moduloEmpresa,
     fcaixa:        moduloFCaixa,
+    faturar:       moduloFaturar,
     nfe:           moduloNfe,
     nfce:          moduloNfce,
     nfe_saida:     moduloNfeSaida,
