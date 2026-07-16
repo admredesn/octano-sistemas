@@ -1,15 +1,12 @@
 // ============================================================
-// MÓDULO FECHAMENTO DE CAIXA (retaguarda) — espelha o TecnoX
-// Lista de turnos + detalhe (Recebimentos × Vendas/Saídas), lendo os dados
-// próprios do octano: oct_pdv_turnos, oct_pdv_vendas (pagamentos/itens),
-// oct_pdv_abastecimentos (combustível) e oct_pdv_caixa (sangria/suprimento/despesa).
-// Fórmula espelha a view vw_log_valores_turno do TecnoX (combustível×produto,
-// cartão CC/CD, pix DG, nota a prazo NP).
+// MÓDULO FECHAMENTO DE CAIXA (retaguarda) — RÉPLICA FIEL do TecnoX
+// Lista de turnos + detalhe idêntico (cabeçalho, árvore de módulos, colunas
+// Recebimentos × Vendas/Saídas, painel Observação/botões/Acréscimo-Desconto).
+// Lê os dados próprios do octano: oct_pdv_turnos, oct_pdv_vendas (itens/pagamentos),
+// oct_pdv_caixa. Combustível×produto pelos ITENS do cupom (item tipo 'abastecimento'
+// = combustível), espelhando a vw_log_valores_turno do TecnoX.
 // ============================================================
 
-// Mapeia o código da forma de pagamento (tPag) para grupo do fechamento.
-// 01 dinheiro | 02 cheque | 03 crédito | 04 débito | 05 crédito loja |
-// 17/18/19 pix | 15 boleto | 99 prazo/outros | 90 sem pagamento.
 function _fcGrupoForma(cod) {
   const c = String(cod || '').padStart(2, '0');
   if (c === '01') return 'dinheiro';
@@ -20,11 +17,11 @@ function _fcGrupoForma(cod) {
   if (['99', '90'].includes(c)) return 'prazo';
   return 'outros';
 }
-
 function fcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-function fcMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fcMoney(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fcNum(v, casas) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: casas || 0, maximumFractionDigits: casas || 0 }); }
-function fcDataHora(v) { if (!v) return '—'; const d = new Date(v); return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+function _fcData(v) { return v ? new Date(v).toLocaleDateString('pt-BR') : ''; }
+function _fcHora(v) { return v ? new Date(v).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
 
 async function moduloFCaixa() {
   const conteudo = document.getElementById('conteudo');
@@ -43,35 +40,26 @@ async function moduloFCaixa() {
   await fcListar();
 }
 
-// Carrega turnos do período e agrega vendas/abastecimentos/caixa por turno.
 async function fcCarregarDados() {
   const eid = window._fcEmpresaId;
   const de = window._fcDe + 'T00:00:00';
   const ate = window._fcAte + 'T23:59:59';
-
   const { data: turnos } = await sb.from('oct_pdv_turnos').select('*')
     .eq('empresa_id', eid).gte('aberto_em', de).lte('aberto_em', ate)
     .order('aberto_em', { ascending: false });
   const lista = turnos || [];
   if (!lista.length) return { turnos: [], porTurno: {} };
   const ids = lista.map(t => t.id);
-
   const [vRes, cRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
   ]);
-
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
     rec: { dinheiro: 0, cartao: 0, pix: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
-    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, outrosCaixa: 0,
-    qtd_vendas: 0, movs: [],
+    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, outrosCaixa: 0, qtd_vendas: 0,
   });
-
-  // vendas: total, combustível×produto (a partir dos ITENS do cupom, espelhando a
-  // vw_log_valores_turno do TecnoX: item tipo 'abastecimento' = combustível, resto = produto)
-  // e pagamentos por grupo.
   (vRes.data || []).forEach(v => {
     const t = porTurno[v.turno_id]; if (!t) return;
     if (String(v.status || '').toLowerCase() === 'cancelada') return;
@@ -87,23 +75,19 @@ async function fcCarregarDados() {
       t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
     });
   });
-
-  // caixa: sangrias/suprimentos/despesas/depósitos
   (cRes.data || []).forEach(m => {
     const t = porTurno[m.turno_id]; if (!t) return;
-    const tipo = String(m.tipo || '').toLowerCase();
-    const val = Number(m.valor || 0);
+    const tipo = String(m.tipo || '').toLowerCase(); const val = Number(m.valor || 0);
     if (tipo.includes('sangria')) t.sangria += val;
     else if (tipo.includes('suprim')) t.suprimento += val;
     else if (tipo.includes('desp')) t.despesa += val;
     else if (tipo.includes('depos')) t.deposito += val;
     else t.outrosCaixa += val;
-    t.movs.push(m);
   });
-
   return { turnos: lista, porTurno };
 }
 
+// ---------- LISTA (1ª tela do TecnoX) ----------
 async function fcListar() {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando turnos...</p>';
@@ -111,131 +95,325 @@ async function fcListar() {
   window._fcCache = { turnos, porTurno };
 
   const linhas = turnos.map(t => {
-    const d = porTurno[t.id] || {};
-    const rec = d.rec || {};
-    const situacao = String(t.status || '').toLowerCase();
-    const corSit = situacao.startsWith('aberto') ? '#f59e0b' : '#4ade80';
-    return `<tr style="border-bottom:1px solid #1a1d2e;cursor:pointer" onclick="fcDetalhe('${t.id}')">
-      <td style="padding:7px 8px">${t.numero ?? '—'}</td>
-      <td style="padding:7px 8px">${fcEsc(t.operador) || '—'}</td>
-      <td style="padding:7px 8px">${fcDataHora(t.aberto_em)}</td>
-      <td style="padding:7px 8px">${t.fechado_em ? fcDataHora(t.fechado_em) : '—'}</td>
-      <td style="padding:7px 8px"><span style="color:${corSit};font-weight:600;text-transform:uppercase;font-size:0.74rem">${fcEsc(t.status) || '—'}</span></td>
-      <td style="padding:7px 8px;text-align:right">${fcMoney(d.venda_total)}</td>
-      <td style="padding:7px 8px;text-align:right">${fcMoney(rec.dinheiro)}</td>
-      <td style="padding:7px 8px;text-align:right">${fcMoney(rec.cartao)}</td>
-      <td style="padding:7px 8px;text-align:right">${fcMoney(rec.pix)}</td>
-      <td style="padding:7px 8px;text-align:right">${fcMoney(rec.prazo)}</td>
+    const d = porTurno[t.id] || {}; const rec = d.rec || {};
+    const sit = String(t.status || '').toUpperCase();
+    const corSit = sit.startsWith('ABERTO') ? '#c0392b' : '#127a2e';
+    return `<tr onclick="fcDetalhe('${t.id}')" style="cursor:pointer" onmouseover="this.style.background='#eef4fb'" onmouseout="this.style.background=''">
+      <td class="fc-td">${t.numero ?? ''}</td>
+      <td class="fc-td">${t.numero ?? ''}</td>
+      <td class="fc-td">${fcEsc(t.operador) || ''}</td>
+      <td class="fc-td">${_fcData(t.aberto_em)}</td>
+      <td class="fc-td">${_fcHora(t.aberto_em)}</td>
+      <td class="fc-td">${_fcData(t.fechado_em)}</td>
+      <td class="fc-td">${_fcHora(t.fechado_em)}</td>
+      <td class="fc-td" style="color:${corSit};font-weight:600">${sit}</td>
+      <td class="fc-td fc-r">0,00</td>
+      <td class="fc-td fc-r">0,00</td>
+      <td class="fc-td fc-r">0,00</td>
+      <td class="fc-td fc-r">${fcMoney(d.venda_total)}</td>
+      <td class="fc-td fc-r">${fcMoney(rec.dinheiro)}</td>
+      <td class="fc-td fc-r">${fcMoney(rec.cartao)}</td>
+      <td class="fc-td fc-r">${fcMoney(rec.prazo)}</td>
+      <td class="fc-td fc-r">${fcMoney(rec.cheque)}</td>
     </tr>`;
   }).join('');
 
   conteudo.innerHTML = `
-    <div style="max-width:1200px;padding:18px 20px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-        <h2 style="color:#f97316">🧮 Fechamento de Caixa</h2>
-        <div style="display:flex;align-items:center;gap:8px">
-          <label style="color:#888;font-size:0.78rem">Período</label>
-          <input type="date" id="fc-de" value="${window._fcDe}" style="padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
-          <span style="color:#888">até</span>
-          <input type="date" id="fc-ate" value="${window._fcAte}" style="padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
-          <button onclick="fcAplicarPeriodo()" style="padding:7px 14px;border-radius:6px;border:none;background:#f97316;color:#fff;cursor:pointer">Pesquisar</button>
-        </div>
+    ${_fcEstilo()}
+    <div class="fc-janela">
+      <div class="fc-titbar">Fechamento de Caixa</div>
+      <div class="fc-toolbar">
+        <button class="fc-btn" disabled>✔ Confirmar Caixa</button>
+        <button class="fc-btn" onclick="fcListar()">🔍 F4 - Pesquisar</button>
+        <button class="fc-btn" onclick="fcLimparPeriodo()">🧽 F5 - Limpar</button>
+        <span class="fc-sep"></span>
+        <button class="fc-btn" disabled>🗒 F6 - Listar</button>
+        <span class="fc-count">${turnos.length} de ${turnos.length}</span>
+        <span class="fc-sep"></span>
+        <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
+        <button class="fc-btn" disabled>📄 Importar XML</button>
       </div>
-      ${turnos.length ? `
-      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;color:#ddd">
-          <thead><tr style="color:#8aa;text-align:left;background:#1a1d2e">
-            <th style="padding:8px">Turno</th><th style="padding:8px">Operador</th>
-            <th style="padding:8px">Abertura</th><th style="padding:8px">Fechamento</th>
-            <th style="padding:8px">Situação</th>
-            <th style="padding:8px;text-align:right">Venda</th>
-            <th style="padding:8px;text-align:right">Dinheiro</th>
-            <th style="padding:8px;text-align:right">Cartão</th>
-            <th style="padding:8px;text-align:right">Pix</th>
-            <th style="padding:8px;text-align:right">Nota a prazo</th>
+      <div class="fc-periodo">
+        Período: <input type="date" id="fc-de" value="${window._fcDe}" class="fc-inp"> até
+        <input type="date" id="fc-ate" value="${window._fcAte}" class="fc-inp">
+        <button class="fc-btn azul" onclick="fcAplicarPeriodo()">🔍 F4 - Pesquisar</button>
+      </div>
+      <div class="fc-gridwrap">
+        <table class="fc-grid">
+          <thead><tr>
+            <th>Seq.</th><th>Turno</th><th>Operador</th><th>Abertura</th><th>Hora Abert.</th>
+            <th>Fechamento</th><th>Hora Fec.</th><th>Situação</th>
+            <th>Falta Caixa</th><th>Sobra Caixa</th><th>Diferença Caixa</th>
+            <th>Venda</th><th>Dinheiro</th><th>Cartão</th><th>Nota a prazo</th><th>Cheque</th>
           </tr></thead>
-          <tbody>${linhas}</tbody>
+          <tbody>${linhas || '<tr><td colspan="16" style="padding:20px;text-align:center;color:#888">Nenhum turno no período.</td></tr>'}</tbody>
         </table>
       </div>
-      <p style="color:#666;font-size:0.76rem;margin-top:10px">${turnos.length} turno(s). Clique num turno para ver o detalhe (Recebimentos × Vendas).</p>
-      ` : '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:30px;text-align:center;color:#666">Nenhum turno no período.</div>'}
     </div>`;
 }
 
 function fcAplicarPeriodo() {
-  const de = document.getElementById('fc-de')?.value;
-  const ate = document.getElementById('fc-ate')?.value;
-  if (de) window._fcDe = de;
-  if (ate) window._fcAte = ate;
-  fcListar();
+  const de = document.getElementById('fc-de')?.value, ate = document.getElementById('fc-ate')?.value;
+  if (de) window._fcDe = de; if (ate) window._fcAte = ate; fcListar();
+}
+function fcLimparPeriodo() {
+  const hoje = new Date(), d = new Date(hoje.getTime() - 30 * 86400000);
+  window._fcAte = hoje.toISOString().slice(0, 10); window._fcDe = d.toISOString().slice(0, 10); fcListar();
 }
 
-// Detalhe de um turno: espelha a 2ª tela do TecnoX (Recebimentos × Vendas/Saídas).
+// ---------- DETALHE (2ª tela do TecnoX) ----------
 function fcDetalhe(turnoId) {
   const cache = window._fcCache || {};
   const t = (cache.turnos || []).find(x => x.id === turnoId);
   const d = (cache.porTurno || {})[turnoId] || {};
   if (!t) return;
+  window._fcTurnoAtual = turnoId;
   const rec = d.rec || {};
-  const totalReceb = (rec.dinheiro || 0) + (rec.cartao || 0) + (rec.pix || 0) + (rec.prazo || 0) + (rec.cheque || 0) + (rec.boleto || 0) + (rec.outros || 0);
-  const totalVendaSaida = (d.venda_comb || 0) + (d.venda_prod || 0);
 
-  const linhaReceb = (rot, val, cor) => `<tr>
-    <td style="padding:5px 8px;color:#bcd">${rot}</td>
-    <td style="padding:5px 8px;text-align:right;color:${cor || '#e5e7eb'}">${fcMoney(val)}</td></tr>`;
+  // Recebimentos (ordem idêntica ao TecnoX). Campos sem dado no octano = 0,00.
+  const receb = [
+    ['Dinheiro + Sangrias', rec.dinheiro],
+    ['Despesas', d.despesa],
+    ['Cartão', rec.cartao],
+    ['Nota a prazo', rec.prazo],
+    ['Cheque', rec.cheque],
+    ['Carta Frete', 0],
+    ['Vale Haver', 0],
+    ['Vale Motorista', 0],
+    ['CTF', 0],
+    ['Deposito em Conta', d.deposito],
+    ['Troco Final', 0],
+    ['Falta de Caixa', 0],
+  ];
+  const totalReceb = receb.reduce((s, r) => s + Number(r[1] || 0), 0);
+  const vendas = [
+    ['Venda produtos', d.venda_prod],
+    ['Venda serviços', 0],
+    ['Venda combustíveis', d.venda_comb],
+    ['Remessas', d.suprimento],
+    ['Cheque troco', 0],
+    ['Haver', 0],
+    ['Títulos Recebidos', 0],
+    ['Receitas', 0],
+    ['Sobra de Caixa', 0],
+  ];
+  const totalVenda = vendas.reduce((s, r) => s + Number(r[1] || 0), 0);
+  const resultado = totalReceb - totalVenda;
+
+  const linhaVal = (rot, val) => `<div class="fc-lin"><span class="fc-lbl">${rot}</span><span class="fc-box">${fcMoney(val)}</span></div>`;
+  const nodo = (txt, tipo) => `<li ${tipo ? `onclick="fcNode('${tipo}')" style="cursor:pointer"` : ''}>${txt}</li>`;
 
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = `
-    <div style="max-width:1100px;padding:18px 20px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <h2 style="color:#f97316">🧮 Fechamento — Turno ${t.numero ?? ''} <span style="color:#888;font-size:0.9rem">(${fcEsc(t.operador) || ''})</span></h2>
-        <button onclick="fcListar()" style="padding:7px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#60a5fa;cursor:pointer">← Voltar</button>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px;color:#9aa;font-size:0.8rem">
-        <div>Abertura: <strong style="color:#ddd">${fcDataHora(t.aberto_em)}</strong></div>
-        <div>Fechamento: <strong style="color:#ddd">${t.fechado_em ? fcDataHora(t.fechado_em) : '—'}</strong></div>
-        <div>Situação: <strong style="color:#ddd;text-transform:uppercase">${fcEsc(t.status) || '—'}</strong></div>
-        <div>Abertura (fundo): <strong style="color:#ddd">${fcMoney(t.valor_abertura)}</strong></div>
+    ${_fcEstilo()}
+    <div class="fc-janela">
+      <div class="fc-titbar">Fechamento de Caixa</div>
+      <div class="fc-toolbar">
+        <button class="fc-btn" onclick="fcListar()">↩ Voltar / Estornar</button>
+        <button class="fc-btn" onclick="fcListar()">🔍 F4 - Pesquisar</button>
+        <span class="fc-sep"></span>
+        <button class="fc-btn" onclick="fcListar()">🗒 F6 - Listar</button>
+        <span class="fc-sep"></span>
+        <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
+        <button class="fc-btn" disabled>📄 Importar XML</button>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
-          <div style="background:#1a1d2e;padding:9px 12px;color:#f97316;font-weight:600">Recebimentos</div>
-          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-            ${linhaReceb('Dinheiro', rec.dinheiro)}
-            ${linhaReceb('Cartão', rec.cartao)}
-            ${linhaReceb('Pix', rec.pix)}
-            ${linhaReceb('Nota a prazo', rec.prazo)}
-            ${linhaReceb('Cheque', rec.cheque)}
-            ${linhaReceb('Boleto', rec.boleto)}
-            ${linhaReceb('Outros', rec.outros)}
-            ${linhaReceb('Sangria', d.sangria, '#f87171')}
-            ${linhaReceb('Suprimento', d.suprimento, '#4ade80')}
-            ${linhaReceb('Despesa', d.despesa, '#f87171')}
-            ${linhaReceb('Depósito em conta', d.deposito)}
-            <tr style="border-top:2px solid #2a2d3e;background:#0f1119">
-              <td style="padding:8px;color:#fff;font-weight:600">Total Recebimentos</td>
-              <td style="padding:8px;text-align:right;color:#4ade80;font-weight:700">${fcMoney(totalReceb)}</td></tr>
-          </table>
+      <div class="fc-cab">
+        <div><label>Seq.:</label><input value="${t.numero ?? ''}" class="fc-inp2" readonly></div>
+        <div><label>Nº Turno:</label><input value="${t.numero ?? ''}" class="fc-inp2 mini" readonly></div>
+        <div><label>Status:</label><input value="${fcEsc((t.status || '').toUpperCase())}" class="fc-inp2" readonly></div>
+        <div><label>Abertura:</label><input value="${_fcData(t.aberto_em)}" class="fc-inp2 data" readonly></div>
+        <div><label>Hora Aber.:</label><input value="${_fcHora(t.aberto_em)}" class="fc-inp2 mini" readonly></div>
+        <div><label>Fechamento:</label><input value="${_fcData(t.fechado_em)}" class="fc-inp2 data" readonly></div>
+        <div><label>Hora Fec.:</label><input value="${_fcHora(t.fechado_em)}" class="fc-inp2 mini" readonly></div>
+      </div>
+      <div class="fc-cab">
+        <div><label>Vendedor:</label><input value="TODOS" class="fc-inp2 lg" readonly></div>
+        <button class="fc-btn" disabled>Rateio</button>
+        <div><label>Operador:</label><input value="${fcEsc(t.operador) || ''}" class="fc-inp2 lg" readonly></div>
+        <div><label>PDV:</label><input value="PDV 01" class="fc-inp2 mini" readonly></div>
+      </div>
+
+      <div class="fc-corpo">
+        <div class="fc-tree">
+          <ul>
+            ${nodo('📁 Principal')}
+            <li>😊 Recebimentos<ul>
+              ${nodo('💵 Dinheiro / Sangria')}${nodo('💳 Cartão')}${nodo('📄 Nota a Prazo')}
+              ${nodo('CTF')}${nodo('🧾 Cheque')}${nodo('🚚 Carta Frete')}${nodo('👷 Vale Motorista')}
+              ${nodo('Troco Final')}${nodo('Vale Haver')}${nodo('Despesa')}${nodo('🏦 Depósito em Conta')}
+            </ul></li>
+            <li>📁 Remessas<ul>
+              ${nodo('Suprimentos')}${nodo('Haver')}${nodo('Cheque Troco')}${nodo('Títulos Recebidos')}${nodo('Receita')}
+            </ul></li>
+            <li>📁 Diferença de Caixa<ul>
+              ${nodo('🔴 Falta de Caixa')}${nodo('🟢 Sobra de Caixa')}
+            </ul></li>
+            <li>📁 Detalhes<ul>
+              ${nodo('📑 Cupons Fiscais', 'cupons')}${nodo('👤 Demonstrativo Vendedor', 'vendedor')}
+              ${nodo('📋 Itens Vendidos', 'itens')}${nodo('⛽ Combustível Vendido', 'combustivel')}
+              ${nodo('📦 Estoque Fech. Caixa', 'estoque')}
+            </ul></li>
+          </ul>
         </div>
 
-        <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
-          <div style="background:#1a1d2e;padding:9px 12px;color:#f97316;font-weight:600">Vendas / Saídas</div>
-          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-            ${linhaReceb('Venda combustíveis', d.venda_comb)}
-            <tr><td style="padding:2px 8px 6px;color:#667;font-size:0.72rem">${fcNum(d.litros_comb, 3)} L</td><td></td></tr>
-            ${linhaReceb('Venda produtos', d.venda_prod)}
-            ${linhaReceb('Qtde. vendas (cupons)', d.qtd_vendas)}
-            <tr style="border-top:2px solid #2a2d3e;background:#0f1119">
-              <td style="padding:8px;color:#fff;font-weight:600">Total Vendas / Saída</td>
-              <td style="padding:8px;text-align:right;color:#60a5fa;font-weight:700">${fcMoney(totalVendaSaida)}</td></tr>
-          </table>
+        <div class="fc-col">
+          <div class="fc-coltit">Recebimentos</div>
+          ${receb.map(r => linhaVal(r[0], r[1])).join('')}
+          <div class="fc-total"><span>Total Recebimentos:</span><span class="fc-box forte">${fcMoney(totalReceb)}</span></div>
+          <div class="fc-total"><span>Resultado do Caixa</span><span class="fc-box ${Math.abs(resultado) < 0.01 ? 'ok' : 'alerta'}">${fcMoney(resultado)}</span></div>
         </div>
-      </div>
 
-      <div style="margin-top:14px;background:#0f1119;border:1px solid #2a2d3e;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <div style="color:#9aa;font-size:0.84rem">Resultado do Caixa (Recebimentos − Vendas/Saída):</div>
-        <div style="color:${Math.abs(totalReceb - totalVendaSaida) < 0.01 ? '#4ade80' : '#f59e0b'};font-weight:700">${fcMoney(totalReceb - totalVendaSaida)}</div>
+        <div class="fc-col">
+          <div class="fc-coltit">Vendas / Saídas</div>
+          ${vendas.map(r => linhaVal(r[0], r[1])).join('')}
+          <div class="fc-litros">${fcNum(d.litros_comb, 3)} L de combustível &nbsp;·&nbsp; ${d.qtd_vendas} cupons</div>
+          <div class="fc-total"><span>Total Vendas / Saída:</span><span class="fc-box forte azulf">${fcMoney(totalVenda)}</span></div>
+        </div>
+
+        <div class="fc-painel">
+          <div class="fc-obscab"><span>Observação:</span><button class="fc-btn mini" onclick="fcSalvarObs()">💾 Salvar Obs.</button></div>
+          <textarea id="fc-obs" class="fc-obs" placeholder="Observações do caixa...">${fcEsc(t.observacao || '')}</textarea>
+          <button class="fc-btn2" onclick="fcNode('demonstrativo')">📊 Demonstrativo do Caixa</button>
+          <button class="fc-btn2" onclick="fcNode('encerrantes')">🔢 Encerrantes</button>
+          <button class="fc-btn2" onclick="fcNode('itens')">📋 Rel. itens vendidos</button>
+          <button class="fc-btn2" disabled>🔄 Reseta itens</button>
+          <button class="fc-btn2" disabled>💳 Importar Cartões (Conciliação Automática)</button>
+          <div class="fc-adgrid">
+            <label>Acréscimo:</label><input class="fc-inp3" value="0,00" readonly>
+            <label>Desconto:</label><input class="fc-inp3" value="0,00" readonly>
+            <label>Acresc. Manual:</label><input class="fc-inp3" value="0,00" readonly>
+            <label>Acresc. Especial:</label><input class="fc-inp3" value="0,00" readonly>
+            <label>Desc. Manual:</label><input class="fc-inp3" value="0,00" readonly>
+            <label>Desc. Especial:</label><input class="fc-inp3" value="0,00" readonly>
+          </div>
+        </div>
       </div>
     </div>`;
+}
+
+// Nós de "Detalhes" com dado real do octano (lazy load).
+async function fcNode(tipo) {
+  const turnoId = window._fcTurnoAtual; if (!turnoId) return;
+  if (tipo === 'cupons' || tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
+    fcModal('Carregando...', '<p style="padding:20px;color:#888">Buscando...</p>');
+    const { data: vendas } = await sb.from('oct_pdv_vendas')
+      .select('numero,valor_total,itens,pagamentos,status,vendedor,operador,data_venda')
+      .eq('turno_id', turnoId).order('numero');
+    const vs = (vendas || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
+    if (tipo === 'cupons') return fcModalCupons(vs);
+    if (tipo === 'itens') return fcModalItens(vs);
+    if (tipo === 'combustivel') return fcModalCombustivel(vs);
+    if (tipo === 'vendedor') return fcModalVendedor(vs);
+  } else {
+    fcModal(tipo, '<p style="padding:24px;color:#777">Este detalhe será ligado na próxima etapa.</p>');
+  }
+}
+function fcModalCupons(vs) {
+  const linhas = vs.map(v => `<tr><td class="fc-td">${v.numero ?? ''}</td>
+    <td class="fc-td">${v.data_venda ? new Date(v.data_venda).toLocaleString('pt-BR') : ''}</td>
+    <td class="fc-td">${fcEsc(v.vendedor) || ''}</td>
+    <td class="fc-td fc-r">${fcMoney(v.valor_total)}</td>
+    <td class="fc-td">${(v.pagamentos || []).map(p => p.forma).join(',')}</td></tr>`).join('');
+  fcModal('Cupons Fiscais', `<table class="fc-grid"><thead><tr><th>Nº</th><th>Data</th><th>Vendedor</th><th>Valor</th><th>Formas</th></tr></thead><tbody>${linhas}</tbody></table>`);
+}
+function fcModalItens(vs) {
+  const map = {};
+  vs.forEach(v => (v.itens || []).forEach(it => {
+    const k = it.cod || it.desc || '?';
+    if (!map[k]) map[k] = { desc: it.desc || it.cod, qtd: 0, valor: 0 };
+    map[k].qtd += Number(it.qtd || 0);
+    map[k].valor += Math.round(Number(it.qtd || 0) * Number(it.unit || 0) * 100) / 100;
+  }));
+  const linhas = Object.values(map).sort((a, b) => b.valor - a.valor).map(m => `<tr>
+    <td class="fc-td">${fcEsc(m.desc)}</td><td class="fc-td fc-r">${fcNum(m.qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td></tr>`).join('');
+  fcModal('Itens Vendidos', `<table class="fc-grid"><thead><tr><th>Item</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>${linhas}</tbody></table>`);
+}
+function fcModalCombustivel(vs) {
+  const map = {};
+  vs.forEach(v => (v.itens || []).forEach(it => {
+    if (it.tipo !== 'abastecimento') return;
+    const k = it.desc || 'Combustível';
+    if (!map[k]) map[k] = { desc: k, litros: 0, valor: 0 };
+    map[k].litros += Number(it.qtd || 0);
+    map[k].valor += Math.round(Number(it.qtd || 0) * Number(it.unit || 0) * 100) / 100;
+  }));
+  const linhas = Object.values(map).map(m => `<tr><td class="fc-td">${fcEsc(m.desc)}</td>
+    <td class="fc-td fc-r">${fcNum(m.litros, 3)} L</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td></tr>`).join('');
+  fcModal('Combustível Vendido', `<table class="fc-grid"><thead><tr><th>Combustível</th><th>Litros</th><th>Valor</th></tr></thead><tbody>${linhas}</tbody></table>`);
+}
+function fcModalVendedor(vs) {
+  const map = {};
+  vs.forEach(v => { const k = v.vendedor || v.operador || '—'; map[k] = (map[k] || 0) + Number(v.valor_total || 0); });
+  const linhas = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, val]) => `<tr>
+    <td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${fcMoney(val)}</td></tr>`).join('');
+  fcModal('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
+}
+function fcModal(titulo, html) {
+  let m = document.getElementById('fc-modal');
+  if (!m) { m = document.createElement('div'); m.id = 'fc-modal'; document.body.appendChild(m); }
+  m.innerHTML = `<div class="fc-modal-bg" onclick="document.getElementById('fc-modal').remove()"></div>
+    <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="document.getElementById('fc-modal').remove()" style="cursor:pointer;float:right">✕</span></div>
+    <div class="fc-modal-corpo">${html}</div></div>`;
+}
+async function fcSalvarObs() {
+  const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
+  try { await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId); alert('Observação salva.'); }
+  catch (e) { alert('Não foi possível salvar (campo observacao pode não existir ainda).'); }
+}
+
+// ---------- estilo (tema claro, espelhando o TecnoX) ----------
+function _fcEstilo() {
+  return `<style>
+  .fc-janela{background:#eef1f5;border:1px solid #9bb0c9;border-radius:4px;margin:10px;color:#1a2733;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+  .fc-titbar{background:linear-gradient(#4a86c7,#356aa6);color:#fff;padding:5px 10px;font-weight:600;border-radius:4px 4px 0 0}
+  .fc-toolbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:6px 8px;background:#dbe4ef;border-bottom:1px solid #b8c6d8}
+  .fc-btn{background:#f4f7fb;border:1px solid #a9bdd4;border-radius:3px;padding:4px 8px;font-size:11px;color:#22364a;cursor:pointer}
+  .fc-btn:hover:not(:disabled){background:#e3edf9}.fc-btn:disabled{color:#9aa8b6;cursor:default}
+  .fc-btn.azul{background:#356aa6;color:#fff;border-color:#2a5688}
+  .fc-btn.mini{padding:2px 7px;font-size:10px}
+  .fc-sep{width:1px;height:20px;background:#b8c6d8;margin:0 4px}
+  .fc-count{font-size:11px;color:#2a5688;font-weight:600;padding:0 6px}
+  .fc-periodo{padding:7px 10px;background:#f4f7fb;border-bottom:1px solid #cdd9e6;display:flex;align-items:center;gap:6px}
+  .fc-inp{border:1px solid #a9bdd4;border-radius:3px;padding:3px 6px;font-size:11px}
+  .fc-gridwrap{overflow:auto;max-height:62vh;background:#fff;padding:2px}
+  .fc-grid{width:100%;border-collapse:collapse;font-size:11px}
+  .fc-grid th{background:#c9d7e8;color:#22364a;text-align:left;padding:5px 7px;border:1px solid #b8c6d8;position:sticky;top:0;white-space:nowrap}
+  .fc-td{padding:4px 7px;border:1px solid #e2e8f0;white-space:nowrap}
+  .fc-r{text-align:right}
+  .fc-grid tbody tr:nth-child(even){background:#f6f9fc}
+  .fc-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 10px;background:#f4f7fb;border-bottom:1px solid #cdd9e6}
+  .fc-cab label{color:#2a5688;font-weight:600;margin-right:4px}
+  .fc-inp2{border:1px solid #a9bdd4;border-radius:3px;padding:3px 6px;font-size:11px;background:#fff;width:110px}
+  .fc-inp2.mini{width:64px}.fc-inp2.data{width:88px}.fc-inp2.lg{width:230px}
+  .fc-corpo{display:grid;grid-template-columns:230px 1fr 1fr 320px;gap:1px;background:#c8d4e2;padding:1px}
+  .fc-tree{background:#fff;padding:8px;overflow:auto;max-height:60vh}
+  .fc-tree ul{list-style:none;margin:0;padding-left:14px}
+  .fc-tree>ul{padding-left:2px}
+  .fc-tree li{padding:2px 0;color:#22364a;line-height:1.5}
+  .fc-tree li:hover{color:#356aa6}
+  .fc-col{background:#fff;padding:8px 12px}
+  .fc-coltit{text-align:center;color:#2a5688;font-weight:700;border-bottom:1px solid #cdd9e6;padding-bottom:5px;margin-bottom:6px}
+  .fc-lin{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
+  .fc-lbl{color:#2a3b4c}
+  .fc-box{border:1px solid #b8c6d8;background:#fbfdff;border-radius:3px;padding:3px 8px;min-width:90px;text-align:right;font-variant-numeric:tabular-nums}
+  .fc-box.forte{font-weight:700;background:#eef6ee;border-color:#a7d0a7}
+  .fc-box.azulf{background:#eaf1fb;border-color:#9fbde3}
+  .fc-box.ok{background:#eef6ee;border-color:#a7d0a7;font-weight:700}
+  .fc-box.alerta{background:#fff4e5;border-color:#e8c58a;font-weight:700}
+  .fc-total{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #cdd9e6;margin-top:6px;padding-top:6px;font-weight:600;color:#22364a}
+  .fc-litros{color:#7a8aa0;font-size:10px;margin-top:8px}
+  .fc-painel{background:#fff;padding:8px}
+  .fc-obscab{display:flex;justify-content:space-between;align-items:center;color:#2a5688;font-weight:600;margin-bottom:4px}
+  .fc-obs{width:100%;height:60px;border:1px solid #a9bdd4;border-radius:3px;font-size:11px;padding:5px;resize:vertical;box-sizing:border-box}
+  .fc-btn2{display:block;width:100%;text-align:left;margin-top:6px;background:#f4f7fb;border:1px solid #a9bdd4;border-radius:3px;padding:7px 10px;font-size:11px;color:#22364a;cursor:pointer}
+  .fc-btn2:hover:not(:disabled){background:#e3edf9}.fc-btn2:disabled{color:#9aa8b6;cursor:default}
+  .fc-adgrid{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:5px 6px;align-items:center;margin-top:10px}
+  .fc-adgrid label{color:#2a3b4c;font-size:11px;text-align:right}
+  .fc-inp3{border:1px solid #b8c6d8;border-radius:3px;padding:3px 6px;font-size:11px;text-align:right;background:#f8fafc;width:100%;box-sizing:border-box}
+  #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9998}
+  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);max-height:80vh;overflow:auto;background:#fff;border-radius:6px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+  #fc-modal .fc-modal-tit{background:#356aa6;color:#fff;padding:8px 14px;font-weight:600;border-radius:6px 6px 0 0}
+  #fc-modal .fc-modal-corpo{padding:10px}
+  </style>`;
 }
