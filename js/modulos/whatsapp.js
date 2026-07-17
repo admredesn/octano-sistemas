@@ -43,6 +43,7 @@ async function _wppRender(silent) {
       <div class="wpp-badge">🟢 Conectado</div>
       <p class="wpp-num">${_wppEsc(_wppFmtNumero(numero))}</p>
       <p class="wpp-sub">${vivo ? "Gateway online" : "⚠️ status não atualiza há " + seg + "s (gateway pode ter caído)"}</p>
+      <button class="wpp-btn-desc" onclick="wppDesconectar()">🔌 Desconectar (trocar número)</button>
     </div>`;
   } else {
     corpo = `<div class="wpp-box alerta">
@@ -64,6 +65,8 @@ async function _wppRender(silent) {
     .wpp-qr{width:280px;height:280px;background:#fff;padding:12px;border-radius:10px;margin:14px auto;display:block}
     .wpp-link{display:inline-block;margin-top:14px;color:#60a5fa;text-decoration:none;border:1px solid #2a2d3e;border-radius:8px;padding:8px 14px}
     .wpp-link:hover{background:#1b2130}
+    .wpp-btn-desc{margin-top:14px;background:#2a1416;border:1px solid #5a2a2a;color:#f87171;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.85rem}
+    .wpp-btn-desc:hover{background:#3a1a1e}
     </style>
     <div class="wpp-wrap" id="wpp-root">
       <div class="wpp-head">
@@ -78,6 +81,18 @@ async function _wppRender(silent) {
         Envio de mensagens sai por este número. Automação por lib não-oficial — mantenha o volume moderado.
       </p>
     </div>`;
+}
+
+async function wppDesconectar() {
+  if (!confirm("Desconectar o WhatsApp da rede? O número atual será desvinculado e um QR novo será gerado para você conectar outro número.")) return;
+  try {
+    const { error } = await sb.from("oct_wpp_status").update({ comando: "logout" }).eq("session_id", WPP_SESSION_ID);
+    if (error) throw error;
+    alert("Desconectando… em alguns segundos o QR novo aparece aqui. Recarregue se necessário.");
+    setTimeout(() => _wppRender(true), 4000);
+  } catch (e) {
+    alert("Não foi possível enviar o comando (rode a migração do campo 'comando' em oct_wpp_status). Detalhe: " + (e.message || e));
+  }
 }
 
 function _wppFmtNumero(n) {
