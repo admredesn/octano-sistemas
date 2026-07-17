@@ -15,10 +15,13 @@ async function moduloPessoas() {
 
   const { data: pessoas } = await sb
     .from('oct_pessoas').select('*')
-    .eq('empresa_id', empresaId).eq('ativo', true)
+    .eq('empresa_id', empresaId)
     .order('nome');
 
   window._todasPessoas = pessoas || [];
+  const filtro = window._pessoaFiltro || 'todos';
+  const listaFiltrada = window._todasPessoas.filter(p =>
+    filtro === 'ativos' ? p.ativo : filtro === 'inativos' ? !p.ativo : true);
 
   conteudo.innerHTML = `
     <div id="form-pessoa" style="display:none;margin-bottom:16px"></div>
@@ -49,12 +52,16 @@ async function moduloPessoas() {
     titulo: 'Pessoas — Fornecedores e Clientes',
     aoFechar: "navegarPara('empresa')",
     rodapeDireita: perfil?.oct_empresas?.nome || '',
-    dados: window._todasPessoas,
+    dados: listaFiltrada,
     acoes: [
       { rotulo: 'Nova Pessoa', ico: '＋', onClick: `abrirFormPessoa(null,'${empresaId}')` },
+      { rotulo: `Todos (${window._todasPessoas.length})`, onClick: `pessoaFiltrar('todos')` },
+      { rotulo: `Ativos`, onClick: `pessoaFiltrar('ativos')` },
+      { rotulo: `Inativos (${window._todasPessoas.filter(p=>!p.ativo).length})`, onClick: `pessoaFiltrar('inativos')` },
     ],
     colunas: [
       { campo: 'nome', titulo: 'Nome / Razão Social', largura: '260px' },
+      { titulo: 'Status', largura: '110px', valor: (p)=> p, render: (p)=> pessoaStatusHtml(p) },
       { titulo: 'Classificação', largura: '200px', valor: (p)=> p, render: (p)=> badges(p) },
       { campo: 'documento', titulo: 'CNPJ / CPF', largura: '150px', render: (v)=> fmtDoc(v) },
       { campo: 'ie', titulo: 'IE', largura: '110px', render: (v)=> v||'—' },
@@ -226,3 +233,18 @@ async function excluirPessoa(id) {
   await sb.from('oct_pessoas').update({ ativo: false }).eq('id', id);
   moduloPessoas();
 }
+
+// Botão de status/ativação por linha (não abre o cadastro — stopPropagation).
+function pessoaStatusHtml(p) {
+  const on = !!p.ativo;
+  return `<button onclick="event.stopPropagation();pessoaSetAtivo('${p.id}',${!on})" `
+    + `title="${on ? 'Clique para desativar' : 'Clique para ativar'}" `
+    + `style="border:1px solid ${on ? '#2a5a2a' : '#5a4a2a'};background:${on ? '#12211a' : '#221c12'};`
+    + `color:${on ? '#4ade80' : '#f0b45c'};border-radius:6px;padding:3px 10px;cursor:pointer;font-size:0.78rem">`
+    + `${on ? '🟢 Ativo' : '⚪ Inativo'}</button>`;
+}
+async function pessoaSetAtivo(id, ativo) {
+  await sb.from('oct_pessoas').update({ ativo }).eq('id', id);
+  moduloPessoas();
+}
+function pessoaFiltrar(f) { window._pessoaFiltro = f; moduloPessoas(); }
