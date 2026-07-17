@@ -200,6 +200,23 @@ async function moduloEmpresa() {
         </div>
       </div>
 
+      <!-- INTEGRAÇÕES -->
+      <div class="modulo-header" style="margin-top:28px"><h2>🔌 Integrações do Posto</h2></div>
+      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
+        Ligue conforme o que o posto usa. O PDV oculta as formas de pagamento correspondentes
+        (com EDI ligado o cartão entra automático e some do PDV; com Cofre, o dinheiro some).
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
+        <label style="display:flex;align-items:center;gap:10px;color:#ddd;font-size:0.88rem;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 14px;cursor:pointer">
+          <input type="checkbox" id="emp-usa-edi" ${emp.usa_edi ? 'checked' : ''}>
+          <span><strong>EDI (PagBank)</strong> — recebimentos de cartão automáticos. <span style="color:#888">O PDV oculta as formas classificadas como <em>Cartão</em>.</span></span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;color:#ddd;font-size:0.88rem;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 14px;cursor:pointer">
+          <input type="checkbox" id="emp-usa-cofre" ${emp.usa_cofre ? 'checked' : ''}>
+          <span><strong>Cofre inteligente</strong> — o dinheiro vai pro cofre. <span style="color:#888">O PDV oculta as formas classificadas como <em>Dinheiro</em>.</span></span>
+        </label>
+      </div>
+
       <!-- PERFIL -->
       <div class="modulo-header" style="margin-top:28px"><h2>👤 Meu Perfil</h2></div>
       <div class="form-grid">
@@ -462,6 +479,8 @@ async function salvarEmpresa() {
     csc_id: (document.getElementById('emp-csc-id')?.value || '').trim(),
     nfce_serie: parseInt(document.getElementById('emp-nfce-serie')?.value, 10) || 1,
     nfce_proximo_numero: parseInt(document.getElementById('emp-nfce-num')?.value, 10) || 1,
+    usa_edi: !!document.getElementById('emp-usa-edi')?.checked,
+    usa_cofre: !!document.getElementById('emp-usa-cofre')?.checked,
   };
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
