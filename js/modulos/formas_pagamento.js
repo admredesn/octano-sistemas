@@ -89,6 +89,13 @@ function fpReceberForm(f) {
         <div><label style="color:#888;font-size:0.78rem">Ordem</label>
           <input id="fpr-ordem" type="number" value="${f.ordem ?? 0}" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
       </div>
+      <div style="margin-top:12px;max-width:340px">
+        <label style="color:#888;font-size:0.78rem">Classificação (o PDV oculta por aqui conforme a integração)</label>
+        <select id="fpr-classif" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+          ${['','dinheiro','cartao','cartao_frota','nota_prazo','cheque','pix','vale','outros'].map(c =>
+            `<option value="${c}" ${(f.classificacao||'') === c ? 'selected' : ''}>${({'':'— selecione —','dinheiro':'Dinheiro','cartao':'Cartão (crédito/débito)','cartao_frota':'Cartão Frota','nota_prazo':'Nota a Prazo','cheque':'Cheque','pix':'Pix','vale':'Vale','outros':'Outros'})[c]}</option>`).join('')}
+        </select>
+      </div>
       <div style="margin-top:12px;display:flex;gap:18px;align-items:center">
         <label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpr-prazo" ${f.a_prazo ? 'checked' : ''}> Forma a prazo (fiado)</label>
         <label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpr-ativo" ${f.ativo !== false ? 'checked' : ''}> Ativo</label>
@@ -112,6 +119,7 @@ async function fpReceberSalvar(id) {
     ordem: parseInt(document.getElementById('fpr-ordem').value) || 0,
     a_prazo: document.getElementById('fpr-prazo').checked,
     ativo: document.getElementById('fpr-ativo').checked,
+    classificacao: document.getElementById('fpr-classif').value || null,
   };
   const q = id ? sb.from('oct_formas_pagamento').update(reg).eq('id', id)
                : sb.from('oct_formas_pagamento').insert(reg);
