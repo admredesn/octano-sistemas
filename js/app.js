@@ -20,6 +20,7 @@ const MODULOS = [
   { id: 'formas_pagamento', label: 'Formas de Pagamento', breve: false },
   { id: 'lmc',           label: 'LMC',            breve: false },
   { id: 'whatsapp',      label: '📱 WhatsApp',    breve: false },
+  { id: 'cashback',      label: '💸 Cashback',    breve: false },
   { id: 'despesas',      label: 'Despesas',       breve: true  },
   { id: 'dre',           label: 'DRE',            breve: true  },
 ];
@@ -132,6 +133,7 @@ function navegarPara(modulo){
     formas_pagamento: moduloFormasPagamento,
     lmc:           moduloLmc,
     whatsapp:      moduloWhatsapp,
+    cashback:      moduloCashback,
   };
   if(fns[modulo]) fns[modulo]();
   else conteudo.innerHTML = '<p style="color:#888;padding:24px">Modulo <strong>' + modulo + '</strong> em breve.</p>';
