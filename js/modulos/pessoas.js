@@ -134,6 +134,8 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>UF</label><input id="fpe-uf" type="text" maxlength="2" value="${p?.uf||''}" style="text-transform:uppercase" /></div>
         <div class="form-group"><label>Data de nascimento</label><input id="fpe-nasc" type="date" value="${p?.data_nascimento||''}" /></div>
         <div class="form-group span2"><label>Observações</label><input id="fpe-obs" type="text" value="${p?.observacoes||''}" /></div>
+        <div class="form-group"><label>Chave Pix <span style="font-size:0.72rem;color:#888">(p/ cashback)</span></label><input id="fpe-chavepix" type="text" value="${p?.chave_pix||''}" placeholder="CPF, celular, e-mail ou aleatória" /></div>
+        <div class="form-group"><label>Cashback</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cashback" type="checkbox" ${p?.cashback_ativo?'checked':''} style="width:auto" /> Recebe cashback (R$0,05/litro via Pix)</label></div>
       </div>
       <div class="form-acoes">
         <button onclick="salvarPessoa('${id||''}','${empresaId}')" class="btn-salvar">💾 Salvar</button>
@@ -207,6 +209,8 @@ async function salvarPessoa(id, empresaId) {
     telefone:    document.getElementById('fpe-tel').value.trim() || null,
     whatsapp:    document.getElementById('fpe-whatsapp')?.value.trim() || null,
     email:       document.getElementById('fpe-email').value.trim() || null,
+    chave_pix:   document.getElementById('fpe-chavepix')?.value.trim() || null,
+    cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
     bairro:      document.getElementById('fpe-bairro')?.value.trim() || null,
     cep:         document.getElementById('fpe-cep')?.value.trim() || null,
