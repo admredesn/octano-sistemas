@@ -57,10 +57,12 @@ async function empresaCarregarContexto(session) {
   // 3) define a empresa ativa: a salva (se ainda existir na lista) ou a do perfil
   const salva = sessionStorage.getItem(_EMP_KEY);
   const existeSalva = salva && EMPRESA.lista.some(e => e.id === salva);
+  // o perfil só vale como ativa se estiver na lista visível (senão uma empresa oculta
+  // — ex.: perfil do master aponta p/ a inativa — voltaria a aparecer nos dados).
+  const perfilNaLista = EMPRESA.perfilEmpresaId && EMPRESA.lista.some(e => e.id === EMPRESA.perfilEmpresaId);
   EMPRESA.ativaId = existeSalva ? salva
-                    : (EMPRESA.perfilEmpresaId
-                       || (EMPRESA.lista[0] && EMPRESA.lista[0].id)
-                       || null);
+                    : (perfilNaLista ? EMPRESA.perfilEmpresaId
+                       : ((EMPRESA.lista[0] && EMPRESA.lista[0].id) || null));
   if (EMPRESA.ativaId) sessionStorage.setItem(_EMP_KEY, EMPRESA.ativaId);
 }
 
