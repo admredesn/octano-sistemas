@@ -33,10 +33,12 @@ async function empresaCarregarContexto(session) {
 
   // 2) lista de empresas que o usuario pode ver
   if (EMPRESA.ehMaster) {
-    // master ve todas
+    // master ve todas as ATIVAS (empresa com ativo=false fica oculta do seletor;
+    // reativar = voltar ativo=true no banco). Inclui ativo=null (nao desativada).
     const { data } = await sb
       .from('oct_empresas')
       .select('id, nome, nome_fantasia, cnpj')
+      .or('ativo.is.null,ativo.eq.true')
       .order('nome', { ascending: true });
     EMPRESA.lista = data || [];
   } else {
