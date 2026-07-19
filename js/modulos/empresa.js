@@ -46,10 +46,36 @@ async function moduloEmpresa() {
         ? `<button onclick="empAbrirNova()" style="padding:6px 14px;border-radius:6px;border:none;background:#22c55e;color:#fff;cursor:pointer;font-weight:600">➕ Nova empresa</button>`
         : '');
 
+  // painel master: TODAS as empresas (inclui ocultas) com toggle ativar/ocultar
+  let painelEmpresasHtml = '';
+  if (perfil?.master === true || (typeof EMPRESA !== 'undefined' && EMPRESA.ehMaster)) {
+    const { data: _todas } = await sb.from('oct_empresas').select('id,nome,ativo').order('nome', { ascending: true });
+    const _ativaId = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+    const _linhas = (_todas || []).map(e => {
+      const oc = e.ativo === false;
+      const at = e.id === _ativaId;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid #1c1f2e">'
+        + '<span style="flex:1;color:' + (oc ? '#6b7280' : '#dbe2ea') + '">' + (e.nome || '—')
+        + (at ? ' <small style="color:#f97316">(ativa)</small>' : '') + '</span>'
+        + '<span style="font-size:0.72rem;padding:2px 8px;border-radius:10px;border:1px solid ' + (oc ? '#5a2a2a' : '#245a35')
+        + ';color:' + (oc ? '#f87171' : '#4ade80') + ';background:' + (oc ? '#241012' : '#0f2417') + '">'
+        + (oc ? 'Oculta' : 'Visível') + '</span>'
+        + '<button onclick="empToggleAtivo(\'' + e.id + '\', ' + (oc ? 'true' : 'false') + ')" '
+        + 'style="padding:5px 12px;border-radius:6px;border:1px solid #2a2d3e;background:' + (oc ? '#123322' : '#1b2130')
+        + ';color:' + (oc ? '#4ade80' : '#cdd6e4') + ';cursor:pointer;font-size:0.76rem">'
+        + (oc ? '↑ Reativar' : '⨯ Ocultar') + '</button></div>';
+    }).join('');
+    painelEmpresasHtml = '<div class="modulo-header" style="margin-top:6px"><h2>🏢 Empresas da rede</h2></div>'
+      + '<div style="background:#0f111a;border:1px solid #21232f;border-radius:10px;margin-bottom:6px">'
+      + (_linhas || '<div style="padding:12px;color:#6b7280">Nenhuma empresa.</div>') + '</div>'
+      + '<p style="color:#6b7688;font-size:0.74rem;margin:-2px 0 22px">Ocultar tira a empresa do seletor e do monitor (não apaga nada). Reativar traz de volta.</p>';
+  }
+
   conteudo.innerHTML = `
     <div class="modulo-container">
 
       <div class="modulo-header" style="display:flex;justify-content:space-between;align-items:center">${cabecalho}</div>
+      ${painelEmpresasHtml}
       <div class="form-grid">
 
         <div class="form-group">
@@ -258,6 +284,23 @@ async function moduloEmpresa() {
     v = v.replace(/(\d{5})(\d)/, '$1-$2');
     this.value = v;
   });
+}
+
+// ─── Ativar / Ocultar empresa (master) ──────────────────────────────────────
+async function empToggleAtivo(id, novoAtivo) {
+  const acao = novoAtivo ? 'reativar' : 'ocultar';
+  if (!confirm('Deseja ' + acao + ' esta empresa?\n\n' + (novoAtivo
+      ? 'Ela volta a aparecer no seletor e no monitor.'
+      : 'Ela some do seletor e do monitor. Nada é apagado — dá pra reativar depois.'))) return;
+  const { error } = await sb.from('oct_empresas').update({ ativo: novoAtivo }).eq('id', id);
+  if (error) { alert('Erro ao ' + acao + ': ' + (error.message || error)); return; }
+  // recarrega a lista de empresas (seletor) e a tela
+  try {
+    const s = (typeof getSession === 'function') ? await getSession() : null;
+    if (s && typeof empresaCarregarContexto === 'function') await empresaCarregarContexto(s);
+    if (typeof empresaRenderSeletor === 'function') empresaRenderSeletor();
+  } catch (e) { /* segue: a tela recarrega mesmo assim */ }
+  moduloEmpresa();
 }
 
 // ─── CNPJ ────────────────────────────────────────────────────────────────────
