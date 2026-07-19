@@ -15,7 +15,8 @@ let _monTv = false;
 
 async function _monDados() {
   const [rEmp, rTank, rRec] = await Promise.all([
-    sb.from('oct_empresas').select('id,nome'),
+    // só empresas ATIVAS: uma empresa oculta (ativo=false) some do monitor por completo.
+    sb.from('oct_empresas').select('id,nome').or('ativo.is.null,ativo.eq.true'),
     sb.from('oct_tanques').select('empresa_id,numero,combustivel,capacidade,ativo').eq('ativo', true),
     // postos com medição RECENTE: ordena por mais recente (senão o PostgREST corta em 1000
     // linhas e um posto que grava muito domina a lista, escondendo os outros).
@@ -23,9 +24,12 @@ async function _monDados() {
   ]);
   const nomes = {};
   (rEmp.data || []).forEach(e => { nomes[e.id] = e.nome; });
+  const ativos = new Set((rEmp.data || []).map(e => e.id));   // empresas visíveis
   const tanks = rTank.data || [];
-  // postos: os que têm tanque cadastrado OU medição recente (pega até sem cadastro)
-  const empIds = [...new Set([...tanks.map(t => t.empresa_id), ...(rRec.data || []).map(r => r.empresa_id)])];
+  // postos: os que têm tanque cadastrado OU medição recente (pega até sem cadastro),
+  // MAS só de empresas ativas — tanque/medição de empresa oculta não aparece.
+  const empIds = [...new Set([...tanks.map(t => t.empresa_id), ...(rRec.data || []).map(r => r.empresa_id)])]
+    .filter(id => ativos.has(id));
 
   // ultima medicao por (empresa, tanque)
   const latest = {};
