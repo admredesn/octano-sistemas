@@ -47,6 +47,7 @@ async function moduloProdutos() {
       { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
       { campo: 'preco_custo', titulo: 'Custo', align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
       { campo: 'preco_venda_a', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
+      { campo: 'preco_frota', titulo: 'Frota', align: 'right', largura: '100px', render: (v)=> Number(v||0)>0 ? '<span style="color:#fbbf24">R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2})+'</span>' : '—' },
       { campo: 'estoque', titulo: 'Estoque', align: 'right', largura: '110px', valor:(p)=>p.estoque, render: (v,p)=> Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:3})+' '+(p.unidade||'un') },
       { campo: 'ncm', titulo: 'NCM', largura: '90px', render: (v)=> v||'—' },
       { titulo: 'Tanque', largura: '150px', valor: (p)=> p.oct_tanques ? ('T'+p.oct_tanques.numero+' '+p.oct_tanques.combustivel) : '', render: (v)=> v ? `<span style="color:#4caf50">⛽ ${v}</span>` : '—' },
@@ -190,6 +191,22 @@ async function abrirFormProduto(id, empresaId) {
           </div>
         </div>
         <div class="form-group"><label>Preço venda</label><input id="fp-venda" type="number" step="0.01" value="${p?.preco_venda_a||0}" oninput="produtoCalcMargem()" /></div>
+        <div class="form-group">
+          <label>Preço frota — modo</label>
+          <select id="fp-frota-modo" onchange="produtoCalcFrota()">
+            <option value="manual"  ${(p?.frota_modo||'manual')==='manual'?'selected':''}>Manual (preço fixo)</option>
+            <option value="percent" ${p?.frota_modo==='percent'?'selected':''}>Venda + acréscimo %</option>
+            <option value="fixo"    ${p?.frota_modo==='fixo'?'selected':''}>Venda + acréscimo R$</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label id="fp-frota-lbl">Preço frota (R$)</label>
+          <input id="fp-frota-acrescimo" type="number" step="0.0001" value="${p?.frota_acrescimo||0}" oninput="produtoCalcFrota()" placeholder="valor conforme o modo" />
+        </div>
+        <div class="form-group span2">
+          <label>Preço frota calculado <span style="color:#f97316">(é o que vai pro Prime)</span></label>
+          <div id="fp-frota-resultado" style="padding:9px 12px;border:1px solid #3a2f13;border-radius:6px;background:#1a1508;color:#fbbf24;font-weight:600">R$ 0,00</div>
+        </div>
         <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque||0}" /></div>
         <div class="form-group"><label>Estoque mínimo</label><input id="fp-estoque-min" type="number" step="0.001" value="${p?.estoque_minimo||0}" /></div>
         <div class="form-group">
@@ -251,6 +268,8 @@ async function abrirFormProduto(id, empresaId) {
       </div>
     </div>
   `;
+  produtoCalcMargem();
+  produtoCalcFrota();
 }
 
 async function salvarProduto(id, empresaId) {
@@ -268,6 +287,10 @@ async function salvarProduto(id, empresaId) {
     ncm:           document.getElementById('fp-ncm').value.trim() || null,
     preco_custo:   parseFloat(document.getElementById('fp-custo').value) || 0,
     preco_venda_a:   parseFloat(document.getElementById('fp-venda').value) || 0,
+    // preço frota (o que o núcleo empurra pro portal Prime)
+    frota_modo:      document.getElementById('fp-frota-modo')?.value || 'manual',
+    frota_acrescimo: parseFloat(document.getElementById('fp-frota-acrescimo')?.value) || 0,
+    preco_frota:     produtoCalcFrota(),
     estoque: parseFloat(document.getElementById('fp-estoque').value) || 0,
     estoque_minimo:parseFloat(document.getElementById('fp-estoque-min').value) || 0,
     tanque_id:     document.getElementById('fp-tanque').value || null,
@@ -348,6 +371,31 @@ function produtoCalcMargem() {
     const m = ((venda / custo) - 1) * 100;
     margemEl.placeholder = `atual: ${m.toFixed(1)}%`;
   }
+  produtoCalcFrota();   // venda mudou -> recalcula o preço frota
+}
+
+// ---------- PREÇO FROTA (o que vai pro Prime) ----------
+// 3 modos: manual (preço fixo), venda + acréscimo %, venda + acréscimo R$.
+function produtoCalcFrota() {
+  const modo = document.getElementById('fp-frota-modo')?.value || 'manual';
+  const ac = parseFloat(document.getElementById('fp-frota-acrescimo')?.value) || 0;
+  const venda = parseFloat(document.getElementById('fp-venda')?.value) || 0;
+  const lbl = document.getElementById('fp-frota-lbl');
+  const res = document.getElementById('fp-frota-resultado');
+  let preco = 0;
+  if (modo === 'percent') {
+    if (lbl) lbl.textContent = 'Acréscimo sobre a venda (%)';
+    preco = venda * (1 + ac / 100);
+  } else if (modo === 'fixo') {
+    if (lbl) lbl.textContent = 'Acréscimo sobre a venda (R$)';
+    preco = venda + ac;
+  } else {
+    if (lbl) lbl.textContent = 'Preço frota (R$)';
+    preco = ac;
+  }
+  preco = Math.max(0, Math.round(preco * 10000) / 10000);
+  if (res) res.textContent = 'R$ ' + preco.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return preco;
 }
 
 // ---------- #5 EDIÇÃO EM LOTE ----------
