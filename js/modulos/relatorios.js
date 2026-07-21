@@ -86,9 +86,11 @@ async function relatorioRecebimentos() {
     <div id="rel-rc-corpo"><p style="color:#888">Carregando…</p></div>
   </div>`;
   relatorioRecebimentosCarregar();
+  // atualiza sozinho a cada 20s (silencioso, preserva os filtros)
+  if (typeof octAutoRefresh === 'function') octAutoRefresh(() => relatorioRecebimentosCarregar(true), 20000);
 }
 
-async function relatorioRecebimentosCarregar() {
+async function relatorioRecebimentosCarregar(silencioso) {
   const box = document.getElementById('rel-rc-corpo');
   if (!box) return;
   const eid = _relEid();
@@ -96,7 +98,7 @@ async function relatorioRecebimentosCarregar() {
   const ini = document.getElementById('rel-rc-ini')?.value || _relDataInicioMes();
   const fim = document.getElementById('rel-rc-fim')?.value || _relDataHoje();
   const origem = document.getElementById('rel-rc-origem')?.value || '';
-  box.innerHTML = '<p style="color:#888">Carregando…</p>';
+  if (!silencioso) box.innerHTML = '<p style="color:#888">Carregando…</p>';
 
   let q = sb.from('oct_recebimentos').select('*').eq('empresa_id', eid)
     .gte('recebido_em', ini + 'T00:00:00').lte('recebido_em', fim + 'T23:59:59');
