@@ -101,6 +101,8 @@ async function moduloManifestacao() {
   `;
 
   await manifCarregarAba();
+  // atualiza a aba atual sozinha a cada 15s (silencioso, preserva filtro/seleção)
+  if (typeof octAutoRefresh === 'function') octAutoRefresh(() => manifCarregarAba(true), 15000);
 }
 
 async function _manifUltimoNsu() {
@@ -163,12 +165,15 @@ function manifTrocarAba(aba) {
   manifCarregarAba();
 }
 
-async function manifCarregarAba() {
+async function manifCarregarAba(silencioso) {
   const area = document.getElementById('manif-lista-area');
   const acoes = document.getElementById('manif-acoes-area');
   if (!area) return;
-  area.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
-  acoes.innerHTML = '';
+  // no auto-refresh (silencioso) nao mostra "Carregando..." nem limpa a tela -> sem piscar
+  if (!silencioso) {
+    area.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
+    acoes.innerHTML = '';
+  }
 
   if (_manifAbaAtual === 'logs') {
     await manifRenderLogs();
