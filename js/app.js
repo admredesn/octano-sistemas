@@ -19,6 +19,7 @@ const MODULOS = [
   { id: 'notas_prazo',   label: 'Notas a Prazo',  breve: false },
   { id: 'formas_pagamento', label: 'Formas de Pagamento', breve: false },
   { id: 'lmc',           label: 'LMC',            breve: false },
+  { id: 'relatorios',    label: '📊 Relatórios',  breve: false },
   { id: 'whatsapp',      label: '📱 WhatsApp',    breve: false },
   { id: 'cashback',      label: '💸 Cashback',    breve: false },
   { id: 'despesas',      label: 'Despesas',       breve: true  },
@@ -132,6 +133,7 @@ function navegarPara(modulo){
     notas_prazo: moduloNotasPrazo,
     formas_pagamento: moduloFormasPagamento,
     lmc:           moduloLmc,
+    relatorios:    moduloRelatorios,
     whatsapp:      moduloWhatsapp,
     cashback:      moduloCashback,
   };
