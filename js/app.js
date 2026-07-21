@@ -105,7 +105,29 @@ function renderToolbar(){
   ).join('');
 }
 
+// ── AUTO-REFRESH das telas (a lista se atualiza sozinha) ────────────────────
+// Cada modulo que quer atualizar sozinho chama octAutoRefresh(fn, ms) no fim do
+// seu render. O timer e trocado a cada navegacao e PAUSA quando: a aba do
+// navegador esta oculta, o usuario esta digitando (input/select/textarea em foco),
+// ou um modal esta aberto -> nunca atrapalha quem esta preenchendo/filtrando.
+let _autoRefreshTimer = null;
+function octAutoRefreshParar(){
+  if(_autoRefreshTimer){ clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+}
+function octAutoRefresh(fn, ms){
+  octAutoRefreshParar();
+  if(typeof fn !== 'function') return;
+  _autoRefreshTimer = setInterval(() => {
+    if(document.hidden) return;                       // aba nao visivel
+    const a = document.activeElement;
+    if(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName || '')) return;  // digitando
+    if(document.querySelector('.modal-overlay, .modal.aberto, [role="dialog"]')) return;  // modal aberto
+    try { fn(); } catch(e){ /* silencioso: refresh nunca quebra a tela */ }
+  }, ms || 15000);
+}
+
 function navegarPara(modulo){
+  octAutoRefreshParar();   // para o auto-refresh da tela anterior
   _moduloAtual = modulo;
   document.querySelectorAll('.toolbar-item').forEach(el => el.classList.remove('ativo'));
   const tab = document.getElementById('tab-' + modulo);
