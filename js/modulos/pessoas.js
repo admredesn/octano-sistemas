@@ -139,6 +139,14 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
+        ${id ? `
+        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
+          <label>🏢 Colaboradores autorizados <span style="font-size:0.72rem;color:#888">(abastecem a prazo pelo app NA CONTA desta empresa — o cupom sai no nome dela)</span></label>
+          <div id="fpe-colab-lista" style="margin:6px 0"><span style="color:#666;font-size:0.8rem">Carregando…</span></div>
+          <input id="fpe-colab-busca" placeholder="Adicionar: busque a pessoa por nome ou CPF…" autocomplete="off"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd" />
+          <div id="fpe-colab-res"></div>
+        </div>` : ''}
       </div>
       <div class="form-acoes">
         <button onclick="salvarPessoa('${id||''}','${empresaId}')" class="btn-salvar">💾 Salvar</button>
@@ -148,6 +156,60 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
     </div>
   `;
+  if (id) colabInit(id, empresaId);
+}
+
+// ---- COLABORADORES AUTORIZADOS (frota a prazo pelo app) ----
+// vínculo = oct_pessoas.frota_empresa_id do COLABORADOR apontando p/ a empresa.
+let _colabBuscaTimer = null;
+async function colabInit(empresaPessoaId, empresaId) {
+  await colabCarregar(empresaPessoaId);
+  const busca = document.getElementById('fpe-colab-busca');
+  if (!busca) return;
+  busca.addEventListener('input', () => {
+    clearTimeout(_colabBuscaTimer);
+    _colabBuscaTimer = setTimeout(async () => {
+      const q = busca.value.trim(), res = document.getElementById('fpe-colab-res');
+      if (q.length < 2) { res.innerHTML = ''; return; }
+      const { data } = await sb.from('oct_pessoas')
+        .select('id,nome,documento,frota_empresa_id')
+        .eq('empresa_id', empresaId)
+        .or(`nome.ilike.*${q}*,documento.ilike.*${q}*`)
+        .neq('id', empresaPessoaId)
+        .limit(8);
+      res.innerHTML = (data || []).map(x => `
+        <div onclick="colabAdd('${x.id}','${empresaPessoaId}')"
+          style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1a1d2e;cursor:pointer;color:#ddd;font-size:0.84rem"
+          onmouseover="this.style.background='#1a1d2e'" onmouseout="this.style.background='transparent'">
+          <span>${x.nome} <small style="color:#888">${x.documento || ''}</small></span>
+          <span style="color:${x.frota_empresa_id ? '#f59e0b' : '#4ade80'}">${x.frota_empresa_id ? 'já vinculado a outra' : '+ vincular'}</span>
+        </div>`).join('') || '<div style="color:#666;font-size:0.8rem;padding:6px">Ninguém encontrado.</div>';
+    }, 400);
+  });
+}
+async function colabCarregar(empresaPessoaId) {
+  const el = document.getElementById('fpe-colab-lista');
+  if (!el) return;
+  const { data } = await sb.from('oct_pessoas')
+    .select('id,nome,documento').eq('frota_empresa_id', empresaPessoaId).order('nome');
+  el.innerHTML = (data || []).length
+    ? data.map(x => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #1a1d2e;font-size:0.84rem;color:#ddd">
+        <span>👤 ${x.nome} <small style="color:#888">${x.documento || ''}</small></span>
+        <button onclick="colabRemover('${x.id}','${empresaPessoaId}')" style="padding:3px 9px;border-radius:5px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer">✕</button>
+      </div>`).join('')
+    : '<span style="color:#666;font-size:0.8rem">Nenhum colaborador vinculado.</span>';
+}
+async function colabAdd(pessoaId, empresaPessoaId) {
+  const { error } = await sb.from('oct_pessoas').update({ frota_empresa_id: empresaPessoaId }).eq('id', pessoaId);
+  if (error) { alert('Falha ao vincular: ' + error.message); return; }
+  document.getElementById('fpe-colab-busca').value = '';
+  document.getElementById('fpe-colab-res').innerHTML = '';
+  colabCarregar(empresaPessoaId);
+}
+async function colabRemover(pessoaId, empresaPessoaId) {
+  await sb.from('oct_pessoas').update({ frota_empresa_id: null }).eq('id', pessoaId);
+  colabCarregar(empresaPessoaId);
 }
 
 async function buscarCnpjPessoa() {
