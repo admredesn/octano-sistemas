@@ -136,6 +136,9 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group span2"><label>Observações</label><input id="fpe-obs" type="text" value="${p?.observacoes||''}" /></div>
         <div class="form-group"><label>Chave Pix <span style="font-size:0.72rem;color:#888">(p/ cashback)</span></label><input id="fpe-chavepix" type="text" value="${p?.chave_pix||''}" placeholder="CPF, celular, e-mail ou aleatória" /></div>
         <div class="form-group"><label>Cashback</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cashback" type="checkbox" ${p?.cashback_ativo?'checked':''} style="width:auto" /> Recebe cashback (R$0,05/litro via Pix)</label></div>
+        <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
+        <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
+        <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
       </div>
       <div class="form-acoes">
         <button onclick="salvarPessoa('${id||''}','${empresaId}')" class="btn-salvar">💾 Salvar</button>
@@ -211,6 +214,9 @@ async function salvarPessoa(id, empresaId) {
     email:       document.getElementById('fpe-email').value.trim() || null,
     chave_pix:   document.getElementById('fpe-chavepix')?.value.trim() || null,
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
+    aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
+    limite_nota_prazo: parseFloat(document.getElementById('fpe-prazo-limite')?.value) || null,
+    credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
     bairro:      document.getElementById('fpe-bairro')?.value.trim() || null,
     cep:         document.getElementById('fpe-cep')?.value.trim() || null,
