@@ -33,6 +33,8 @@ async function abrirBicosTanque(tanqueId, tanqueNumero, combustivel) {
         ${b.ativo === false ? '<span style="color:#888">inativo</span>' : '<span style="color:#4caf50">ativo</span>'}
       </td>
       <td style="padding:8px;border-bottom:1px solid #2a2d3e;text-align:right">
+        <button onclick='gerarQrBico(${Number(b.numero)})' title="Gerar QR code do cashback deste bico (PDF p/ imprimir)"
+          style="padding:4px 10px;border-radius:5px;border:1px solid #f97316;background:transparent;color:#f97316;cursor:pointer">🔳 QR</button>
         <button onclick='editarBico(${JSON.stringify(b).replace(/'/g, "&#39;")}, "${tanqueId}", ${tanqueNumero}, "${combustivel}")'
           style="padding:4px 10px;border-radius:5px;border:1px solid #444;background:transparent;color:#aaa;cursor:pointer">✏️</button>
         <button onclick='excluirBico("${b.id}", "${tanqueId}", ${tanqueNumero}, "${combustivel}")'
@@ -69,7 +71,11 @@ async function abrirBicosTanque(tanqueId, tanqueNumero, combustivel) {
         </tbody>
       </table>
 
-      <button onclick='abrirFormBico("${tanqueId}", ${tanqueNumero}, "${combustivel}")' class="btn-salvar" style="margin-top:16px;padding:8px 18px">+ Novo Bico</button>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <button onclick='abrirFormBico("${tanqueId}", ${tanqueNumero}, "${combustivel}")' class="btn-salvar" style="padding:8px 18px">+ Novo Bico</button>
+        <button onclick='gerarQrTodosBicos()' title="PDF com o QR do cashback de TODOS os bicos do posto (6 por página A4)"
+          style="padding:8px 18px;border-radius:6px;border:1px solid #f97316;background:transparent;color:#f97316;cursor:pointer">🖨 Imprimir QR de todos os bicos</button>
+      </div>
 
       <div id="form-bico" style="display:none;margin-top:24px">
         <div class="modulo-header"><h2 id="form-bico-titulo">➕ Novo Bico</h2></div>
@@ -187,6 +193,26 @@ async function salvarBico() {
   msg.textContent = '✅ Salvo!'; msg.style.color = '#4caf50';
   const ctx = window.__bicoCtx;
   setTimeout(() => abrirBicosTanque(ctx.tanqueId, ctx.tanqueNumero, ctx.combustivel), 700);
+}
+
+// ---- QR code do CASHBACK por bico (PDF pronto p/ imprimir) ----
+// O vínculo é a própria URL do QR: /cashback?p=<empresa>&bico=<numero>.
+// O portal usa o nº do bico p/ puxar combustível/preço e casar o abastecimento.
+async function _qrEmpresaId() {
+  if (typeof empresaAtiva === 'function' && empresaAtiva()) return empresaAtiva();
+  const { data: { session } } = await sb.auth.getSession();
+  const { data: perfil } = await sb.from('oct_perfis').select('empresa_id').eq('id', session.user.id).single();
+  return perfil?.empresa_id;
+}
+async function gerarQrBico(numero) {
+  const emp = await _qrEmpresaId();
+  if (!emp) return alert('Empresa não identificada.');
+  window.open(`${SEFAZ_URL}/cashback/qr-pdf?p=${emp}&bicos=${numero}`, '_blank');
+}
+async function gerarQrTodosBicos() {
+  const emp = await _qrEmpresaId();
+  if (!emp) return alert('Empresa não identificada.');
+  window.open(`${SEFAZ_URL}/cashback/qr-pdf?p=${emp}`, '_blank');
 }
 
 async function excluirBico(id, tanqueId, tanqueNumero, combustivel) {
