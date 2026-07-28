@@ -146,6 +146,18 @@ async function abrirFormPessoa(id, empresaId) {
           <input id="fpe-colab-busca" placeholder="Adicionar: busque a pessoa por nome ou CPF…" autocomplete="off"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd" />
           <div id="fpe-colab-res"></div>
+        </div>
+        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
+          <label>🚚 Frota da empresa <span style="font-size:0.72rem;color:#888">(as placas aparecem no app na compra a prazo; com MOTORISTA definido, só ele vê a placa)</span></label>
+          <div id="fpe-frota-lista" style="margin:6px 0"><span style="color:#666;font-size:0.8rem">Carregando…</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <input id="fpe-frota-placa" placeholder="Placa (ABC1D23)" maxlength="8" style="flex:1;min-width:110px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd;text-transform:uppercase" />
+            <input id="fpe-frota-veic" placeholder="Veículo (ex: VW Constellation)" style="flex:2;min-width:160px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd" />
+            <select id="fpe-frota-mot" style="flex:1.5;min-width:150px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd">
+              <option value="">— sem motorista fixo —</option>
+            </select>
+            <button type="button" onclick="frotaAdd('${id}','${empresaId}')" class="btn-salvar" style="padding:9px 16px">+ Placa</button>
+          </div>
         </div>` : ''}
       </div>
       <div class="form-acoes">
@@ -156,7 +168,60 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
     </div>
   `;
-  if (id) colabInit(id, empresaId);
+  if (id) { colabInit(id, empresaId); frotaInit(id, empresaId); }
+}
+
+// ---- FROTA DA EMPRESA (placas que aparecem no app na compra a prazo) ----
+async function frotaInit(empresaPessoaId, empresaId) {
+  await frotaCarregar(empresaPessoaId);
+  // motoristas possíveis = colaboradores vinculados à empresa
+  const sel = document.getElementById('fpe-frota-mot');
+  if (!sel) return;
+  const { data } = await sb.from('oct_pessoas')
+    .select('id,nome').eq('frota_empresa_id', empresaPessoaId).order('nome');
+  sel.innerHTML = '<option value="">— sem motorista fixo —</option>' +
+    (data || []).map(x => `<option value="${x.id}">${x.nome}</option>`).join('');
+}
+async function frotaCarregar(empresaPessoaId) {
+  const el = document.getElementById('fpe-frota-lista');
+  if (!el) return;
+  const { data: veics } = await sb.from('oct_frota_veiculos')
+    .select('id,placa,veiculo,motorista_pessoa_id').eq('pessoa_id', empresaPessoaId)
+    .eq('ativo', true).order('placa');
+  if (!(veics || []).length) {
+    el.innerHTML = '<span style="color:#666;font-size:0.8rem">Nenhum veículo cadastrado.</span>';
+    return;
+  }
+  const motIds = [...new Set(veics.map(v => v.motorista_pessoa_id).filter(Boolean))];
+  const nomes = {};
+  if (motIds.length) {
+    const { data: ms } = await sb.from('oct_pessoas').select('id,nome').in('id', motIds);
+    (ms || []).forEach(m => { nomes[m.id] = m.nome; });
+  }
+  el.innerHTML = veics.map(v => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #1a1d2e;font-size:0.84rem;color:#ddd">
+      <span>🚚 <b>${v.placa}</b>${v.veiculo ? ' · ' + v.veiculo : ''}${v.motorista_pessoa_id ? ` · <span style="color:#60a5fa">👤 ${nomes[v.motorista_pessoa_id] || 'motorista'}</span>` : ' · <span style="color:#888">qualquer colaborador</span>'}</span>
+      <button onclick="frotaRemover('${v.id}','${empresaPessoaId}')" style="padding:3px 9px;border-radius:5px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer">✕</button>
+    </div>`).join('');
+}
+async function frotaAdd(empresaPessoaId, empresaId) {
+  const placa = (document.getElementById('fpe-frota-placa').value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const veiculo = (document.getElementById('fpe-frota-veic').value || '').trim();
+  const mot = document.getElementById('fpe-frota-mot').value || null;
+  if (placa.length < 6) { alert('Placa inválida.'); return; }
+  const { error } = await sb.from('oct_frota_veiculos').insert({
+    empresa_id: empresaId, pessoa_id: empresaPessoaId,
+    placa, veiculo: veiculo || null, motorista_pessoa_id: mot, ativo: true,
+  });
+  if (error) { alert('Falha ao cadastrar: ' + error.message); return; }
+  document.getElementById('fpe-frota-placa').value = '';
+  document.getElementById('fpe-frota-veic').value = '';
+  document.getElementById('fpe-frota-mot').value = '';
+  frotaCarregar(empresaPessoaId);
+}
+async function frotaRemover(veicId, empresaPessoaId) {
+  await sb.from('oct_frota_veiculos').update({ ativo: false }).eq('id', veicId);
+  frotaCarregar(empresaPessoaId);
 }
 
 // ---- COLABORADORES AUTORIZADOS (frota a prazo pelo app) ----
