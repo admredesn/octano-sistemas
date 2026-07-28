@@ -83,7 +83,7 @@ function _monCorNivel(pct) {
   return '#22c55e';
 }
 
-function _monCardTanque(t, med, tv) {
+function _monCardTanque(t, med, tv, litrosHoje) {
   const cap = Number(t.capacidade || 0);
   const vol = med ? Number(med.volume || 0) : 0;
   const temCap = cap > 0;
@@ -116,12 +116,31 @@ function _monCardTanque(t, med, tv) {
       ${entrega ? `<span style="color:#38bdf8;font-weight:700">🚚 DESCARGA</span>` : ''}
       ${!temCap ? `<span style="color:#f59e0b">⚠️ capacidade não cadastrada</span>` : ''}
     </div>
+    ${_monCardAutonomia(vol, litrosHoje, tv)}
   </div>`;
 }
 
-function _monCardPosto(nome, tanksDoPosto, latest, eid, tv) {
+// card de AUTONOMIA embaixo do tanque: quanto tempo o estoque dura no ritmo
+// de vendas de hoje (verde >5 dias, amarelo 2–5, vermelho <2)
+function _monCardAutonomia(vol, litrosHoje, tv) {
+  const dias = _monAutonomia(vol, litrosHoje);
+  const fs = tv ? '0.9rem' : '0.74rem';
+  if (dias == null)
+    return `<div style="margin-top:7px;background:#0b0f18;border:1px dashed #232838;border-radius:8px;padding:${tv ? '8px 10px' : '6px 8px'};font-size:${fs};color:#64748b">⏳ Autonomia: aguardando vendas do dia</div>`;
+  const cor = dias >= 5 ? '#22c55e' : dias >= 2 ? '#f59e0b' : '#ef4444';
+  const rotulo = dias >= 1 ? _monNum(dias, 1) + ' dia(s)' : _monNum(dias * 24, 0) + ' hora(s)';
+  const ritmo = _monNum(litrosHoje, 0);
+  return `<div style="margin-top:7px;background:#0b0f18;border:1px solid #232838;border-radius:8px;padding:${tv ? '8px 10px' : '6px 8px'};display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+    <span style="font-size:${fs};color:#94a3b8">⏳ Autonomia</span>
+    <span style="font-size:${tv ? '1.1rem' : '0.9rem'};font-weight:800;color:${cor}">${rotulo}</span>
+    <span style="font-size:${tv ? '0.78rem' : '0.66rem'};color:#64748b">${ritmo} L hoje</span>
+  </div>`;
+}
+
+function _monCardPosto(nome, tanksDoPosto, latest, eid, tv, vendasEmp) {
   const ts = Object.values(tanksDoPosto || {}).sort((a, b) => (a.numero || 0) - (b.numero || 0));
-  const cards = ts.map(t => _monCardTanque(t, latest[eid + '|' + t.numero], tv)).join('');
+  const litrosT = (vendasEmp && vendasEmp.litrosTanque) || {};
+  const cards = ts.map(t => _monCardTanque(t, latest[eid + '|' + t.numero], tv, Number(litrosT[t.numero] || 0))).join('');
   let maisRecente = null;
   ts.forEach(t => { const m = latest[eid + '|' + t.numero]; if (m && (!maisRecente || m.medido_em > maisRecente)) maisRecente = m.medido_em; });
   const fr = _monFrescor(maisRecente);
@@ -177,6 +196,12 @@ async function _monVendas(empIds) {
   const out = {};
   for (const [eid, data] of listas) {
     const vendas = data.filter(v => (v.status || '') !== 'cancelada');
+    // litros vendidos HOJE por TANQUE (p/ projeção de autonomia do estoque)
+    const litrosTanque = {};
+    vendas.forEach(v => (v.itens || []).forEach(it => {
+      if (it && it.tipo === 'abastecimento' && it.n_tanque != null)
+        litrosTanque[it.n_tanque] = (litrosTanque[it.n_tanque] || 0) + Number(it.qtd || 0);
+    }));
     // guarda só o LEVE (nada de itens/fiscal): o cache e o render ficam instantâneos
     const leve = v => ({
       data_venda: v.data_venda, valor_total: Number(v.valor_total || 0),
@@ -190,9 +215,21 @@ async function _monVendas(empIds) {
       lucro: vendas.reduce((s, v) => s + _monLucroVenda(v, custoMap), 0),
       ultima: vendas[0] ? leve(vendas[0]) : null,
       recentes: vendas.slice(0, 5).map(leve),
+      litrosTanque,
     };
   }
   return out;
+}
+
+// projeção de AUTONOMIA do tanque: volume atual ÷ ritmo de venda de hoje
+// (litros vendidos hoje extrapolados p/ 24h). Precisa de pelo menos ~3h de
+// dia decorrido e alguma venda no tanque p/ estimar.
+function _monAutonomia(vol, litrosHoje) {
+  const agora = new Date();
+  const fracDia = (agora.getHours() + agora.getMinutes() / 60) / 24;
+  if (!(vol > 0) || !(litrosHoje > 0) || fracDia < 0.125) return null;
+  const consumoDia = litrosHoje / fracDia;
+  return vol / consumoDia;   // em dias
 }
 
 function _monCardVendaPosto(nome, v, tv) {
@@ -267,7 +304,7 @@ function _monHtml(dados, tv, doCache) {
     // seção TANQUES
     const secTanques = `
       <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#e2e8f0;margin:${tv ? '4px 0 12px' : '2px 0 8px'}">🛢️ Tanques</div>
-      ${ordenados.length ? ordenados.map(eid => _monCardPosto(nomes[eid], tanksByEmp[eid], latest, eid, tv)).join('') : '<p style="color:#94a3b8;padding:24px">Nenhum posto com medição encontrado.</p>'}`;
+      ${ordenados.length ? ordenados.map(eid => _monCardPosto(nomes[eid], tanksByEmp[eid], latest, eid, tv, vendas[eid])).join('') : '<p style="color:#94a3b8;padding:24px">Nenhum posto com medição encontrado.</p>'}`;
 
     const cab = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:${tv ? '18px' : '12px'}">
