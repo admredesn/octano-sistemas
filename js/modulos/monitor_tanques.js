@@ -13,7 +13,22 @@
 let _monTimer = null;
 let _monTv = false;
 
-async function _monDados() {
+// última medição por (empresa, tanque) — todas as empresas em paralelo
+async function _monLatest(empIds) {
+  const latest = {};
+  await Promise.all(empIds.map(async (eid) => {
+    const { data } = await sb.from('oct_medicoes')
+      .select('tanque_numero,combustivel,volume,volume_tc,agua,temperatura,entrega_em_progresso,medido_em')
+      .eq('empresa_id', eid).order('medido_em', { ascending: false }).limit(40);
+    (data || []).forEach(m => {
+      const k = eid + '|' + m.tanque_numero;
+      if (!latest[k]) latest[k] = m;
+    });
+  }));
+  return latest;
+}
+
+async function _monTudo() {
   const [rEmp, rTank, rRec] = await Promise.all([
     // só empresas ATIVAS: uma empresa oculta (ativo=false) some do monitor por completo.
     sb.from('oct_empresas').select('id,nome').or('ativo.is.null,ativo.eq.true'),
@@ -31,17 +46,8 @@ async function _monDados() {
   const empIds = [...new Set([...tanks.map(t => t.empresa_id), ...(rRec.data || []).map(r => r.empresa_id)])]
     .filter(id => ativos.has(id));
 
-  // ultima medicao por (empresa, tanque)
-  const latest = {};
-  await Promise.all(empIds.map(async (eid) => {
-    const { data } = await sb.from('oct_medicoes')
-      .select('tanque_numero,combustivel,volume,volume_tc,agua,temperatura,entrega_em_progresso,medido_em')
-      .eq('empresa_id', eid).order('medido_em', { ascending: false }).limit(40);
-    (data || []).forEach(m => {
-      const k = eid + '|' + m.tanque_numero;
-      if (!latest[k]) latest[k] = m;
-    });
-  }));
+  // medições E vendas em PARALELO (antes eram 2 rodadas em série — dobrava a espera)
+  const [latest, vendas] = await Promise.all([_monLatest(empIds), _monVendas(empIds)]);
 
   // definicao dos tanques por empresa: oct_tanques (com capacidade) + os vistos na medicao
   const tanksByEmp = {};
@@ -55,7 +61,7 @@ async function _monDados() {
     tanksByEmp[eid] = tanksByEmp[eid] || {};
     if (!tanksByEmp[eid][num]) tanksByEmp[eid][num] = { numero: Number(num), combustivel: m.combustivel || '—', capacidade: 0 };
   });
-  return { nomes, tanksByEmp, latest, empIds };
+  return { nomes, tanksByEmp, latest, empIds, vendas };
 }
 
 function _monNum(v, dec) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: dec || 0, maximumFractionDigits: dec || 0 }); }
@@ -157,28 +163,35 @@ function _monLucroVenda(v, custoMap) {
 async function _monVendas(empIds) {
   const ini = new Date(); ini.setHours(0, 0, 0, 0);
   const desde = ini.toISOString();
-  // mapa produto_id -> preco_custo (p/ calcular o lucro)
-  const custoMap = {};
-  try {
-    const { data: prods } = await sb.from('oct_produtos').select('id,preco_custo').in('empresa_id', empIds);
-    (prods || []).forEach(p => { custoMap[p.id] = Number(p.preco_custo || 0); });
-  } catch (e) { /* sem custo: lucro fica 0 */ }
-  const out = {};
-  await Promise.all(empIds.map(async (eid) => {
-    const { data } = await sb.from('oct_pdv_vendas')
+  // custo (p/ lucro) e vendas em PARALELO (o custo esperava sozinho antes)
+  const pCusto = sb.from('oct_produtos').select('id,preco_custo').in('empresa_id', empIds);
+  const pVendas = Promise.all(empIds.map(eid =>
+    sb.from('oct_pdv_vendas')
       .select('valor_total,data_venda,pagamentos,status,itens')
       .eq('empresa_id', eid).gte('data_venda', desde)
-      .order('data_venda', { ascending: false }).limit(500);
-    const vendas = (data || []).filter(v => (v.status || '') !== 'cancelada');
+      .order('data_venda', { ascending: false }).limit(500)
+      .then(r => [eid, r.data || []])));
+  const [rCusto, listas] = await Promise.all([pCusto.then(r => r, () => ({ data: [] })), pVendas]);
+  const custoMap = {};
+  ((rCusto && rCusto.data) || []).forEach(p => { custoMap[p.id] = Number(p.preco_custo || 0); });
+  const out = {};
+  for (const [eid, data] of listas) {
+    const vendas = data.filter(v => (v.status || '') !== 'cancelada');
+    // guarda só o LEVE (nada de itens/fiscal): o cache e o render ficam instantâneos
+    const leve = v => ({
+      data_venda: v.data_venda, valor_total: Number(v.valor_total || 0),
+      forma: (v.pagamentos && v.pagamentos[0] && v.pagamentos[0].forma) || '',
+      litros: _monVolVenda(v),
+    });
     out[eid] = {
       qtd: vendas.length,
       total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0),
       volume: vendas.reduce((s, v) => s + _monVolVenda(v), 0),
       lucro: vendas.reduce((s, v) => s + _monLucroVenda(v, custoMap), 0),
-      ultima: vendas[0] || null,
-      recentes: vendas.slice(0, 5),
+      ultima: vendas[0] ? leve(vendas[0]) : null,
+      recentes: vendas.slice(0, 5).map(leve),
     };
-  }));
+  }
   return out;
 }
 
@@ -186,8 +199,8 @@ function _monCardVendaPosto(nome, v, tv) {
   v = v || { qtd: 0, total: 0, volume: 0, ultima: null, recentes: [] };
   const ultH = v.ultima ? _monHora(v.ultima.data_venda) : '—';
   const recentes = (v.recentes || []).map(r => {
-    const forma = (r.pagamentos && r.pagamentos[0] && _MON_FORMA[r.pagamentos[0].forma]) || '';
-    const litros = _monVolVenda(r);
+    const forma = _MON_FORMA[r.forma] || '';
+    const litros = Number(r.litros || 0);
     return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:${tv ? '0.9rem' : '0.72rem'};color:#94a3b8;padding:2px 0">
       <span>${_monHora(r.data_venda)}${forma ? ' · ' + forma : ''}${litros > 0 ? ' · ' + _monNum(litros, 1) + ' L' : ''}</span><span style="color:#cbd5e1;font-weight:600">${_monBRL(r.valor_total)}</span></div>`;
   }).join('') || `<div style="color:#6b7280;font-size:${tv ? '0.9rem' : '0.72rem'};padding:4px 0">Sem vendas hoje.</div>`;
@@ -211,11 +224,32 @@ function _monCardVendaPosto(nome, v, tv) {
 async function _monRenderInto(elId, tv) {
   const el = document.getElementById(elId);
   if (!el) return;
+  // ABERTURA INSTANTÂNEA: pinta os últimos dados salvos (sessão) na hora e
+  // atualiza por baixo — a espera das consultas some da percepção.
+  if (!document.getElementById('mon-root')) {
+    try {
+      const c = JSON.parse(sessionStorage.getItem('mon_cache') || 'null');
+      if (c && c.empIds) el.innerHTML = _monHtml(c, tv, true);
+    } catch (e) { /* sem cache */ }
+  }
   try {
-    const { nomes, tanksByEmp, latest, empIds } = await _monDados();
-    const vendas = await _monVendas(empIds);
+    const dados = await _monTudo();
+    try { sessionStorage.setItem('mon_cache', JSON.stringify(dados)); } catch (e) { /* cheio */ }
+    if (document.getElementById(elId)) {
+      const alvo = document.getElementById(elId);
+      if (alvo) alvo.innerHTML = _monHtml(dados, tv, false);
+    }
+  } catch (e) {
+    if (!document.getElementById('mon-root'))
+      el.innerHTML = '<div id="mon-root"><p style="color:#f87171;padding:24px">Erro ao carregar medições: ' + (e.message || e) + '</p></div>';
+  }
+}
+
+function _monHtml(dados, tv, doCache) {
+  const { nomes, tanksByEmp, latest, empIds, vendas } = dados;
+  {
     const ordenados = empIds.slice().sort((a, b) => (nomes[a] || '').localeCompare(nomes[b] || ''));
-    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const hora = doCache ? 'atualizando…' : new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
     // seção VENDAS (NFC-e de hoje)
     const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
@@ -243,11 +277,9 @@ async function _monRenderInto(elId, tv) {
         ${tv ? '' : '<button onclick="monitorAtualizar()" style="padding:6px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#ddd;cursor:pointer">↻ Atualizar</button>'}
       </div>`;
     const corpo = cab + secVendas + secTanques;
-    el.innerHTML = (tv
+    return (tv
       ? `<div id="mon-root" style="min-height:100vh;background:#070a11;padding:22px">${corpo}</div>`
       : `<div id="mon-root" style="padding:4px 2px">${corpo}</div>`);
-  } catch (e) {
-    el.innerHTML = '<div id="mon-root"><p style="color:#f87171;padding:24px">Erro ao carregar medições: ' + (e.message || e) + '</p></div>';
   }
 }
 
