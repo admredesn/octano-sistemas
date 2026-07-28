@@ -104,6 +104,11 @@ async function _lmcGerarLivro() {
       linhas.push({ tanque: t, dia, saldo, medicao: med, diferenca: dif, entrada: ent, saida: sai, obs: pr.observacoes || "", persistId: pr.id || null });
     });
   });
+  // ordena por DATA (todo o movimento do dia junto), depois por tanque —
+  // facilita ler o movimento diário (antes agrupava por produto/tanque)
+  linhas.sort((a, b) => a.dia === b.dia
+    ? (Number(a.tanque.numero) || 0) - (Number(b.tanque.numero) || 0)
+    : a.dia.localeCompare(b.dia));
   return { tanques, linhas };
 }
 
