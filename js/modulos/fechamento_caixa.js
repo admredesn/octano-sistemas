@@ -175,6 +175,7 @@ function fcDetalhe(turnoId) {
     ['Dinheiro + Sangrias', rec.dinheiro],
     ['Despesas', d.despesa],
     ['Cartão', rec.cartao],
+    ['Pix', rec.pix],
     ['Nota a prazo', rec.prazo],
     ['Cheque', rec.cheque],
     ['Carta Frete', 0],
@@ -239,15 +240,15 @@ function fcDetalhe(turnoId) {
           <ul>
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
-              ${nodo('💵 Dinheiro / Sangria')}${nodo('💳 Cartão')}${nodo('📄 Nota a Prazo')}
-              ${nodo('CTF')}${nodo('🧾 Cheque')}${nodo('🚚 Carta Frete')}${nodo('👷 Vale Motorista')}
-              ${nodo('Troco Final')}${nodo('Vale Haver')}${nodo('Despesa')}${nodo('🏦 Depósito em Conta')}
+              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão', 'cartao')}${nodo('⚡ Pix', 'pix')}${nodo('📄 Nota a Prazo', 'prazo')}
+              ${nodo('CTF', 'ctf')}${nodo('🧾 Cheque', 'cheque')}${nodo('🚚 Carta Frete', 'carta_frete')}${nodo('👷 Vale Motorista', 'vale_motorista')}
+              ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
             <li>📁 Remessas<ul>
-              ${nodo('Suprimentos')}${nodo('Haver')}${nodo('Cheque Troco')}${nodo('Títulos Recebidos')}${nodo('Receita')}
+              ${nodo('Suprimentos', 'suprimento')}${nodo('Haver', 'haver')}${nodo('Cheque Troco', 'cheque_troco')}${nodo('Títulos Recebidos', 'titulos')}${nodo('Receita', 'receita')}
             </ul></li>
             <li>📁 Diferença de Caixa<ul>
-              ${nodo('🔴 Falta de Caixa')}${nodo('🟢 Sobra de Caixa')}
+              ${nodo('🔴 Falta de Caixa', 'diferenca')}${nodo('🟢 Sobra de Caixa', 'diferenca')}
             </ul></li>
             <li>📁 Detalhes<ul>
               ${nodo('📑 Cupons Fiscais', 'cupons')}${nodo('👤 Demonstrativo Vendedor', 'vendedor')}
@@ -305,9 +306,153 @@ async function fcNode(tipo) {
     if (tipo === 'itens') return fcModalItens(vs);
     if (tipo === 'combustivel') return fcModalCombustivel(vs);
     if (tipo === 'vendedor') return fcModalVendedor(vs);
+  } else if (FC_DETALHES[tipo]) {
+    return fcNodeDetalhe(tipo);
   } else {
     fcModal(tipo, '<p style="padding:24px;color:#777">Este detalhe será ligado na próxima etapa.</p>');
   }
+}
+
+// ---------- BALÕES da árvore lateral: detalhamento de cada recebimento/remessa ----------
+const FC_DETALHES = {
+  dinheiro:       { titulo: '💵 Dinheiro / Sangria', formas: ['01'], caixa: ['sangria'], cofre: true },
+  cartao:         { titulo: '💳 Cartão', formas: ['03', '04', '10', '11', '12', '13'], maq: ['créd', 'cred', 'déb', 'deb'] },
+  pix:            { titulo: '⚡ Pix', formas: ['17', '18', '19'], maq: ['pix'] },
+  prazo:          { titulo: '📄 Nota a Prazo', formas: ['05', '99', '90'] },
+  cheque:         { titulo: '🧾 Cheque', formas: ['02'] },
+  ctf:            { titulo: 'CTF', formas: [] },
+  carta_frete:    { titulo: '🚚 Carta Frete', formas: [] },
+  vale_motorista: { titulo: '👷 Vale Motorista', formas: [] },
+  troco_final:    { titulo: 'Troco Final', formas: [] },
+  vale_haver:     { titulo: 'Vale Haver', formas: [] },
+  despesa:        { titulo: 'Despesas', caixa: ['desp'] },
+  deposito:       { titulo: '🏦 Depósito em Conta', caixa: ['depos'] },
+  suprimento:     { titulo: 'Suprimentos', caixa: ['suprim'] },
+  haver:          { titulo: 'Haver', formas: [] },
+  cheque_troco:   { titulo: 'Cheque Troco', formas: [] },
+  titulos:        { titulo: 'Títulos Recebidos', formas: [] },
+  receita:        { titulo: 'Receitas', caixa: ['receita'] },
+  diferenca:      { titulo: 'Diferença de Caixa', especial: 'diferenca' },
+};
+
+async function fcNodeDetalhe(tipo) {
+  const cfg = FC_DETALHES[tipo];
+  const turnoId = window._fcTurnoAtual;
+  const cache = window._fcCache || {};
+  const t = (cache.turnos || []).find(x => x.id === turnoId);
+  if (!cfg || !t) return;
+  fcModal(cfg.titulo, '<p style="padding:20px;color:#888">Buscando...</p>');
+
+  // diferença de caixa: mostra a conta, sem consulta extra
+  if (cfg.especial === 'diferenca') {
+    const d = (cache.porTurno || {})[turnoId] || {};
+    const rec = d.rec || {};
+    const totalReceb = Number(rec.dinheiro || 0) + Number(rec.cartao || 0) + Number(rec.pix || 0) +
+      Number(rec.prazo || 0) + Number(rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0);
+    const totalVenda = Number(d.venda_prod || 0) + Number(d.venda_comb || 0) + Number(d.suprimento || 0);
+    const dif = totalReceb - totalVenda;
+    fcModal(cfg.titulo, `
+      <div style="padding:16px;font-size:0.9rem;color:#cdd6e0">
+        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Total de recebimentos</span><b>${fcMoney(totalReceb)}</b></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Total de vendas / saídas</span><b>${fcMoney(totalVenda)}</b></div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid #2a2d3e;margin-top:6px">
+          <span>${dif < -0.009 ? '🔴 FALTA de caixa' : dif > 0.009 ? '🟢 SOBRA de caixa' : '✓ Caixa fechado sem diferença'}</span>
+          <b style="color:${dif < -0.009 ? '#f87171' : dif > 0.009 ? '#4ade80' : '#cdd6e0'}">${fcMoney(Math.abs(dif))}</b>
+        </div>
+      </div>`);
+    return;
+  }
+
+  // consultas do turno (vendas por forma, movimentos de caixa, maquininha/cofre no período)
+  const eid = window._fcEmpresaId;
+  const ini = t.aberto_em, fim = t.fechado_em || new Date().toISOString();
+  const pedidos = [
+    (cfg.formas && cfg.formas.length)
+      ? sb.from('oct_pdv_vendas').select('numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,status').eq('turno_id', turnoId).order('data_venda')
+      : Promise.resolve({ data: [] }),
+    (cfg.caixa && cfg.caixa.length)
+      ? sb.from('oct_pdv_caixa').select('tipo,forma,valor,descricao,operador,criado_em').eq('turno_id', turnoId).order('criado_em')
+      : Promise.resolve({ data: [] }),
+    (cfg.maq || cfg.cofre)
+      ? sb.from('oct_recebimentos').select('recebido_em,forma,bandeira,valor,origem,parcelas').eq('empresa_id', eid)
+          .gte('recebido_em', ini).lte('recebido_em', fim).order('recebido_em')
+      : Promise.resolve({ data: [] }),
+  ];
+  const [rV, rC, rR] = await Promise.all(pedidos);
+  const secoes = [];
+  const tab = (cab, linhas, rodape) => `<table class="fc-grid"><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+    <tbody>${linhas.join('')}${rodape || ''}</tbody></table>`;
+  const stit = txt => `<div style="padding:10px 4px 4px;color:#f97316;font-weight:700;font-size:0.82rem">${txt}</div>`;
+
+  // 1) CUPONS pagos na(s) forma(s)
+  if (cfg.formas && cfg.formas.length) {
+    const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
+    const linhas = []; let total = 0;
+    vs.forEach(v => (v.pagamentos || []).forEach(p => {
+      if (!cfg.formas.includes(String(p.forma || '').padStart(2, '0'))) return;
+      total += Number(p.valor || 0);
+      linhas.push(`<tr><td class="fc-td">${v.numero ?? ''}</td>
+        <td class="fc-td">${_fcHora(v.data_venda)}</td>
+        <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
+        <td class="fc-td fc-r">${fcMoney(p.valor)}</td></tr>`);
+    }));
+    secoes.push(stit(`Cupons do caixa (${linhas.length})`));
+    secoes.push(linhas.length
+      ? tab(['Cupom', 'Hora', tipo === 'prazo' ? 'Cliente' : 'Vendedor/Cliente', 'Valor'], linhas,
+            `<tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td></tr>`)
+      : '<p style="padding:6px 8px;color:#777">Nenhum cupom nesta forma neste caixa.</p>');
+  }
+
+  // 2) MOVIMENTOS DE CAIXA (sangria/suprimento/despesa/depósito/receita)
+  if (cfg.caixa && cfg.caixa.length) {
+    const ms = (rC.data || []).filter(m => cfg.caixa.some(p => String(m.tipo || '').toLowerCase().includes(p)));
+    const linhas = ms.map(m => `<tr><td class="fc-td">${_fcHora(m.criado_em)}</td>
+      <td class="fc-td">${fcEsc(m.descricao) || '—'}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
+      <td class="fc-td fc-r">${fcMoney(m.valor)}</td></tr>`);
+    const total = ms.reduce((s, m) => s + Number(m.valor || 0), 0);
+    secoes.push(stit(`${tipo === 'dinheiro' ? 'Sangrias' : cfg.titulo} do caixa (${ms.length})`));
+    secoes.push(ms.length
+      ? tab(['Hora', 'Descrição', 'Forma', 'Valor'], linhas,
+            `<tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td></tr>`)
+      : '<p style="padding:6px 8px;color:#777">Nenhum lançamento neste caixa.</p>');
+  }
+
+  // 3) MAQUININHA por BANDEIRA (cartão/pix) — recebimentos EDI no período do turno
+  if (cfg.maq) {
+    const rs = (rR.data || []).filter(r => cfg.maq.some(p => String(r.forma || '').toLowerCase().includes(p)));
+    const porBand = {};
+    rs.forEach(r => {
+      const b = (r.bandeira || r.forma || '—');
+      porBand[b] = porBand[b] || { qtd: 0, total: 0 };
+      porBand[b].qtd++; porBand[b].total += Number(r.valor || 0);
+    });
+    const linhas = Object.entries(porBand).sort((a, b) => b[1].total - a[1].total)
+      .map(([b, x]) => `<tr><td class="fc-td">${fcEsc(b)}</td><td class="fc-td fc-r">${x.qtd}</td><td class="fc-td fc-r">${fcMoney(x.total)}</td></tr>`);
+    const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
+    secoes.push(stit(`Maquininha por bandeira (${rs.length} transações no período do turno)`));
+    secoes.push(rs.length
+      ? tab(['Bandeira', 'Qtd', 'Total'], linhas,
+            `<tr><td class="fc-td" colspan="2"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td></tr>`)
+      : '<p style="padding:6px 8px;color:#777">Sem transações da maquininha no período (EDI).</p>');
+  }
+
+  // 4) DEPÓSITOS DO COFRE (dinheiro)
+  if (cfg.cofre) {
+    const rs = (rR.data || []).filter(r => String(r.origem || '').toLowerCase().includes('cofre') ||
+      String(r.forma || '').toLowerCase().includes('dinheiro'));
+    const linhas = rs.map(r => `<tr><td class="fc-td">${_fcHora(r.recebido_em)}</td>
+      <td class="fc-td">${fcEsc(r.origem) || 'cofre'}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td></tr>`);
+    const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
+    secoes.push(stit(`Depósitos no cofre (${rs.length})`));
+    secoes.push(rs.length
+      ? tab(['Hora', 'Origem', 'Valor'], linhas,
+            `<tr><td class="fc-td" colspan="2"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td></tr>`)
+      : '<p style="padding:6px 8px;color:#777">Nenhum depósito no cofre no período do turno.</p>');
+  }
+
+  if (!secoes.length)
+    secoes.push('<p style="padding:24px;color:#777">Sem lançamentos deste tipo neste caixa (o octano ainda não movimenta esta categoria).</p>');
+  fcModal(cfg.titulo, secoes.join(''));
 }
 function fcModalCupons(vs) {
   const linhas = vs.map(v => `<tr><td class="fc-td">${v.numero ?? ''}</td>
