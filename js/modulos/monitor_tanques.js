@@ -159,7 +159,7 @@ function _monCardPosto(nome, tanksDoPosto, latest, eid, tv, vendasEmp) {
 // ---- VENDAS (NFC-e) em tempo real: total do dia + últimas, por posto ----
 function _monBRL(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }); }
 function _monHora(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
-const _MON_FORMA = { '01': 'Dinheiro', '03': 'Crédito', '04': 'Débito', '17': 'Pix', '99': 'Outro' };
+const _MON_FORMA = { '01': 'Dinheiro', '02': 'Cheque', '03': 'Crédito', '04': 'Débito', '05': 'Nota a Prazo', '10': 'Crédito', '11': 'Crédito', '15': 'Boleto', '17': 'Pix', '18': 'Pix', '19': 'Pix', '90': 'Nota a Prazo', '99': 'Outro' };
 
 // litros (volume) de uma venda = soma do qtd dos itens de ABASTECIMENTO (combustível)
 function _monVolVenda(v) {
@@ -190,18 +190,75 @@ async function _monVendas(empIds) {
       .eq('empresa_id', eid).gte('data_venda', desde)
       .order('data_venda', { ascending: false }).limit(500)
       .then(r => [eid, r.data || []])));
-  const [rCusto, listas] = await Promise.all([pCusto.then(r => r, () => ({ data: [] })), pVendas]);
+  // FILA DE TRANSMISSÃO do PDV: abastecimento baixado, cupom ainda não emitido.
+  // Conta no dia; ao transmitir vira venda (sem dupla contagem) e ao ser
+  // removido da fila some daqui — o saldo se corrige sozinho a cada refresh.
+  const pFila = sb.from('oct_fila_transmissao')
+    .select('empresa_id,bico,descricao,litros,valor,forma,forma_nome,desconto,acrescimo')
+    .in('empresa_id', empIds).eq('status', 'fila').gte('criado_em', desde)
+    .then(r => r.data || [], () => []);
+  // bico -> nº do tanque (a fila só sabe o bico; a autonomia precisa do tanque)
+  const pTq = sb.from('oct_tanques').select('id,numero,empresa_id').in('empresa_id', empIds)
+    .then(r => r.data || [], () => []);
+  const pBc = sb.from('oct_bicos').select('numero,tanque_id').then(r => r.data || [], () => []);
+  const [rCusto, listas, filaTodos, tqs, bcs] = await Promise.all(
+    [pCusto.then(r => r, () => ({ data: [] })), pVendas, pFila, pTq, pBc]);
   const custoMap = {};
   ((rCusto && rCusto.data) || []).forEach(p => { custoMap[p.id] = Number(p.preco_custo || 0); });
+  const tqNumPorId = {};
+  tqs.forEach(t => { tqNumPorId[t.id] = { numero: t.numero, empresa: t.empresa_id }; });
+  const bicoTanque = {};   // "empresa|bico" -> nº do tanque
+  bcs.forEach(b => {
+    const t = tqNumPorId[b.tanque_id];
+    if (t && b.numero != null) bicoTanque[t.empresa + '|' + Number(b.numero)] = t.numero;
+  });
   const out = {};
   for (const [eid, data] of listas) {
     const vendas = data.filter(v => (v.status || '') !== 'cancelada');
+    const fila = filaTodos.filter(f => f.empresa_id === eid);
     // litros vendidos HOJE por TANQUE (p/ projeção de autonomia do estoque)
     const litrosTanque = {};
-    vendas.forEach(v => (v.itens || []).forEach(it => {
-      if (it && it.tipo === 'abastecimento' && it.n_tanque != null)
-        litrosTanque[it.n_tanque] = (litrosTanque[it.n_tanque] || 0) + Number(it.qtd || 0);
-    }));
+    // PRODUTO vendido (nome -> quantidade) e FORMAS de pagamento (nome -> R$)
+    const prods = {}, formas = {};
+    vendas.forEach(v => {
+      (v.itens || []).forEach(it => {
+        if (!it) return;
+        if (it.tipo === 'abastecimento' && it.n_tanque != null)
+          litrosTanque[it.n_tanque] = (litrosTanque[it.n_tanque] || 0) + Number(it.qtd || 0);
+        const nome = it.desc || it.descricao || '—';
+        const p = prods[nome] || (prods[nome] = { qtd: 0, litro: it.tipo === 'abastecimento' });
+        p.qtd += Number(it.qtd || 0);
+      });
+      // formas: no dinheiro o pagamento traz o valor ENTREGUE (com troco) — usa
+      // o líquido da venda (total - outras formas) p/ não inflar o Dinheiro
+      let naoDin = 0, temDin = false;
+      (v.pagamentos || []).forEach(p => {
+        const c = String(p.forma || '').padStart(2, '0');
+        if (c === '01') { temDin = true; return; }
+        naoDin += Number(p.valor || 0);
+        const n = _MON_FORMA[c] || 'Outro';
+        formas[n] = (formas[n] || 0) + Number(p.valor || 0);
+      });
+      if (temDin || !(v.pagamentos || []).length) {
+        const din = Math.max(0, Number(v.valor_total || 0) - naoDin);
+        if (din > 0) formas['Dinheiro'] = (formas['Dinheiro'] || 0) + din;
+      }
+    });
+    let filaTotal = 0, filaVolume = 0;
+    fila.forEach(f => {
+      const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+      const litros = Number(f.litros || 0);
+      filaTotal += vf; filaVolume += litros;
+      const n = f.forma_nome || _MON_FORMA[String(f.forma || '').padStart(2, '0')] || 'Outro';
+      formas[n] = (formas[n] || 0) + vf;
+      if (litros > 0) {
+        const nome = f.descricao || '—';
+        const p = prods[nome] || (prods[nome] = { qtd: 0, litro: true });
+        p.qtd += litros;
+        const nTq = bicoTanque[eid + '|' + Number(f.bico)];
+        if (nTq != null) litrosTanque[nTq] = (litrosTanque[nTq] || 0) + litros;
+      }
+    });
     // guarda só o LEVE (nada de itens/fiscal): o cache e o render ficam instantâneos
     const leve = v => ({
       data_venda: v.data_venda, valor_total: Number(v.valor_total || 0),
@@ -210,11 +267,12 @@ async function _monVendas(empIds) {
     });
     out[eid] = {
       qtd: vendas.length,
-      total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0),
-      volume: vendas.reduce((s, v) => s + _monVolVenda(v), 0),
+      total: vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0) + filaTotal,
+      volume: vendas.reduce((s, v) => s + _monVolVenda(v), 0) + filaVolume,
       lucro: vendas.reduce((s, v) => s + _monLucroVenda(v, custoMap), 0),
       ultima: vendas[0] ? leve(vendas[0]) : null,
-      recentes: vendas.slice(0, 5).map(leve),
+      filaQtd: fila.length, filaTotal,
+      prods, formas,
       litrosTanque,
     };
   }
@@ -233,14 +291,23 @@ function _monAutonomia(vol, litrosHoje) {
 }
 
 function _monCardVendaPosto(nome, v, tv) {
-  v = v || { qtd: 0, total: 0, volume: 0, ultima: null, recentes: [] };
+  v = v || { qtd: 0, total: 0, volume: 0, ultima: null, prods: {}, formas: {} };
   const ultH = v.ultima ? _monHora(v.ultima.data_venda) : '—';
-  const recentes = (v.recentes || []).map(r => {
-    const forma = _MON_FORMA[r.forma] || '';
-    const litros = Number(r.litros || 0);
-    return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:${tv ? '0.9rem' : '0.72rem'};color:#94a3b8;padding:2px 0">
-      <span>${_monHora(r.data_venda)}${forma ? ' · ' + forma : ''}${litros > 0 ? ' · ' + _monNum(litros, 1) + ' L' : ''}</span><span style="color:#cbd5e1;font-weight:600">${_monBRL(r.valor_total)}</span></div>`;
-  }).join('') || `<div style="color:#6b7280;font-size:${tv ? '0.9rem' : '0.72rem'};padding:4px 0">Sem vendas hoje.</div>`;
+  const fs = tv ? '0.9rem' : '0.72rem';
+  const lin = (a, b, corB) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:${fs};color:#94a3b8;padding:2px 0">
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a}</span><span style="color:${corB || '#cbd5e1'};font-weight:600;white-space:nowrap">${b}</span></div>`;
+  // coluna 1: PRODUTO vendido × quantidade (combustível em L, loja em un)
+  const prodLin = Object.entries(v.prods || {})
+    .sort((a, b) => (b[1].litro - a[1].litro) || (b[1].qtd - a[1].qtd))
+    .slice(0, 8)
+    .map(([n, p]) => lin(n, _monNum(p.qtd, p.litro ? 1 : 0) + (p.litro ? ' L' : ' un'), '#38bdf8'))
+    .join('') || `<div style="color:#6b7280;font-size:${fs};padding:2px 0">—</div>`;
+  // coluna 2: FORMA de pagamento × valor recebido
+  const formaLin = Object.entries(v.formas || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([n, val]) => lin(n, _monBRL(val)))
+    .join('') || `<div style="color:#6b7280;font-size:${fs};padding:2px 0">—</div>`;
   return `
   <div style="background:#0b0f18;border:1px solid #2a3040;border-radius:16px;padding:${tv ? '18px' : '14px'}">
     <div style="font-size:${tv ? '1.15rem' : '0.95rem'};font-weight:800;color:#22c55e;margin-bottom:8px">${nome || '—'}</div>
@@ -253,8 +320,11 @@ function _monCardVendaPosto(nome, v, tv) {
       <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(v.lucro)}</span>
       ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(v.lucro / v.total * 100, 1)}%</span>` : ''}
     </div>
-    <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${v.qtd} venda(s) hoje · última ${ultH}</div>
-    <div style="border-top:1px solid #1e293b;padding-top:6px">${recentes}</div>
+    <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${v.qtd} venda(s) hoje${v.filaQtd ? ` <span style="color:#fbbf24">+ ${v.filaQtd} na fila (${_monBRL(v.filaTotal)})</span>` : ''} · última ${ultH}</div>
+    <div style="border-top:1px solid #1e293b;padding-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
+      <div><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">⛽ VENDIDO</div>${prodLin}</div>
+      <div><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">💰 FORMAS</div>${formaLin}</div>
+    </div>
   </div>`;
 }
 
