@@ -11,10 +11,10 @@ function _fcGrupoForma(cod) {
   const c = String(cod || '').padStart(2, '0');
   if (c === '01') return 'dinheiro';
   if (c === '02') return 'cheque';
-  if (['03', '04', '05', '10', '11', '12', '13'].includes(c)) return 'cartao';
+  if (['03', '04', '10', '11', '12', '13'].includes(c)) return 'cartao';
   if (['17', '18', '19'].includes(c)) return 'pix';
   if (['15', '31'].includes(c)) return 'boleto';
-  if (['99', '90'].includes(c)) return 'prazo';
+  if (['05', '99', '90'].includes(c)) return 'prazo';   // 05 = crédito loja = nota a prazo
   return 'outros';
 }
 function fcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -50,15 +50,31 @@ async function fcCarregarDados() {
   const lista = turnos || [];
   if (!lista.length) return { turnos: [], porTurno: {} };
   const ids = lista.map(t => t.id);
-  const [vRes, cRes] = await Promise.all([
+  const [vRes, cRes, fRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
+    // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom
+    // SOMA no fechamento do turno (vendido + forma) até ser transmitido
+    sb.from('oct_fila_transmissao').select('turno_id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,atualizado_em')
+      .eq('empresa_id', eid).eq('status', 'fila').in('turno_id', ids)
+      .then(r => r, () => ({ data: [] })),
   ]);
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
     rec: { dinheiro: 0, cartao: 0, pix: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, outrosCaixa: 0, qtd_vendas: 0,
+    fila_total: 0, fila_litros: 0, fila_itens: [],
+  });
+  ((fRes && fRes.data) || []).forEach(f => {
+    const t = porTurno[f.turno_id]; if (!t) return;
+    const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    const litros = Number(f.litros || 0);
+    t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
+    t.venda_total += vf;
+    if (litros > 0) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
+    const g = _fcGrupoForma(f.forma);
+    t.rec[g] = (t.rec[g] || 0) + vf;
   });
   (vRes.data || []).forEach(v => {
     const t = porTurno[v.turno_id]; if (!t) return;
@@ -241,6 +257,7 @@ function fcDetalhe(turnoId) {
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
               ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão', 'cartao')}${nodo('⚡ Pix', 'pix')}${nodo('📄 Nota a Prazo', 'prazo')}
+              ${d.fila_total > 0.009 ? nodo('⏳ Fila de transmissão', 'fila') : ''}
               ${nodo('CTF', 'ctf')}${nodo('🧾 Cheque', 'cheque')}${nodo('🚚 Carta Frete', 'carta_frete')}${nodo('👷 Vale Motorista', 'vale_motorista')}
               ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
@@ -269,6 +286,7 @@ function fcDetalhe(turnoId) {
           <div class="fc-coltit">Vendas / Saídas</div>
           ${vendas.map(r => linhaVal(r[0], r[1])).join('')}
           <div class="fc-litros">${fcNum(d.litros_comb, 3)} L de combustível &nbsp;·&nbsp; ${d.qtd_vendas} cupons</div>
+          ${d.fila_total > 0.009 ? `<div class="fc-litros" style="color:#fbbf24;cursor:pointer" onclick="fcNode('fila')">⏳ ${(d.fila_itens || []).length} abastecimento(s) na fila de transmissão: ${fcMoney(d.fila_total)} (já somados acima — clique p/ detalhar)</div>` : ''}
           <div class="fc-total"><span>Total Vendas / Saída:</span><span class="fc-box forte azulf">${fcMoney(totalVenda)}</span></div>
         </div>
 
@@ -333,6 +351,7 @@ const FC_DETALHES = {
   titulos:        { titulo: 'Títulos Recebidos', formas: [] },
   receita:        { titulo: 'Receitas', caixa: ['receita'] },
   diferenca:      { titulo: 'Diferença de Caixa', especial: 'diferenca' },
+  fila:           { titulo: '⏳ Fila de transmissão (PDV)', especial: 'fila' },
 };
 
 async function fcNodeDetalhe(tipo) {
@@ -342,6 +361,27 @@ async function fcNodeDetalhe(tipo) {
   const t = (cache.turnos || []).find(x => x.id === turnoId);
   if (!cfg || !t) return;
   fcModal(cfg.titulo, '<p style="padding:20px;color:#888">Buscando...</p>');
+
+  // fila de transmissão: lista do cache (já veio no fcCarregarDados)
+  if (cfg.especial === 'fila') {
+    const d0 = (cache.porTurno || {})[turnoId] || {};
+    const its = d0.fila_itens || [];
+    const linhas = its.map(f => {
+      const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+      return `<tr><td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
+        <td class="fc-td">${f.bico ?? '—'}</td>
+        <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+        <td class="fc-td">${fcEsc(f.forma_nome || f.forma) || '—'}${f.bandeira ? ' ' + fcEsc(f.bandeira) : ''}</td>
+        <td class="fc-td fc-r">${fcMoney(f.valor)}</td>
+        <td class="fc-td fc-r">${(Number(f.desconto || 0) || Number(f.acrescimo || 0)) ? fcMoney(vf) : '—'}</td></tr>`;
+    });
+    fcModal(cfg.titulo, its.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Abastecimentos baixados no PDV aguardando NFC-e. Já estão SOMADOS nos totais do caixa; desconto/acréscimo é lançado na aba NFC-e do retaguarda.</p>
+         <table class="fc-grid"><thead><tr><th>Combustível/Produto</th><th>Bico</th><th>Litros</th><th>Forma</th><th>Valor</th><th>Valor c/ ajuste</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(d0.fila_total)}</b></td></tr></tbody></table>`
+      : '<p style="padding:24px;color:#777">Nenhum abastecimento na fila deste caixa.</p>');
+    return;
+  }
 
   // diferença de caixa: mostra a conta, sem consulta extra
   if (cfg.especial === 'diferenca') {
