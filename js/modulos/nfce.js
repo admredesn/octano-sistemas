@@ -102,9 +102,78 @@ function nfceRenderTela() {
         </div>
       </div>
       <div id="nfce-resultado" style="max-width:1100px;margin-top:16px"></div>
+      <!-- FILA DE TRANSMISSÃO do PDV (abastecimentos baixados aguardando NFC-e) -->
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;margin-top:16px">
+        <h3 style="color:#f97316;font-size:1rem;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center">
+          <span>⏳ Aguardando transmissão (fila do PDV)</span>
+          <button onclick="nfceFilaCarregar()" style="font-size:0.78rem;padding:5px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#60a5fa;cursor:pointer">↻ Atualizar</button>
+        </h3>
+        <p style="color:#667;font-size:0.76rem;margin-bottom:10px">Abastecimentos baixados no PDV que ainda não viraram cupom fiscal. Lance <b style="color:#4ade80">desconto</b> ou <b style="color:#fbbf24">acréscimo</b> aqui — o PDV aplica automaticamente na hora de transmitir.</p>
+        <div id="nfce-fila-corpo" style="overflow-x:auto"><p style="color:#555;padding:10px">Carregando fila...</p></div>
+      </div>
     </div>
   `;
   nfceRenderItens();
+  nfceFilaCarregar();
+}
+
+// ---------- FILA DE TRANSMISSÃO (oct_fila_transmissao, alimentada pelo PDV) ----------
+async function nfceFilaCarregar() {
+  const box = document.getElementById('nfce-fila-corpo');
+  if (!box) return;
+  let fila = [], erro = null;
+  try {
+    const r = await sb.from('oct_fila_transmissao').select('*')
+      .eq('empresa_id', _nfceEmpresaId).eq('status', 'fila')
+      .order('atualizado_em', { ascending: false }).limit(300);
+    if (r.error) erro = r.error.message; else fila = r.data || [];
+  } catch (e) { erro = e.message; }
+  window._nfceFila = fila;
+  if (erro) { box.innerHTML = `<p style="color:#f87171;padding:8px;font-size:0.8rem">Fila indisponível: ${erro} (a tabela oct_fila_transmissao existe?)</p>`; return; }
+  if (!fila.length) { box.innerHTML = '<p style="color:#555;padding:10px">Nenhum abastecimento na fila — tudo transmitido. ✓</p>'; return; }
+  const fmt = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const linhas = fila.map((f, i) => {
+    const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    return `<tr style="border-bottom:1px solid #1c1f2e">
+      <td style="padding:7px 6px">${f.descricao || '—'}${f.bandeira ? ` <span style="color:#667;font-size:0.72rem">${f.bandeira}</span>` : ''}</td>
+      <td style="padding:7px 6px;text-align:center">${f.bico ?? '—'}</td>
+      <td style="padding:7px 6px;text-align:right">${Number(f.litros || 0) ? fmt(f.litros) + ' L' : '—'}</td>
+      <td style="padding:7px 6px">${f.forma_nome || f.forma || '—'}</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:600">${fmt(f.valor)}</td>
+      <td style="padding:7px 6px"><input id="nfce-fd-${i}" type="number" step="0.01" min="0" value="${Number(f.desconto || 0) || ''}" placeholder="0,00" style="width:84px;padding:5px;border-radius:5px;border:1px solid #14532d;background:#0f1117;color:#4ade80;text-align:right"></td>
+      <td style="padding:7px 6px"><input id="nfce-fa-${i}" type="number" step="0.01" min="0" value="${Number(f.acrescimo || 0) || ''}" placeholder="0,00" style="width:84px;padding:5px;border-radius:5px;border:1px solid #5a4a00;background:#0f1117;color:#fbbf24;text-align:right"></td>
+      <td style="padding:7px 6px;text-align:right;color:#60a5fa;font-weight:600" id="nfce-fv-${i}">${fmt(vf)}</td>
+      <td style="padding:7px 6px"><button onclick="nfceFilaSalvar(${i})" style="padding:5px 12px;border-radius:6px;border:none;background:#f97316;color:#fff;font-weight:600;cursor:pointer;font-size:0.76rem">💾 Salvar</button></td>
+    </tr>`;
+  }).join('');
+  const total = fila.reduce((s, f) => s + Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0), 0);
+  box.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem;min-width:760px">
+    <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #2a2d3e">
+      <th style="padding:6px">Combustível/Produto</th><th style="padding:6px;text-align:center">Bico</th>
+      <th style="padding:6px;text-align:right">Litros</th><th style="padding:6px">Forma</th>
+      <th style="padding:6px;text-align:right">Valor</th><th style="padding:6px">Desconto</th>
+      <th style="padding:6px">Acréscimo</th><th style="padding:6px;text-align:right">Valor final</th><th></th>
+    </tr></thead><tbody>${linhas}</tbody>
+    <tfoot><tr><td colspan="7" style="padding:8px 6px;color:#888"><b>${fila.length} item(ns) na fila</b></td>
+      <td style="padding:8px 6px;text-align:right;color:#4caf50;font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
+  </table>`;
+}
+
+async function nfceFilaSalvar(i) {
+  const f = (window._nfceFila || [])[i];
+  if (!f) return;
+  const desc = Math.max(0, Number(document.getElementById('nfce-fd-' + i)?.value || 0));
+  const acr = Math.max(0, Number(document.getElementById('nfce-fa-' + i)?.value || 0));
+  if (desc >= Number(f.valor || 0) + acr) { alert('Desconto não pode zerar ou negativar o cupom.'); return; }
+  const { error } = await sb.from('oct_fila_transmissao')
+    .update({ desconto: desc, acrescimo: acr, atualizado_em: new Date().toISOString() })
+    .eq('id', f.id).eq('status', 'fila');
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  f.desconto = desc; f.acrescimo = acr;
+  const vf = Number(f.valor || 0) - desc + acr;
+  const cel = document.getElementById('nfce-fv-' + i);
+  if (cel) cel.textContent = vf.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  nfceMsg('Ajuste salvo — o PDV aplica na transmissão.', 'ok');
 }
 
 function nfceRenderItens() {
