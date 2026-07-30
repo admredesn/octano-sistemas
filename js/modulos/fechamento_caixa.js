@@ -270,6 +270,7 @@ function fcDetalhe(turnoId) {
             <li>📁 Detalhes<ul>
               ${nodo('📑 Cupons Fiscais', 'cupons')}${nodo('👤 Demonstrativo Vendedor', 'vendedor')}
               ${nodo('📋 Itens Vendidos', 'itens')}${nodo('⛽ Combustível Vendido', 'combustivel')}
+              ${nodo('🗑 Cancelamentos de Pista', 'cancelados')}
               ${nodo('📦 Estoque Fech. Caixa', 'estoque')}
             </ul></li>
           </ul>
@@ -352,6 +353,7 @@ const FC_DETALHES = {
   receita:        { titulo: 'Receitas', caixa: ['receita'] },
   diferenca:      { titulo: 'Diferença de Caixa', especial: 'diferenca' },
   fila:           { titulo: '⏳ Fila de transmissão (PDV)', especial: 'fila' },
+  cancelados:     { titulo: '🗑 Cancelamentos de Pista', especial: 'cancelados' },
 };
 
 async function fcNodeDetalhe(tipo) {
@@ -380,6 +382,34 @@ async function fcNodeDetalhe(tipo) {
          <table class="fc-grid"><thead><tr><th>Combustível/Produto</th><th>Bico</th><th>Litros</th><th>Forma</th><th>Valor</th><th>Valor c/ ajuste</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(d0.fila_total)}</b></td></tr></tbody></table>`
       : '<p style="padding:24px;color:#777">Nenhum abastecimento na fila deste caixa.</p>');
+    return;
+  }
+
+  // cancelamentos de pista: abastecimentos cancelados na janela do turno
+  if (cfg.especial === 'cancelados') {
+    const ini0 = t.aberto_em, fim0 = t.fechado_em || new Date().toISOString();
+    let cs = [];
+    try {
+      const r = await sb.from('oct_abastecimentos_cancelados').select('*')
+        .eq('empresa_id', window._fcEmpresaId)
+        .gte('ocorrido_em', ini0).lte('ocorrido_em', fim0).order('ocorrido_em');
+      cs = r.data || [];
+    } catch (e) { /* tabela pode não existir ainda */ }
+    const linhas = cs.map(c => `<tr>
+      <td class="fc-td">${_fcHora(c.ocorrido_em)}</td>
+      <td class="fc-td">${c.bico ?? '—'}</td>
+      <td class="fc-td">${fcEsc(c.combustivel) || '—'}</td>
+      <td class="fc-td fc-r">${fcNum(c.litros, 3)} L</td>
+      <td class="fc-td fc-r">${fcMoney(c.valor)}</td>
+      <td class="fc-td">${fcEsc(c.vendedor) || '—'}</td>
+      <td class="fc-td">${c.motivo ? fcEsc(c.motivo) + (c.operador ? ` <span style="color:#888">(${fcEsc(c.operador)})</span>` : '')
+        : '<b style="color:#f87171">⚠ SEM MOTIVO (fora do PDV)</b>'}</td></tr>`);
+    const totC = cs.reduce((s, c) => s + Number(c.valor || 0), 0);
+    fcModal(cfg.titulo, cs.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Combustível que SAIU DA BOMBA e teve o registro cancelado. Sem motivo = cancelado por fora do fluxo oficial do PDV.</p>
+         <table class="fc-grid"><thead><tr><th>Hora</th><th>Bico</th><th>Combustível</th><th>Litros</th><th>Valor</th><th>Frentista</th><th>Motivo</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(totC)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`
+      : '<p style="padding:24px;color:#777">Nenhum cancelamento de pista neste caixa. ✓</p>');
     return;
   }
 
