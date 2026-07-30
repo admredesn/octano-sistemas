@@ -441,6 +441,26 @@ async function fcNodeDetalhe(tipo) {
       ? tab(['Cupom', 'Hora', tipo === 'prazo' ? 'Cliente' : 'Vendedor/Cliente', 'Valor'], linhas,
             `<tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum cupom nesta forma neste caixa.</p>');
+
+    // 1b) itens da FILA DE TRANSMISSÃO baixados nesta(s) forma(s) — eles somam
+    // na coluna do fechamento, então o balão TEM que mostrá-los também
+    const d0 = (cache.porTurno || {})[turnoId] || {};
+    const fsFila = (d0.fila_itens || []).filter(f => cfg.formas.includes(String(f.forma || '').padStart(2, '0')));
+    if (fsFila.length) {
+      let totF = 0;
+      const linF = fsFila.map(f => {
+        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+        totF += vf;
+        return `<tr><td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
+          <td class="fc-td">${f.bico ?? '—'}</td>
+          <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+          <td class="fc-td">${fcEsc(f.forma_nome || f.forma) || '—'}${f.bandeira ? ' ' + fcEsc(f.bandeira) : ''}</td>
+          <td class="fc-td fc-r">${fcMoney(vf)}</td></tr>`;
+      });
+      secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
+      secoes.push(tab(['Combustível/Produto', 'Bico', 'Litros', 'Forma', 'Valor'], linF,
+        `<tr><td class="fc-td" colspan="4"><b>Total na fila</b></td><td class="fc-td fc-r"><b>${fcMoney(totF)}</b></td></tr>`));
+    }
   }
 
   // 2) MOVIMENTOS DE CAIXA (sangria/suprimento/despesa/depósito/receita)
