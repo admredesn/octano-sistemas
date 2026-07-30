@@ -293,9 +293,9 @@ function _monAutonomia(vol, litrosHoje) {
 function _monCardVendaPosto(nome, v, tv) {
   v = v || { qtd: 0, total: 0, volume: 0, ultima: null, prods: {}, formas: {} };
   const ultH = v.ultima ? _monHora(v.ultima.data_venda) : '—';
-  const fs = tv ? '0.9rem' : '0.72rem';
-  const lin = (a, b, corB) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:${fs};color:#94a3b8;padding:2px 0">
-    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a}</span><span style="color:${corB || '#cbd5e1'};font-weight:600;white-space:nowrap">${b}</span></div>`;
+  const fs = tv ? '0.85rem' : '0.68rem';
+  const lin = (a, b, corB) => `<div style="display:flex;justify-content:space-between;gap:6px;font-size:${fs};color:#94a3b8;padding:2px 0;min-width:0">
+    <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a}</span><span style="color:${corB || '#cbd5e1'};font-weight:600;white-space:nowrap;flex-shrink:0">${b}</span></div>`;
   // coluna 1: PRODUTO vendido × quantidade (combustível em L, loja em un)
   const prodLin = Object.entries(v.prods || {})
     .sort((a, b) => (b[1].litro - a[1].litro) || (b[1].qtd - a[1].qtd))
@@ -321,9 +321,9 @@ function _monCardVendaPosto(nome, v, tv) {
       ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(v.lucro / v.total * 100, 1)}%</span>` : ''}
     </div>
     <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${v.qtd} venda(s) hoje${v.filaQtd ? ` <span style="color:#fbbf24">+ ${v.filaQtd} na fila (${_monBRL(v.filaTotal)})</span>` : ''} · última ${ultH}</div>
-    <div style="border-top:1px solid #1e293b;padding-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
-      <div><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">⛽ VENDIDO</div>${prodLin}</div>
-      <div><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">💰 FORMAS</div>${formaLin}</div>
+    <div style="border-top:1px solid #1e293b;padding-top:6px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px;overflow:hidden">
+      <div style="min-width:0"><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">⛽ VENDIDO</div>${prodLin}</div>
+      <div style="min-width:0"><div style="font-size:${fs};color:#64748b;font-weight:700;padding-bottom:2px">💰 FORMAS</div>${formaLin}</div>
     </div>
   </div>`;
 }
