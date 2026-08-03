@@ -111,10 +111,20 @@ function nfceRenderTela() {
         <p style="color:#667;font-size:0.76rem;margin-bottom:10px">Abastecimentos baixados no PDV que ainda não viraram cupom fiscal. Lance <b style="color:#4ade80">desconto</b> ou <b style="color:#fbbf24">acréscimo</b> aqui — o PDV aplica automaticamente na hora de transmitir.</p>
         <div id="nfce-fila-corpo" style="overflow-x:auto"><p style="color:#555;padding:10px">Carregando fila...</p></div>
       </div>
+      <!-- RECEBIMENTOS SEM VÍNCULO (dispensa restrita ao gerente) -->
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;margin-top:16px">
+        <h3 style="color:#f97316;font-size:1rem;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center">
+          <span>🏦 Recebimentos sem vínculo</span>
+          <button onclick="recOrfaosCarregar()" style="font-size:0.78rem;padding:5px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#60a5fa;cursor:pointer">↻ Atualizar</button>
+        </h3>
+        <p style="color:#667;font-size:0.76rem;margin-bottom:10px">Dinheiro que entrou na conta e <b>nenhum abastecimento</b> foi vinculado (a venda foi baixada por outra forma). Dispensar aqui tira da tela do PDV e <b>fica registrado quem fez</b> — o PDV não tem essa opção.</p>
+        <div id="rec-orfaos-corpo" style="overflow-x:auto"><p style="color:#555;padding:10px">Carregando...</p></div>
+      </div>
     </div>
   `;
   nfceRenderItens();
   nfceFilaCarregar();
+  recOrfaosCarregar();
 }
 
 // ---------- FILA DE TRANSMISSÃO (oct_fila_transmissao, alimentada pelo PDV) ----------
@@ -570,4 +580,71 @@ async function nfceHistCancelar(i) {
   } catch (e) {
     setMsg('Erro ao cancelar: ' + e.message, '#f87171');
   }
+}
+
+
+// ---------- RECEBIMENTOS SEM VÍNCULO (só o retaguarda dispensa) ----------
+async function recOrfaosCarregar() {
+  const box = document.getElementById('rec-orfaos-corpo');
+  if (!box) return;
+  let lista = [], erro = null;
+  try {
+    const corte = new Date(Date.now() - 45 * 86400000).toISOString();
+    const r = await sb.from('oct_recebimentos').select('*')
+      .eq('empresa_id', _nfceEmpresaId).eq('conciliado', false)
+      .gte('recebido_em', corte).order('recebido_em', { ascending: false }).limit(300);
+    if (r.error) erro = r.error.message; else lista = r.data || [];
+  } catch (e) { erro = e.message; }
+  window._recOrfaos = lista;
+  if (erro) { box.innerHTML = `<p style="color:#f87171;padding:8px;font-size:0.8rem">Não consegui carregar: ${erro}</p>`; return; }
+  if (!lista.length) { box.innerHTML = '<p style="color:#555;padding:10px">Todos os recebimentos estão vinculados. ✓</p>'; return; }
+  const fmt = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const dias = r => Math.floor((Date.now() - Date.parse(r.recebido_em || 0)) / 86400000);
+  const linhas = lista.map((r, i) => {
+    const d = dias(r);
+    return `<tr style="border-bottom:1px solid #1c1f2e">
+      <td style="padding:7px 6px"><input type="checkbox" class="ro-ck" data-i="${i}" ${d >= 1 ? '' : ''}></td>
+      <td style="padding:7px 6px">${r.dia || ''} <span style="color:#667">${r.hora || ''}</span></td>
+      <td style="padding:7px 6px">${r.origem === 'cofre_brinks' ? '🔒 Cofre' : '💳 ' + (r.forma || '')}${r.bandeira ? ' <span style="color:#667;font-size:0.72rem">' + r.bandeira + '</span>' : ''}</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:600">${fmt(r.valor)}</td>
+      <td style="padding:7px 6px;text-align:center;color:${d >= 2 ? '#f87171' : d >= 1 ? '#fbbf24' : '#667'}">${d} dia(s)</td>
+    </tr>`;
+  }).join('');
+  const total = lista.reduce((s, r) => s + Number(r.valor || 0), 0);
+  box.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem;min-width:620px">
+    <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #2a2d3e">
+      <th style="padding:6px"><input type="checkbox" id="ro-all" onclick="document.querySelectorAll('.ro-ck').forEach(c=>c.checked=this.checked)"></th>
+      <th style="padding:6px">Data/Hora</th><th style="padding:6px">Forma</th>
+      <th style="padding:6px;text-align:right">Valor</th><th style="padding:6px;text-align:center">Parado há</th>
+    </tr></thead><tbody>${linhas}</tbody>
+    <tfoot><tr><td colspan="3" style="padding:8px 6px;color:#888"><b>${lista.length} sem vínculo</b></td>
+      <td style="padding:8px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
+  </table>
+  <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+    <button onclick="recOrfaosDispensar()" style="padding:9px 16px;border-radius:6px;border:none;background:#7f1d1d;color:#fff;font-weight:600;cursor:pointer">🧹 Dispensar selecionados</button>
+    <span style="color:#667;font-size:0.76rem">Registra seu usuário e o motivo. Não apaga nada — o recebimento continua nos relatórios.</span>
+  </div>`;
+}
+
+async function recOrfaosDispensar() {
+  const sel = Array.from(document.querySelectorAll('.ro-ck')).filter(c => c.checked).map(c => Number(c.dataset.i));
+  const lista = window._recOrfaos || [];
+  const alvos = sel.map(i => lista[i]).filter(Boolean);
+  if (!alvos.length) { alert('Selecione ao menos um recebimento.'); return; }
+  const total = alvos.reduce((s, r) => s + Number(r.valor || 0), 0);
+  const motivo = prompt(`DISPENSAR ${alvos.length} recebimento(s) — R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+
+Eles somem da tela do PDV e não poderão mais ser vinculados.
+
+Motivo (obrigatório — fica registrado):`);
+  if (!motivo || !motivo.trim()) { alert('Dispensa cancelada: o motivo é obrigatório.'); return; }
+  const session = await getSession();
+  const quem = session?.user?.email || 'gerente';
+  const patch = { conciliado: true, atualizado_em: new Date().toISOString() };
+  const comAuditoria = Object.assign({}, patch, { dispensado_por: quem, dispensado_em: new Date().toISOString(), dispensa_motivo: motivo.trim() });
+  let r = await sb.from('oct_recebimentos').update(comAuditoria).in('id', alvos.map(x => x.id));
+  if (r.error) r = await sb.from('oct_recebimentos').update(patch).in('id', alvos.map(x => x.id));   // colunas de auditoria ainda não criadas
+  if (r.error) { alert('Erro ao dispensar: ' + r.error.message); return; }
+  alert(`${alvos.length} recebimento(s) dispensado(s). O PDV para de mostrá-los em até 5 minutos.`);
+  recOrfaosCarregar();
 }
