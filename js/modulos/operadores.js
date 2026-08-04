@@ -48,8 +48,10 @@ async function opListar() {
               <td style="padding:9px 12px;font-family:monospace;color:#f97316">${opEsc(o.usuario) || '<span style="color:#666">— sem usuário —</span>'}</td>
               <td style="padding:9px 12px">${opEsc(o.perfil || (o.master ? 'gerente' : 'operador'))}</td>
               <td style="padding:9px 12px">${o.ativo ? '<span style="color:#4caf50">ativo</span>' : '<span style="color:#888">inativo</span>'}</td>
-              <td style="padding:9px 12px;text-align:right">
+              <td style="padding:9px 12px;text-align:right;white-space:nowrap">
                 ${o.usuario ? '' : `<button onclick="opDefinirUsuarioForm('${o.id}','${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem">Definir usuário</button>`}
+                ${o.usuario ? `<button onclick="opSenhaForm('${o.id}','${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem">🔑 Senha</button>` : ''}
+                ${o.usuario ? `<button onclick="opAlternarAtivo('${o.id}', ${o.ativo ? 'false' : 'true'}, '${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem;color:${o.ativo ? '#f87171' : '#4caf50'}">${o.ativo ? '🚫 Bloquear' : '✓ Liberar'}</button>` : ''}
               </td>
             </tr>`).join('') : '<tr><td colspan="5" style="padding:20px;text-align:center;color:#666">Nenhum operador cadastrado.</td></tr>'}
           </tbody>
@@ -172,6 +174,81 @@ async function opDefinirUsuario(id) {
   if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
   msg.style.color = '#4caf50'; msg.textContent = 'Usuário definido!';
   setTimeout(() => opListar(), 1000);
+}
+
+// ============================================================
+// REDEFINIR SENHA
+// ============================================================
+// Trocar a senha de OUTRA pessoa exige chave de administracao, que nao pode
+// ficar no navegador. Quem faz e o servidor (/operador/senha), que valida no
+// Supabase se quem pediu e mesmo um gerente da MESMA empresa.
+function opSenhaForm(id, nome) {
+  const div = document.getElementById('op-form');
+  div.innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:18px">
+      <h3 style="color:#ddd;margin-bottom:6px">🔑 Redefinir senha de ${opEsc(nome)}</h3>
+      <p style="color:#888;font-size:0.8rem;margin-bottom:12px">
+        A senha atual não pode ser consultada — ela é guardada cifrada. Defina uma nova
+        e informe ao operador. Ele passa a entrar no PDV com ela imediatamente.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:520px">
+        <div><label style="color:#888;font-size:0.78rem">Nova senha</label>
+          <input id="op-nova-senha" type="password" autocomplete="new-password" placeholder="mínimo 6 caracteres"
+            style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        <div><label style="color:#888;font-size:0.78rem">Repita a nova senha</label>
+          <input id="op-nova-senha2" type="password" autocomplete="new-password"
+            style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button onclick="opTrocarSenha('${id}','${opEsc(nome)}')" class="btn-salvar">Salvar nova senha</button>
+        <button onclick="document.getElementById('op-form').innerHTML=''" class="nfe-aba">Cancelar</button>
+      </div>
+      <div id="op-msg" style="margin-top:10px;font-size:0.84rem"></div>
+    </div>`;
+  document.getElementById('op-nova-senha').focus();
+}
+
+async function opTrocarSenha(id, nome) {
+  const s1 = document.getElementById('op-nova-senha').value;
+  const s2 = document.getElementById('op-nova-senha2').value;
+  const msg = document.getElementById('op-msg');
+  if (s1.length < 6) { msg.style.color = '#f87171'; msg.textContent = 'A senha deve ter ao menos 6 caracteres.'; return; }
+  if (s1 !== s2) { msg.style.color = '#f87171'; msg.textContent = 'As duas senhas não conferem.'; return; }
+
+  msg.style.color = '#888'; msg.textContent = 'Trocando a senha...';
+  const { data: { session } } = await sb.auth.getSession();
+  try {
+    const r = await fetch(SEFAZ_URL + '/operador/senha', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session?.access_token, alvo_uid: id, senha: s1 }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      msg.style.color = '#f87171';
+      msg.textContent = 'Não consegui trocar: ' + (j.erro || ('erro ' + r.status));
+      return;
+    }
+    msg.style.color = '#4caf50';
+    msg.textContent = `Senha de ${nome} redefinida.`;
+    setTimeout(() => { document.getElementById('op-form').innerHTML = ''; }, 1600);
+  } catch (e) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Falha ao falar com o servidor: ' + e.message;
+  }
+}
+
+// ============================================================
+// BLOQUEAR / LIBERAR ACESSO
+// ============================================================
+// Bloquear NAO apaga: o historico do operador (turnos, cupons) continua
+// intacto. A view de login ignora quem esta inativo, e o nucleo espelha isso
+// a cada 5min para o bloqueio valer tambem OFFLINE.
+async function opAlternarAtivo(id, ativar, nome) {
+  const acao = ativar ? 'liberar' : 'bloquear';
+  if (!confirm(`Confirma ${acao} o acesso de ${nome} ao PDV?`)) return;
+  const { error } = await sb.from('oct_perfis').update({ ativo: !!ativar }).eq('id', id);
+  if (error) { alert('Erro: ' + error.message); return; }
+  opListar();
 }
 
 function opEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
