@@ -135,8 +135,10 @@ async function nfceFilaCarregar() {
   try {
     const r = await sb.from('oct_fila_transmissao').select('*')
       .eq('empresa_id', _nfceEmpresaId).eq('status', 'fila')
-      .order('atualizado_em', { ascending: false }).limit(300);
+      .order('atualizado_em', { ascending: false }).limit(500);
     if (r.error) erro = r.error.message; else fila = r.data || [];
+    // ordem: data/hora do ABASTECIMENTO, do mais recente para o mais antigo
+    fila.sort((x, y) => String(y.ocorrido_em || y.criado_em || '').localeCompare(String(x.ocorrido_em || x.criado_em || '')));
   } catch (e) { erro = e.message; }
   window._nfceFila = fila;
   if (erro) { box.innerHTML = `<p style="color:#f87171;padding:8px;font-size:0.8rem">Fila indisponível: ${erro} (a tabela oct_fila_transmissao existe?)</p>`; return; }
@@ -144,7 +146,15 @@ async function nfceFilaCarregar() {
   const fmt = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
   const linhas = fila.map((f, i) => {
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    const dh = v => {
+      if (!v) return '<span style="color:#555">—</span>';
+      const d = new Date(v);
+      return isNaN(d) ? String(v).slice(0, 16).replace('T', ' ')
+        : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    };
     return `<tr style="border-bottom:1px solid #1c1f2e">
+      <td style="padding:7px 6px;white-space:nowrap;color:#9aa">${dh(f.ocorrido_em || f.criado_em)}</td>
+      <td style="padding:7px 6px;white-space:nowrap;color:#667;font-size:0.78rem">${dh(f.recebido_em)}</td>
       <td style="padding:7px 6px">${f.descricao || '—'}${f.bandeira ? ` <span style="color:#667;font-size:0.72rem">${f.bandeira}</span>` : ''}</td>
       <td style="padding:7px 6px;text-align:center">${f.bico ?? '—'}</td>
       <td style="padding:7px 6px;text-align:right">${Number(f.litros || 0) ? fmt(f.litros) + ' L' : '—'}</td>
@@ -159,12 +169,13 @@ async function nfceFilaCarregar() {
   const total = fila.reduce((s, f) => s + Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0), 0);
   box.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem;min-width:760px">
     <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #2a2d3e">
+      <th style="padding:6px">Abastecimento</th><th style="padding:6px">Recebido</th>
       <th style="padding:6px">Combustível/Produto</th><th style="padding:6px;text-align:center">Bico</th>
       <th style="padding:6px;text-align:right">Litros</th><th style="padding:6px">Forma</th>
       <th style="padding:6px;text-align:right">Valor</th><th style="padding:6px">Desconto</th>
       <th style="padding:6px">Acréscimo</th><th style="padding:6px;text-align:right">Valor final</th><th></th>
     </tr></thead><tbody>${linhas}</tbody>
-    <tfoot><tr><td colspan="7" style="padding:8px 6px;color:#888"><b>${fila.length} item(ns) na fila</b></td>
+    <tfoot><tr><td colspan="9" style="padding:8px 6px;color:#888"><b>${fila.length} item(ns) na fila</b></td>
       <td style="padding:8px 6px;text-align:right;color:#4caf50;font-weight:700">${fmt(total)}</td><td></td></tr></tfoot>
   </table>`;
 }
