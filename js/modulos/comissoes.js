@@ -13,6 +13,7 @@
 let _comDe = null, _comAte = null;
 let _comDados = [];            // linhas cruas do período
 let _comAberto = null;         // vendedor com detalhe expandido
+let _comSemComissao = {};      // NOME (maiúsculo) -> true p/ produto com comissão DESLIGADA no cadastro
 
 function _comBRL(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function _comHojeStr(d) {
@@ -70,6 +71,13 @@ async function _comBuscar() {
   const corpo = document.getElementById('com-corpo');
   if (!eid) { corpo.innerHTML = '<p style="color:#f87171;padding:14px">Selecione uma empresa.</p>'; return; }
   corpo.innerHTML = '<p style="color:#666;padding:14px">Carregando…</p>';
+  // quais produtos têm a comissão DESLIGADA no cadastro (Produtos > Paga comissão)
+  _comSemComissao = {};
+  try {
+    const { data: prods } = await sb.from('oct_produtos')
+      .select('nome,paga_comissao').eq('empresa_id', eid).eq('paga_comissao', false);
+    (prods || []).forEach(p => { _comSemComissao[String(p.nome || '').trim().toUpperCase()] = true; });
+  } catch (e) { /* coluna ainda não criada: todo produto comissiona */ }
   // paginado: o PostgREST corta em 1000 linhas e um mês passa disso
   const linhas = [];
   for (let pg = 0; pg < 20; pg++) {
@@ -99,13 +107,20 @@ function _comRenderTabela() {
     corpo.innerHTML = '<p style="color:#666;padding:14px">Nenhum item casado no período.</p>';
     return;
   }
-  // agrupa por vendedor; "(sem vendedor)" fica visível para o gerente cobrar
+  // agrupa por vendedor; "(sem vendedor)" fica visível para o gerente cobrar.
+  // Produto com "Paga comissão = Não" no cadastro fica FORA da base (some do
+  // valor de loja do vendedor), mas é contado à parte para transparência.
   const por = {};
+  let foraQtd = 0, foraVal = 0;
   _comDados.forEach(f => {
     const nome = (f.vendedor || '').trim() || '(sem vendedor)';
-    const g = por[nome] || (por[nome] = { lojaQtd: 0, lojaVal: 0, combL: 0, combVal: 0, itens: [] });
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const litros = Number(f.litros || 0);
+    if (litros <= 0 && _comSemComissao[String(f.descricao || '').trim().toUpperCase()]) {
+      foraQtd += 1; foraVal += vf;
+      return;
+    }
+    const g = por[nome] || (por[nome] = { lojaQtd: 0, lojaVal: 0, combL: 0, combVal: 0, itens: [] });
     if (litros > 0) { g.combL += litros; g.combVal += vf; }
     else { g.lojaQtd += 1; g.lojaVal += vf; }
     g.itens.push(f);
@@ -170,5 +185,6 @@ function _comRenderTabela() {
     <p style="color:#555;font-size:0.72rem;margin-top:8px">
       Clique no vendedor para abrir o detalhe item a item. "(sem vendedor)" são itens casados sem
       registro de quem vendeu — não entram na comissão.
+      ${foraQtd ? `<br><span style="color:#8a6d3b">${foraQtd} item(ns) de produtos com comissão desligada no cadastro (${_comBRL(foraVal)}) ficaram fora da base.</span>` : ''}
     </p>`;
 }

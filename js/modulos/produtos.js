@@ -192,6 +192,13 @@ async function abrirFormProduto(id, empresaId) {
         </div>
         <div class="form-group"><label>Preço venda</label><input id="fp-venda" type="number" step="0.01" value="${p?.preco_venda_a||0}" oninput="produtoCalcMargem()" /></div>
         <div class="form-group">
+          <label>Paga comissão <span style="color:#667;font-size:0.72rem">(tela Comissões)</span></label>
+          <select id="fp-comissao">
+            <option value="S" ${p?.paga_comissao === false ? '' : 'selected'}>Sim — entra na comissão do vendedor</option>
+            <option value="N" ${p?.paga_comissao === false ? 'selected' : ''}>Não — fora da comissão</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label>Preço frota — modo</label>
           <select id="fp-frota-modo" onchange="produtoCalcFrota()">
             <option value="manual"  ${(p?.frota_modo||'manual')==='manual'?'selected':''}>Manual (preço fixo)</option>
@@ -287,6 +294,7 @@ async function salvarProduto(id, empresaId) {
     ncm:           document.getElementById('fp-ncm').value.trim() || null,
     preco_custo:   parseFloat(document.getElementById('fp-custo').value) || 0,
     preco_venda_a:   parseFloat(document.getElementById('fp-venda').value) || 0,
+    paga_comissao:   document.getElementById('fp-comissao')?.value !== 'N',
     // preço frota (o que o núcleo empurra pro portal Prime)
     frota_modo:      document.getElementById('fp-frota-modo')?.value || 'manual',
     frota_acrescimo: parseFloat(document.getElementById('fp-frota-acrescimo')?.value) || 0,
