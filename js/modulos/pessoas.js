@@ -139,15 +139,6 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
-        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
-          <label>📋 Exigências da nota a prazo <span style="font-size:0.72rem;color:#888">(o PDV pergunta e OBRIGA estes campos ao fechar a prazo para este cliente)</span></label>
-          <div style="display:flex;flex-wrap:wrap;gap:6px 18px;padding-top:6px">
-            ${[['exige_placa','Exige Placa'],['exige_km','Exige Odômetro (KM)'],['exige_motorista','Exige Motorista'],
-               ['exige_cpf_motorista','Exige CPF do Motorista'],['exige_veiculo','Exige Veículo'],
-               ['exige_frota','Exige Frota'],['exige_requisicao','Exige Requisição']]
-              .map(c => `<label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:0.82rem"><input id="fpe-${c[0]}" type="checkbox" ${(p && p[c[0]])?'checked':''} style="width:auto" /> ${c[1]}</label>`).join('')}
-          </div>
-        </div>
         ${id ? `
         <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
           <label>🏢 Colaboradores autorizados <span style="font-size:0.72rem;color:#888">(abastecem a prazo pelo app NA CONTA desta empresa — o cupom sai no nome dela)</span></label>
@@ -352,13 +343,6 @@ async function salvarPessoa(id, empresaId) {
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
     aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
     limite_nota_prazo: parseFloat(document.getElementById('fpe-prazo-limite')?.value) || null,
-    exige_placa: !!document.getElementById('fpe-exige_placa')?.checked,
-    exige_km: !!document.getElementById('fpe-exige_km')?.checked,
-    exige_motorista: !!document.getElementById('fpe-exige_motorista')?.checked,
-    exige_cpf_motorista: !!document.getElementById('fpe-exige_cpf_motorista')?.checked,
-    exige_veiculo: !!document.getElementById('fpe-exige_veiculo')?.checked,
-    exige_frota: !!document.getElementById('fpe-exige_frota')?.checked,
-    exige_requisicao: !!document.getElementById('fpe-exige_requisicao')?.checked,
     credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
     bairro:      document.getElementById('fpe-bairro')?.value.trim() || null,
