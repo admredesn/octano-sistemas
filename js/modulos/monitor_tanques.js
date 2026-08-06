@@ -265,9 +265,19 @@ async function _monVendas(empIds) {
   const tqNumPorId = {};
   tqs.forEach(t => { tqNumPorId[t.id] = { numero: t.numero, empresa: t.empresa_id }; });
   const bicoTanque = {};   // "empresa|bico" -> nº do tanque
+  const bicoCusto = {};    // "empresa|bico" -> custo/L do produto do tanque
   bcs.forEach(b => {
     const t = tqNumPorId[b.tanque_id];
-    if (t && b.numero != null) bicoTanque[t.empresa + '|' + Number(b.numero)] = t.numero;
+    if (t && b.numero != null) {
+      bicoTanque[t.empresa + '|' + Number(b.numero)] = t.numero;
+      // a fila diz "GASOLINA COMUM" (nome da pista) e o cadastro do produto diz
+      // o nome FISCAL ("ONU 3475, MISTURA DE..."): casar por nome falha para
+      // combustível. O elo confiável é físico: bico -> tanque -> produto do
+      // tanque -> custo. (Sem isto o lucro apurado saiu R$14 num dia de R$6,5 mil:
+      // 111 de 113 itens ficaram "sem custo".)
+      const c = custoPorTanque[b.tanque_id];
+      if (c > 0) bicoCusto[t.empresa + '|' + Number(b.numero)] = c;
+    }
   });
   const out = {};
   for (const [eid, data] of listas) {
@@ -402,7 +412,10 @@ async function _monVendas(empIds) {
       const litros = Number(f.litros || 0);
       const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
       const taxa = Number(f.taxa || 0);
-      const custoL = custoPorNome[String(f.descricao || '').trim().toUpperCase()] || 0;
+      // combustível: custo pelo TANQUE do bico (o nome da fila é o da pista,
+      // não o fiscal do cadastro); loja: pelo nome mesmo, que aí coincide
+      const custoL = (litros > 0 && bicoCusto[eid + '|' + Number(f.bico)]) ||
+        custoPorNome[String(f.descricao || '').trim().toUpperCase()] || 0;
       if (custoL <= 0) return;
       const custo = litros > 0 ? custoL * litros : custoL;   // loja: 1 un/linha
       lucroApurado += vf - custo - taxa;
