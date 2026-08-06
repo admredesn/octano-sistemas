@@ -328,7 +328,9 @@ async function _monVendas(empIds) {
     const porDiaTanque = {};       // dia -> tanque -> litros
     pista.forEach(a => {
       const dia = String(a.data_abast || '').slice(0, 10);
-      if (!dia || dia === hojeStr) return;
+      // dia FUTURO = relógio de concentrador errado (AC apareceu com meses de
+      // set/out/nov) — não pode entrar na média senão a autonomia vira ficção
+      if (!dia || dia >= hojeStr) return;
       const nTq = nTanque(a);
       if (nTq == null) return;
       (porDiaTanque[dia] = porDiaTanque[dia] || {})[nTq] =
