@@ -231,13 +231,17 @@ async function _monVendas(empIds) {
       .eq('empresa_id', eid).gte('data_venda', desde)
       .order('data_venda', { ascending: false }).limit(500)
       .then(r => [eid, r.data || []])));
-  // FILA DE TRANSMISSÃO do PDV: abastecimento baixado, cupom ainda não emitido.
-  // Conta no dia; ao transmitir vira venda (sem dupla contagem) e ao ser
-  // removido da fila some daqui — o saldo se corrige sozinho a cada refresh.
-  const pFila = sb.from('oct_fila_transmissao')
-    .select('empresa_id,bico,descricao,litros,valor,forma,forma_nome,desconto,acrescimo')
-    .in('empresa_id', empIds).eq('status', 'fila').gte('criado_em', desde)
-    .then(r => r.data || [], () => []);
+  // FILA + TRANSMITIDOS do dia: a fila conta no total (cupom a emitir) e os
+  // dois juntos formam o LUCRO APURADO — todo casamento do dia, já com a taxa
+  // da maquininha (coluna taxa, publicada pelo núcleo) para descontar.
+  // Se a coluna taxa ainda não existir no Supabase (SQL pendente), reconsulta
+  // sem ela: o lucro sai sem o desconto até a coluna ser criada, mas sai.
+  const _filaSel = extra => sb.from('oct_fila_transmissao')
+    .select('empresa_id,bico,descricao,litros,valor,forma,forma_nome,desconto,acrescimo,status' + extra)
+    .in('empresa_id', empIds).in('status', ['fila', 'transmitido']).gte('criado_em', desde);
+  const pFila = _filaSel(',taxa').then(
+    r => r.error ? _filaSel('').then(r2 => r2.data || [], () => []) : (r.data || []),
+    () => _filaSel('').then(r2 => r2.data || [], () => []));
   // PISTA dos últimos 6 dias (hoje + 5 anteriores p/ média de autonomia)
   const pPista = Promise.all(empIds.map(eid =>
     _monPistaDias(eid, desde6).then(r => [eid, r])));
@@ -268,7 +272,10 @@ async function _monVendas(empIds) {
   const out = {};
   for (const [eid, data] of listas) {
     const vendas = data.filter(v => (v.status || '') !== 'cancelada');
-    const fila = filaTodos.filter(f => f.empresa_id === eid);
+    // casados do dia (fila + transmitidos) p/ o LUCRO APURADO; a "fila" das
+    // demais contas continua sendo só o que ainda não virou cupom
+    const casados = filaTodos.filter(f => f.empresa_id === eid);
+    const fila = casados.filter(f => (f.status || 'fila') === 'fila');
     const pista = pistaPorEmp[eid] || [];
     const pistaHoje = pista.filter(a => String(a.data_abast || '').slice(0, 10) === hojeStr);
     const temPista = pistaHoje.length > 0;
@@ -386,6 +393,21 @@ async function _monVendas(empIds) {
         if (c > 0) lojaLucro += vf - c;        // qtd da fila = 1 por linha
       }
     });
+    // ---- LUCRO APURADO: só o que CASOU (fila + transmitidos do dia), com a
+    // taxa da maquininha descontada. É o lucro que o posto de fato apurou —
+    // combustível ainda pendente (sem recebimento) não conta até casar.
+    // Item sem custo cadastrado fica de fora inteiro (margem desconhecida).
+    let lucroApurado = 0, taxasTotal = 0;
+    casados.forEach(f => {
+      const litros = Number(f.litros || 0);
+      const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+      const taxa = Number(f.taxa || 0);
+      const custoL = custoPorNome[String(f.descricao || '').trim().toUpperCase()] || 0;
+      if (custoL <= 0) return;
+      const custo = litros > 0 ? custoL * litros : custoL;   // loja: 1 un/linha
+      lucroApurado += vf - custo - taxa;
+      taxasTotal += taxa;
+    });
     // guarda só o LEVE (nada de itens/fiscal): o cache e o render ficam instantâneos
     const leve = v => ({
       data_venda: v.data_venda, valor_total: Number(v.valor_total || 0),
@@ -403,7 +425,11 @@ async function _monVendas(empIds) {
       temPista,
       total: temPista ? pistaValor + lojaValor : totalAntigo,
       volume: temPista ? pistaLitros : volumeAntigo,
-      lucro: temPista ? pistaLucro + lojaLucro : lucroAntigo,
+      // com casamentos do dia: lucro APURADO (casados - taxa); sem nenhum
+      // (posto v1): a conta antiga dos cupons
+      lucro: casados.length ? lucroApurado : lucroAntigo,
+      taxas: taxasTotal,
+      apurado: casados.length > 0,
       ultima: temPista && ultimaPista ? { data_venda: ultimaPista } :
         (vendas[0] ? leve(vendas[0]) : null),
       filaQtd: fila.length, filaTotal,
@@ -450,10 +476,11 @@ function _monCardVendaPosto(nome, v, tv) {
       <span style="font-size:${tv ? '2rem' : '1.5rem'};font-weight:800;color:#f8fafc">${_monBRL(v.total)}</span>
       <span style="font-size:${tv ? '1.6rem' : '1.2rem'};font-weight:800;color:#38bdf8">${_monNum(v.volume, 1)} <span style="font-size:0.6em;color:#94a3b8">L</span></span>
     </div>
-    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
-      <span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">Lucro:</span>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+      <span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">${v.apurado ? 'Lucro apurado:' : 'Lucro:'}</span>
       <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(v.lucro)}</span>
       ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(v.lucro / v.total * 100, 1)}%</span>` : ''}
+      ${v.taxas > 0 ? `<span style="color:#f87171;font-size:${tv ? '0.82rem' : '0.68rem'}" title="taxas de cartão já descontadas do lucro">taxas −${_monBRL(v.taxas)}</span>` : ''}
     </div>
     <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${
       v.temPista
