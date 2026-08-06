@@ -22,6 +22,7 @@ const MODULOS = [
   { id: 'relatorios',    label: '📊 Relatórios',  breve: false },
   { id: 'whatsapp',      label: '📱 WhatsApp',    breve: false },
   { id: 'cashback',      label: '💸 Cashback',    breve: false },
+  { id: 'comissoes',     label: '💰 Comissões',   breve: false },
   { id: 'despesas',      label: 'Despesas',       breve: true  },
   { id: 'dre',           label: 'DRE',            breve: true  },
 ];
@@ -158,6 +159,7 @@ function navegarPara(modulo){
     relatorios:    moduloRelatorios,
     whatsapp:      moduloWhatsapp,
     cashback:      moduloCashback,
+    comissoes:     moduloComissoes,
   };
   if(fns[modulo]) fns[modulo]();
   else conteudo.innerHTML = '<p style="color:#888;padding:24px">Modulo <strong>' + modulo + '</strong> em breve.</p>';
