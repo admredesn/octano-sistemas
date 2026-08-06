@@ -21,15 +21,53 @@ function _comHojeStr(d) {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
+// Percentuais guardados NA NUVEM (oct_empresas), por empresa: a política de
+// comissão é uma só, não pode variar conforme o navegador que abriu a tela.
+// O localStorage fica só como fallback enquanto as colunas não existirem.
+let _comPctsCache = null;
 function _comPctKey() { return 'oct_comissao_pct_' + (empresaAtiva() || 'x'); }
 function _comPcts() {
+  if (_comPctsCache) return _comPctsCache;
   try { return JSON.parse(localStorage.getItem(_comPctKey())) || { loja: 5, comb: 0 }; }
   catch (e) { return { loja: 5, comb: 0 }; }
 }
-function _comSalvarPcts() {
-  const loja = Math.max(0, Number(document.getElementById('com-pct-loja')?.value || 0));
-  const comb = Math.max(0, Number(document.getElementById('com-pct-comb')?.value || 0));
-  localStorage.setItem(_comPctKey(), JSON.stringify({ loja, comb }));
+async function _comCarregarPcts() {
+  try {
+    const { data, error } = await sb.from('oct_empresas')
+      .select('comissao_pct_loja,comissao_pct_comb').eq('id', empresaAtiva()).single();
+    if (!error && data && data.comissao_pct_loja != null) {
+      _comPctsCache = { loja: Number(data.comissao_pct_loja), comb: Number(data.comissao_pct_comb || 0) };
+    }
+  } catch (e) { /* coluna ainda não criada: segue no localStorage */ }
+  return _comPcts();
+}
+function _comLerPctsDaTela() {
+  return {
+    loja: Math.max(0, Number(document.getElementById('com-pct-loja')?.value || 0)),
+    comb: Math.max(0, Number(document.getElementById('com-pct-comb')?.value || 0)),
+  };
+}
+// digitou -> a tabela recalcula NA HORA (prévia), mas só vale depois do Salvar
+function _comPreverPcts() {
+  _comPctsCache = _comLerPctsDaTela();
+  const msg = document.getElementById('com-pct-msg');
+  if (msg) { msg.textContent = 'alterado — clique em Salvar'; msg.style.color = '#fbbf24'; }
+  _comRenderTabela();
+}
+async function _comSalvarPcts() {
+  const p = _comLerPctsDaTela();
+  _comPctsCache = p;
+  localStorage.setItem(_comPctKey(), JSON.stringify(p));   // fallback local
+  const msg = document.getElementById('com-pct-msg');
+  try {
+    const { error } = await sb.from('oct_empresas')
+      .update({ comissao_pct_loja: p.loja, comissao_pct_comb: p.comb })
+      .eq('id', empresaAtiva());
+    if (error) throw error;
+    if (msg) { msg.textContent = '✓ salvo para a empresa'; msg.style.color = '#4ade80'; }
+  } catch (e) {
+    if (msg) { msg.textContent = '⚠ salvo só neste navegador (rode o SQL das colunas p/ valer em todos)'; msg.style.color = '#f59e0b'; }
+  }
   _comRenderTabela();
 }
 
@@ -38,7 +76,7 @@ async function moduloComissoes() {
   const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
   _comDe = _comDe || _comHojeStr(ini);
   _comAte = _comAte || _comHojeStr(hoje);
-  const p = _comPcts();
+  const p = await _comCarregarPcts();
   document.getElementById('conteudo').innerHTML = `
     <div style="padding:20px">
       <h2 style="color:#f97316;margin-bottom:4px">💰 Comissões por vendedor</h2>
@@ -52,11 +90,15 @@ async function moduloComissoes() {
         <div><label style="color:#888;font-size:0.72rem">Até</label><br>
           <input id="com-ate" type="date" value="${_comAte}" style="padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#eee"></div>
         <div><label style="color:#888;font-size:0.72rem">% loja (itens)</label><br>
-          <input id="com-pct-loja" type="number" step="0.1" min="0" value="${p.loja}" onchange="_comSalvarPcts()"
+          <input id="com-pct-loja" type="number" step="0.1" min="0" value="${p.loja}" oninput="_comPreverPcts()"
             style="width:90px;padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#4ade80"></div>
         <div><label style="color:#888;font-size:0.72rem">% combustível</label><br>
-          <input id="com-pct-comb" type="number" step="0.01" min="0" value="${p.comb}" onchange="_comSalvarPcts()"
+          <input id="com-pct-comb" type="number" step="0.01" min="0" value="${p.comb}" oninput="_comPreverPcts()"
             style="width:90px;padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#38bdf8"></div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <button onclick="_comSalvarPcts()" style="padding:9px 14px;border-radius:6px;border:none;background:#14532d;color:#4ade80;font-weight:700;cursor:pointer">💾 Salvar %</button>
+          <span id="com-pct-msg" style="font-size:0.68rem;color:#667"></span>
+        </div>
         <button onclick="_comBuscar()" style="padding:9px 18px;border-radius:6px;border:none;background:#f97316;color:#fff;font-weight:700;cursor:pointer">Buscar</button>
         <button onclick="_comCategorias()" style="padding:9px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#60a5fa;cursor:pointer">⚙ Comissão por categoria</button>
       </div>
