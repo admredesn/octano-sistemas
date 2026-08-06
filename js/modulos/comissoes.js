@@ -58,10 +58,79 @@ async function moduloComissoes() {
           <input id="com-pct-comb" type="number" step="0.01" min="0" value="${p.comb}" onchange="_comSalvarPcts()"
             style="width:90px;padding:7px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#38bdf8"></div>
         <button onclick="_comBuscar()" style="padding:9px 18px;border-radius:6px;border:none;background:#f97316;color:#fff;font-weight:700;cursor:pointer">Buscar</button>
+        <button onclick="_comCategorias()" style="padding:9px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#60a5fa;cursor:pointer">⚙ Comissão por categoria</button>
       </div>
+      <div id="com-cats" style="display:none;margin-bottom:14px"></div>
       <div id="com-corpo"><p style="color:#666;padding:14px">Carregando…</p></div>
     </div>`;
   _comBuscar();
+}
+
+// ---------- COMISSÃO POR CATEGORIA (liga/desliga em massa) ----------
+// Em vez de abrir produto por produto, o gerente decide por categoria:
+// "Lubrificantes pagam, Cigarros não" — um clique atualiza todos os produtos
+// daquela categoria (UPDATE em massa no paga_comissao).
+async function _comCategorias() {
+  const box = document.getElementById('com-cats');
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<p style="color:#666;padding:8px">Carregando categorias…</p>';
+  const eid = empresaAtiva();
+  const { data, error } = await sb.from('oct_produtos')
+    .select('categoria,paga_comissao').eq('empresa_id', eid);
+  if (error) { box.innerHTML = `<p style="color:#f87171;padding:8px">Erro: ${error.message} (a coluna paga_comissao existe?)</p>`; return; }
+  const cats = {};
+  (data || []).forEach(p => {
+    const c = (p.categoria || '').trim() || '(sem categoria)';
+    const g = cats[c] || (cats[c] = { total: 0, pagam: 0 });
+    g.total += 1;
+    if (p.paga_comissao !== false) g.pagam += 1;
+  });
+  const linhas = Object.keys(cats).sort().map(c => {
+    const g = cats[c];
+    const estado = g.pagam === g.total ? '<span style="color:#4ade80">todos pagam</span>'
+      : g.pagam === 0 ? '<span style="color:#f87171">nenhum paga</span>'
+      : `<span style="color:#fbbf24">${g.pagam} de ${g.total} pagam</span>`;
+    const esc = c.replace(/'/g, "\\'");
+    return `<tr style="border-bottom:1px solid #1c1f2e">
+      <td style="padding:7px 10px;font-weight:600">${c}</td>
+      <td style="padding:7px 10px;text-align:right;color:#9aa">${g.total} produto(s)</td>
+      <td style="padding:7px 10px">${estado}</td>
+      <td style="padding:7px 10px;text-align:right;white-space:nowrap">
+        <button onclick="_comCategoriaSet('${esc}', true)" style="padding:5px 12px;border-radius:5px;border:none;background:#14532d;color:#4ade80;cursor:pointer;font-size:0.76rem">✓ Pagar comissão</button>
+        <button onclick="_comCategoriaSet('${esc}', false)" style="padding:5px 12px;border-radius:5px;border:none;background:#450a0a;color:#f87171;cursor:pointer;font-size:0.76rem">✗ Não pagar</button>
+      </td></tr>`;
+  }).join('');
+  box.innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+        <thead><tr style="color:#888;background:#0f1119;text-align:left">
+          <th style="padding:8px 10px">Categoria</th><th style="padding:8px 10px;text-align:right">Produtos</th>
+          <th style="padding:8px 10px">Situação</th><th></th></tr></thead>
+        <tbody>${linhas || '<tr><td colspan="4" style="padding:12px;color:#666">Nenhum produto cadastrado.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <p style="color:#555;font-size:0.7rem;margin-top:6px">O clique atualiza TODOS os produtos da categoria de uma vez.
+    Depois dá para ajustar um produto específico no cadastro (Produtos &gt; Paga comissão).</p>`;
+}
+
+async function _comCategoriaSet(cat, paga) {
+  const eid = empresaAtiva();
+  let q = sb.from('oct_produtos').update({ paga_comissao: paga }).eq('empresa_id', eid);
+  // "(sem categoria)" cobre NULL e vazio — dois updates, o filtro or do
+  // PostgREST não mistura bem com update
+  let error = null;
+  if (cat === '(sem categoria)') {
+    ({ error } = await sb.from('oct_produtos').update({ paga_comissao: paga }).eq('empresa_id', eid).is('categoria', null));
+    if (!error) ({ error } = await sb.from('oct_produtos').update({ paga_comissao: paga }).eq('empresa_id', eid).eq('categoria', ''));
+  } else {
+    ({ error } = await q.eq('categoria', cat));
+  }
+  if (error) { alert('Erro ao atualizar: ' + error.message); return; }
+  document.getElementById('com-cats').style.display = 'none';
+  await _comCategorias();          // reabre com a situação nova
+  _comBuscar();                    // recalcula a base da comissão
 }
 
 async function _comBuscar() {
