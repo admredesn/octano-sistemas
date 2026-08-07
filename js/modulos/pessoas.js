@@ -139,6 +139,25 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
+        <!-- EXIGÊNCIAS DA NOTA A PRAZO: o PDV já pergunta esses dados na venda
+             (pagamento.js > PRAZO_CAMPOS), mas até 06/08/2026 não havia onde
+             LIGAR a exigência — só direto no banco. Agora é aqui. -->
+        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
+          <label>📋 Exigências na venda a prazo <span style="font-size:0.72rem;color:#888">(o PDV vai pedir estes dados e não deixa fechar sem eles)</span></label>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px">
+            ${[['fpe-ex-placa','exige_placa','Placa'],
+               ['fpe-ex-km','exige_km','Odômetro (KM)'],
+               ['fpe-ex-mot','exige_motorista','Motorista'],
+               ['fpe-ex-cpfmot','exige_cpf_motorista','CPF do motorista'],
+               ['fpe-ex-veic','exige_veiculo','Veículo'],
+               ['fpe-ex-frota','exige_frota','Frota'],
+               ['fpe-ex-req','exige_requisicao','Requisição']]
+              .map(([eid, campo, rot]) => `
+              <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:0.86rem">
+                <input id="${eid}" type="checkbox" ${p && p[campo] ? 'checked' : ''} style="width:auto" /> ${rot}
+              </label>`).join('')}
+          </div>
+        </div>
         ${id ? `
         <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
           <label>🏢 Colaboradores autorizados <span style="font-size:0.72rem;color:#888">(abastecem a prazo pelo app NA CONTA desta empresa — o cupom sai no nome dela)</span></label>
@@ -344,6 +363,14 @@ async function salvarPessoa(id, empresaId) {
     aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
     limite_nota_prazo: parseFloat(document.getElementById('fpe-prazo-limite')?.value) || null,
     credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
+    // exigências da venda a prazo (o PDV as respeita desde sempre; a tela é nova)
+    exige_placa:          !!document.getElementById('fpe-ex-placa')?.checked,
+    exige_km:             !!document.getElementById('fpe-ex-km')?.checked,
+    exige_motorista:      !!document.getElementById('fpe-ex-mot')?.checked,
+    exige_cpf_motorista:  !!document.getElementById('fpe-ex-cpfmot')?.checked,
+    exige_veiculo:        !!document.getElementById('fpe-ex-veic')?.checked,
+    exige_frota:          !!document.getElementById('fpe-ex-frota')?.checked,
+    exige_requisicao:     !!document.getElementById('fpe-ex-req')?.checked,
     endereco:    document.getElementById('fpe-end').value.trim() || null,
     bairro:      document.getElementById('fpe-bairro')?.value.trim() || null,
     cep:         document.getElementById('fpe-cep')?.value.trim() || null,
