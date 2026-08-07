@@ -130,15 +130,59 @@ async function abrirDetalheProduto(id) {
                       <span style="color:#f97316;font-size:0.85rem">R$ ${Number(v.oct_nfe_entrada?.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</span>
                     </div>
                     <div style="font-size:0.75rem;color:#888;margin-top:3px">
-                      ${v.oct_nfe_entrada?.oct_pessoas?.nome||'—'} · 
+                      ${v.oct_nfe_entrada?.oct_pessoas?.nome||'—'} ·
                       ${v.oct_nfe_entrada?.emissao?new Date(v.oct_nfe_entrada.emissao+'T12:00:00').toLocaleDateString('pt-BR'):'—'}
                     </div>
                   </div>`).join('')}
               </div>`}
+          <div id="prod-preco-hist" style="margin-top:18px"></div>
         </div>
       </div>
     </div>
   `;
+  prodHistoricoPreco(id);
+}
+
+// HISTÓRICO DE PREÇO — o PDV e a retaguarda gravam toda troca em
+// oct_pdv_preco_log desde sempre, e nada nunca lia. Auditoria pronta e
+// invisível: quem mudou o preço, quando, de quanto para quanto.
+async function prodHistoricoPreco(produtoId) {
+  const div = document.getElementById('prod-preco-hist');
+  if (!div) return;
+  let linhas = [];
+  try {
+    const { data, error } = await sb.from('oct_pdv_preco_log')
+      .select('preco_antigo,preco_novo,operador,criado_em')
+      .eq('produto_id', produtoId).order('criado_em', { ascending: false }).limit(30);
+    if (error) throw error;
+    linhas = data || [];
+  } catch (e) {
+    div.innerHTML = `<div class="modulo-header"><h2>Histórico de preço</h2></div>
+      <p style="color:#666;font-size:0.8rem">Indisponível (${e.message}).</p>`;
+    return;
+  }
+  const brl = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  div.innerHTML = `
+    <div class="modulo-header"><h2>Histórico de preço (${linhas.length})</h2></div>
+    ${!linhas.length
+      ? '<p style="color:#555;font-size:0.85rem">Nenhuma alteração registrada.</p>'
+      : `<div style="max-height:260px;overflow-y:auto">
+          ${linhas.map(l => {
+            const sobe = Number(l.preco_novo || 0) >= Number(l.preco_antigo || 0);
+            const dh = l.criado_em ? new Date(l.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+            return `<div style="padding:9px 10px;background:#0f1117;border-radius:8px;margin-bottom:6px;border:1px solid #2a2d3e;display:flex;justify-content:space-between;align-items:center;gap:10px">
+              <div style="min-width:0">
+                <div style="font-size:0.82rem;color:#ddd">
+                  ${brl(l.preco_antigo)} <span style="color:${sobe ? '#f87171' : '#4ade80'}">${sobe ? '▲' : '▼'}</span> <strong>${brl(l.preco_novo)}</strong>
+                </div>
+                <div style="font-size:0.72rem;color:#888">${dh} · ${l.operador || 'não identificado'}</div>
+              </div>
+              <span style="font-size:0.78rem;color:${sobe ? '#f87171' : '#4ade80'};white-space:nowrap">
+                ${sobe ? '+' : ''}${(Number(l.preco_novo || 0) - Number(l.preco_antigo || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 3 })}
+              </span>
+            </div>`;
+          }).join('')}
+        </div>`}`;
 }
 
 async function abrirFormProduto(id, empresaId) {
@@ -326,7 +370,21 @@ async function salvarProduto(id, empresaId) {
 
   let error;
   if (id) {
+    // AUDITORIA DE PREÇO: o PDV já registrava toda troca em oct_pdv_preco_log,
+    // mas a alteração pela retaguarda passava sem rastro — quem mudou o preço
+    // pelo escritório era invisível. Agora os dois caminhos gravam.
+    const precoAntigo = Number(p?.preco_venda_a || 0);
+    const precoNovo = Number(dados.preco_venda_a || 0);
     ({ error } = await sb.from('oct_produtos').update(dados).eq('id', id));
+    if (!error && precoNovo !== precoAntigo) {
+      try {
+        await sb.from('oct_pdv_preco_log').insert({
+          empresa_id: empresaId, produto_id: id, produto_nome: dados.nome,
+          preco_antigo: precoAntigo, preco_novo: precoNovo,
+          operador: 'retaguarda',
+        });
+      } catch (e) { /* log nunca impede o cadastro */ }
+    }
   } else {
     ({ error } = await sb.from('oct_produtos').insert(dados));
   }
