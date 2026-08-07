@@ -198,9 +198,18 @@ async function _monPistaDias(eid, desdeIso) {
   const linhas = [];
   for (let p = 0; p < 5; p++) {
     try {
+      // AFERIÇÃO NÃO É VENDA (07/08/2026): o teste de bomba sai pelo bico e o
+      // combustível VOLTA para o tanque — não há receita nem lucro. São 3.019
+      // linhas na base, e no Florestal um único dia (02/08) tem 131 aferições
+      // com 1.760 litros. Elas não inflavam o lucro só porque vêm com
+      // preco_litro = 0 e a conta exige preço > 0 — sorte, não desenho: bastava
+      // uma aferição com preço para o lucro subir sozinho. Inflavam, sim, o
+      // VOLUME e a média de consumo que alimenta a autonomia dos tanques.
+      // Filtrado na FONTE para valer em tudo: total, volume, lucro e autonomia.
       const { data, error } = await sb.from('oct_pdv_abastecimentos')
-        .select('data_abast,litros,valor_total,preco_litro,combustivel,tanque_id,bico')
+        .select('data_abast,litros,valor_total,preco_litro,combustivel,tanque_id,bico,tipo')
         .eq('empresa_id', eid).gte('data_abast', desdeIso)
+        .not('tipo', 'eq', 'afericao')
         .order('data_abast', { ascending: false })
         .range(p * 1000, p * 1000 + 999);
       if (error || !data || !data.length) break;
