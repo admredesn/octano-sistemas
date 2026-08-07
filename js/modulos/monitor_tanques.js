@@ -258,7 +258,15 @@ async function _monVendas(empIds) {
       nomeProd[p.id] = p.nome;
       custoPorNome[String(p.nome).trim().toUpperCase()] = Number(p.preco_custo || 0);
     }
-    if (p.tanque_id) custoPorTanque[p.tanque_id] = Number(p.preco_custo || 0);
+    // custo do TANQUE: só grava custo REAL e não deixa um produto sem custo
+    // apagar o que já foi resolvido. Um tanque pode ter mais de um produto
+    // apontando para ele (no Florestal, Diesel S500 e S10 no mesmo tanque) —
+    // sem esta guarda, o último lido vencia, inclusive se fosse zero, e o
+    // abastecimento inteiro saía do lucro por "custo desconhecido".
+    if (p.tanque_id) {
+      const c = Number(p.preco_custo || 0);
+      if (c > 0 && !(custoPorTanque[p.tanque_id] > 0)) custoPorTanque[p.tanque_id] = c;
+    }
   });
   const pistaPorEmp = {};
   pistas.forEach(([eid, linhas]) => { pistaPorEmp[eid] = linhas; });
@@ -405,12 +413,27 @@ async function _monVendas(empIds) {
         if (c > 0) lojaLucro += vf - c;        // qtd da fila = 1 por linha
       }
     });
-    // ---- LUCRO APURADO: só o que CASOU (fila + transmitidos do dia), com a
-    // taxa da maquininha descontada. É o lucro que o posto de fato apurou —
-    // combustível ainda pendente (sem recebimento) não conta até casar.
-    // Item sem custo cadastrado fica de fora inteiro (margem desconhecida).
-    let lucroApurado = 0, taxasTotal = 0;
-    casados.forEach(f => {
+    // ---- LUCRO APURADO ----
+    // BUG CORRIGIDO EM 07/08/2026: o lucro DIMINUÍA conforme o dia andava.
+    // A conta usava `casados.length ? lucroApurado : lucroAntigo` — ou uma
+    // fonte, ou a outra. Só que a vitrine marca 'removido' todo item que saiu
+    // das tabelas do núcleo, e isso acontece ao FECHAR O TURNO. Ou seja: turno
+    // fechado = venda some da fila = lucro do dia encolhe. Medido no Florestal:
+    // R$ 2.132 de R$ 8.016 (27% do dia) fora da conta, e crescendo a cada
+    // fechamento.
+    // Agora SOMA as duas fontes, sem duplicar:
+    //   (a) o que ainda está na FILA  -> ainda não virou cupom;
+    //   (b) os CUPONS emitidos do dia -> oct_pdv_vendas.
+    // Um item na fila ainda não é cupom, e cupom emitido já saiu da fila —
+    // então não há intersecção. O 'transmitido' é a única exceção: ele está na
+    // vitrine E já é cupom, por isso fica FORA de (a).
+    // taxas da maquininha do dia: valem para TODO casamento, esteja o item
+    // ainda na fila ou já transmitido — é dinheiro que o posto não recebe.
+    let taxasTotal = 0;
+    casados.forEach(f => { taxasTotal += Number(f.taxa || 0); });
+
+    let lucroApurado = 0;
+    casados.filter(f => (f.status || 'fila') === 'fila').forEach(f => {
       const litros = Number(f.litros || 0);
       const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
       const taxa = Number(f.taxa || 0);
@@ -421,7 +444,6 @@ async function _monVendas(empIds) {
       if (custoL <= 0) return;
       const custo = litros > 0 ? custoL * litros : custoL;   // loja: 1 un/linha
       lucroApurado += vf - custo - taxa;
-      taxasTotal += taxa;
     });
     // guarda só o LEVE (nada de itens/fiscal): o cache e o render ficam instantâneos
     const leve = v => ({
@@ -440,9 +462,18 @@ async function _monVendas(empIds) {
       temPista,
       total: temPista ? pistaValor + lojaValor : totalAntigo,
       volume: temPista ? pistaLitros : volumeAntigo,
-      // com casamentos do dia: lucro APURADO (casados - taxa); sem nenhum
-      // (posto v1): a conta antiga dos cupons
-      lucro: casados.length ? lucroApurado : lucroAntigo,
+      // LUCRO PELA MESMA FONTE DO TOTAL (correção 07/08/2026).
+      // O total já vinha da PISTA (dia inteiro, todo litro que saiu da bomba) e
+      // o lucro vinha da FILA (só o que ainda não foi emitido). Duas réguas
+      // diferentes na mesma linha: o gerente via "vendi R$ 12 mil, lucrei
+      // R$ 570" — margem de 4,7% num posto que faz 9,7%. E piorava com o dia,
+      // porque fechar turno tira o item da fila (vira 'removido' na vitrine) e
+      // encolhe o lucro. Medido: Florestal R$570 -> R$1.174 e Miranda
+      // R$985 -> R$3.262 (um terço do real).
+      // Agora, com pista publicada: combustível do dia inteiro + loja, menos as
+      // taxas de cartão conhecidas. Sem pista, a conta antiga (fila + cupons).
+      lucro: temPista ? (pistaLucro + lojaLucro - taxasTotal)
+                      : (lucroApurado + lucroAntigo),
       taxas: taxasTotal,
       apurado: casados.length > 0,
       ultima: temPista && ultimaPista ? { data_venda: ultimaPista } :
