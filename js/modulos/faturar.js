@@ -163,21 +163,136 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     <td class="fat-td fat-r">${_fatMoney(fatr.valor)}</td>
-    <td class="fat-td">${status === "aberta" ? `<button class="fat-btn mini" onclick="fatLiquidar('${fatr.id}')">✔ Liquidar</button>` : `<span style="color:#4ade80">${_fatData(fatr.liquidado_em)}</span>`}</td>
+    <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
+    <td class="fat-td">${status === "aberta" ? `<button class="fat-btn mini" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">${_fatData(fatr.liquidado_em)}</span>`}</td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + Number(fr.valor || 0), 0);
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>${status === "aberta" ? "Ação" : "Liquidada em"}</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="6" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>${status === "aberta" ? "Ação" : "Liquidada em"}</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="7" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
+  // saldo por fatura (recebimentos parciais) — assíncrono, não trava a lista
+  faturas.forEach(async fr => {
+    const rec = await _fatRecebidoDa(fr.id);
+    const el = document.getElementById("fat-saldo-" + fr.id);
+    if (!el) return;
+    if (rec <= 0) { el.textContent = "—"; return; }
+    const saldo = Number(fr.valor || 0) - rec;
+    el.innerHTML = `<span style="color:#4ade80">${_fatBRL(rec)}</span>` +
+      (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "");
+  });
 }
 
+// ---------- RECEBIMENTO DE TÍTULO (baixa parcial, juros/multa, forma) ----------
+// Antes a baixa era um sim/não: "liquidada" e pronto — sem quanto, sem como, sem
+// quando, e sem aceitar pagamento parcial (o cliente que paga metade hoje e
+// metade sexta não cabia no sistema). Agora cada recebimento é um lançamento em
+// oct_recebimentos_titulo, e a fatura só fecha quando a soma quita o saldo.
 async function fatLiquidar(id) {
-  if (!confirm("Marcar esta fatura como liquidada (paga)?")) return;
-  const { error } = await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: new Date().toISOString() }).eq("id", id);
-  if (error) { alert("Erro: " + error.message); return; }
+  const { data: f } = await sb.from("oct_faturas").select("*").eq("id", id).single();
+  if (!f) { alert("Fatura não encontrada."); return; }
+  const jaRecebido = await _fatRecebidoDa(id);
+  const saldo = +(Number(f.valor || 0) - jaRecebido).toFixed(2);
+  const hoje = new Date().toISOString().slice(0, 10);
+  const venc = f.vencimento ? String(f.vencimento).slice(0, 10) : null;
+  const diasAtraso = venc && hoje > venc
+    ? Math.round((new Date(hoje) - new Date(venc)) / 86400000) : 0;
+
+  const box = document.getElementById("conteudo");
+  const div = document.createElement("div");
+  div.id = "fat-receber-modal";
+  div.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999";
+  div.innerHTML = `
+    <div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;max-width:480px;width:92%;color:#dbe2ea">
+      <h2 style="color:#f97316;margin:0 0 4px">Receber título</h2>
+      <p style="color:#9aa;font-size:0.84rem;margin:0 0 14px">
+        ${f.cliente_nome || "cliente"} · fatura de ${_fatBRL(f.valor)}
+        ${jaRecebido > 0 ? `· já recebido ${_fatBRL(jaRecebido)}` : ""}
+        ${diasAtraso > 0 ? `<br><span style="color:#f59e0b">⚠ ${diasAtraso} dia(s) em atraso</span>` : ""}
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label style="color:#9aa;font-size:0.74rem">Saldo devedor</label>
+          <div style="padding:9px;background:#13151f;border-radius:6px;color:#f59e0b;font-weight:700">${_fatBRL(saldo)}</div></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Valor recebido</label>
+          <input id="fr-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#4ade80;font-weight:700"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Juros/multa (R$)</label>
+          <input id="fr-juros" type="number" step="0.01" min="0" value="0"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Desconto (R$)</label>
+          <input id="fr-desc" type="number" step="0.01" min="0" value="0"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Forma</label>
+          <select id="fr-forma" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+            <option>Dinheiro</option><option>Pix</option><option>Transferência</option>
+            <option>Cartão de débito</option><option>Cartão de crédito</option>
+            <option>Cheque</option><option>Boleto</option><option>Outro</option>
+          </select></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Data</label>
+          <input id="fr-data" type="date" value="${hoje}"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
+      </div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
+      <input id="fr-autor" placeholder="seu nome (fica registrado)"
+        style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      <div id="fr-msg" style="color:#f87171;font-size:0.78rem;min-height:18px;margin-top:6px"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="document.getElementById('fat-receber-modal').remove()"
+          style="flex:1;padding:11px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#aaa;cursor:pointer">Cancelar</button>
+        <button onclick="fatConfirmarRecebimento('${id}')"
+          style="flex:2;padding:11px;border-radius:6px;border:none;background:#16a34a;color:#fff;font-weight:700;cursor:pointer">Confirmar recebimento</button>
+      </div>
+    </div>`;
+  (box || document.body).appendChild(div);
+  document.getElementById("fr-valor").focus();
+  document.getElementById("fr-valor").select();
+}
+
+function _fatBRL(v) { return "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+async function _fatRecebidoDa(faturaId) {
+  try {
+    const { data } = await sb.from("oct_recebimentos_titulo").select("valor").eq("fatura_id", faturaId);
+    return (data || []).reduce((s, x) => s + Number(x.valor || 0), 0);
+  } catch (e) { return 0; }   // tabela ainda não criada
+}
+
+async function fatConfirmarRecebimento(faturaId) {
+  const msg = document.getElementById("fr-msg");
+  const valor = Number(document.getElementById("fr-valor").value || 0);
+  const juros = Number(document.getElementById("fr-juros").value || 0);
+  const desconto = Number(document.getElementById("fr-desc").value || 0);
+  const forma = document.getElementById("fr-forma").value;
+  const dataRec = document.getElementById("fr-data").value;
+  const autor = (document.getElementById("fr-autor").value || "").trim();
+  if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!autor) { msg.textContent = "Informe quem recebeu (fica registrado)."; return; }
+  msg.style.color = "#9aa"; msg.textContent = "Registrando...";
+
+  const { error } = await sb.from("oct_recebimentos_titulo").insert({
+    empresa_id: window._fatEid, fatura_id: faturaId,
+    valor, juros, desconto, forma, data_recebimento: dataRec, autor,
+  });
+  if (error) {
+    msg.style.color = "#f87171";
+    msg.textContent = /oct_recebimentos_titulo|does not exist|relation/i.test(error.message || "")
+      ? "Falta a tabela oct_recebimentos_titulo (rode a migração SQL)."
+      : "Erro: " + error.message;
+    return;
+  }
+  // a fatura só fecha quando a soma dos recebimentos quita o valor
+  const { data: f } = await sb.from("oct_faturas").select("valor").eq("id", faturaId).single();
+  const recebido = await _fatRecebidoDa(faturaId);
+  const quitou = recebido + 0.005 >= Number(f?.valor || 0);
+  if (quitou) {
+    await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: new Date().toISOString() }).eq("id", faturaId);
+  }
+  document.getElementById("fat-receber-modal")?.remove();
+  alert(quitou
+    ? `Título quitado! Recebido ${_fatBRL(recebido)}.`
+    : `Recebimento parcial registrado. Saldo: ${_fatBRL(Number(f?.valor || 0) - recebido)}.`);
   fatListarFaturas("aberta");
 }
 
