@@ -55,6 +55,7 @@ async function moduloPessoas() {
     dados: listaFiltrada,
     acoes: [
       { rotulo: 'Nova Pessoa', ico: '＋', onClick: `abrirFormPessoa(null,'${empresaId}')` },
+      { rotulo: 'Placas bloqueadas', ico: '🚫', onClick: `placasBloqueadasAbrir()` },
       { rotulo: `Todos (${window._todasPessoas.length})`, onClick: `pessoaFiltrar('todos')` },
       { rotulo: `Ativos`, onClick: `pessoaFiltrar('ativos')` },
       { rotulo: `Inativos (${window._todasPessoas.filter(p=>!p.ativo).length})`, onClick: `pessoaFiltrar('inativos')` },
@@ -412,3 +413,114 @@ async function pessoaSetAtivo(id, ativo) {
   moduloPessoas();
 }
 function pessoaFiltrar(f) { window._pessoaFiltro = f; moduloPessoas(); }
+
+
+// ============================================================
+// LISTA NEGRA DE PLACA (07/08/2026)
+// ------------------------------------------------------------
+// Antifraude de crediário: veículo bloqueado não abastece a prazo. O PDV
+// consulta esta lista no momento em que o frentista digita a placa na venda a
+// prazo (pagamento.js > _prazoColetarDados) e recusa antes de emitir a nota.
+// Bloqueio é ato de gestão: exige motivo e autor, e nada é apagado — desbloquear
+// marca ativo=false, preservando o histórico de quem bloqueou e por quê.
+// ============================================================
+function _plNorm(p) { return String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function _plFmt(p) {
+  const s = _plNorm(p);
+  return s.length === 7 ? s.slice(0, 3) + '-' + s.slice(3) : (p || '');
+}
+
+async function placasBloqueadasAbrir() {
+  const eid = empresaAtiva();
+  const div = document.createElement('div');
+  div.id = 'placas-modal';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999';
+  div.innerHTML = `<div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;max-width:640px;width:94%;color:#dbe2ea">
+    <h2 style="color:#f87171;margin:0 0 4px">🚫 Placas bloqueadas</h2>
+    <p style="color:#9aa;font-size:0.82rem;margin:0 0 14px">
+      Veículo nesta lista <b>não abastece a prazo</b> — o PDV recusa na hora em que o frentista digita a placa.
+    </p>
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap">
+      <div style="width:130px"><label style="color:#9aa;font-size:0.72rem">Placa</label>
+        <input id="pl-placa" placeholder="ABC-1234" maxlength="8"
+          style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee;text-transform:uppercase"></div>
+      <div style="flex:1;min-width:180px"><label style="color:#9aa;font-size:0.72rem">Motivo</label>
+        <input id="pl-motivo" placeholder="ex.: inadimplência, veículo não pertence à frota"
+          style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
+      <div style="width:140px"><label style="color:#9aa;font-size:0.72rem">Quem bloqueia</label>
+        <input id="pl-autor" placeholder="seu nome"
+          style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
+      <button onclick="placaBloquear()" style="padding:9px 16px;border-radius:6px;border:none;background:#7f1d1d;color:#fff;font-weight:700;cursor:pointer">Bloquear</button>
+    </div>
+    <div id="pl-msg" style="color:#f87171;font-size:0.78rem;min-height:18px"></div>
+    <div id="pl-lista" style="max-height:44vh;overflow:auto"><p style="color:#666;padding:10px">Carregando…</p></div>
+    <button onclick="document.getElementById('placas-modal').remove()"
+      style="width:100%;margin-top:12px;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#aaa;cursor:pointer">Fechar</button>
+  </div>`;
+  document.body.appendChild(div);
+  window._plEid = eid;
+  placasListar();
+}
+
+async function placasListar() {
+  const box = document.getElementById('pl-lista');
+  if (!box) return;
+  let dados = [];
+  try {
+    const { data, error } = await sb.from('oct_placas_bloqueadas')
+      .select('*').eq('empresa_id', window._plEid).order('criado_em', { ascending: false });
+    if (error) throw error;
+    dados = data || [];
+  } catch (e) {
+    box.innerHTML = `<p style="color:#f87171;padding:10px;font-size:0.82rem">Tabela oct_placas_bloqueadas não existe ainda — rode a migração SQL.</p>`;
+    return;
+  }
+  const ativas = dados.filter(d => d.ativo !== false);
+  const soltas = dados.filter(d => d.ativo === false);
+  const linha = (d, bloqueada) => `<tr style="border-bottom:1px solid #1c1f2e">
+    <td style="padding:8px 10px;font-weight:700;font-family:monospace;font-size:0.95rem;color:${bloqueada ? '#f87171' : '#4ade80'}">${_plFmt(d.placa)}</td>
+    <td style="padding:8px 10px;color:#9aa;font-size:0.82rem">${d.motivo || '—'}</td>
+    <td style="padding:8px 10px;color:#667;font-size:0.76rem">${d.autor || '—'}<br>${d.criado_em ? new Date(d.criado_em).toLocaleDateString('pt-BR') : ''}</td>
+    <td style="padding:8px 10px;text-align:right">
+      ${bloqueada
+        ? `<button onclick="placaLiberar('${d.id}')" style="padding:5px 12px;border-radius:5px;border:none;background:#14532d;color:#4ade80;cursor:pointer;font-size:0.76rem">✓ Liberar</button>`
+        : `<span style="color:#4ade80;font-size:0.76rem">liberada</span>`}
+    </td></tr>`;
+  box.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+      <thead><tr style="color:#888;background:#0f1119;text-align:left">
+        <th style="padding:7px 10px">Placa</th><th style="padding:7px 10px">Motivo</th>
+        <th style="padding:7px 10px">Por / quando</th><th></th></tr></thead>
+      <tbody>
+        ${ativas.map(d => linha(d, true)).join('') || '<tr><td colspan="4" style="padding:14px;color:#666">Nenhuma placa bloqueada.</td></tr>'}
+        ${soltas.length ? `<tr><td colspan="4" style="padding:10px 10px 4px;color:#667;font-size:0.76rem">— histórico (liberadas) —</td></tr>` : ''}
+        ${soltas.map(d => linha(d, false)).join('')}
+      </tbody></table>`;
+}
+
+async function placaBloquear() {
+  const msg = document.getElementById('pl-msg');
+  const placa = _plNorm(document.getElementById('pl-placa').value);
+  const motivo = (document.getElementById('pl-motivo').value || '').trim();
+  const autor = (document.getElementById('pl-autor').value || '').trim();
+  if (placa.length < 7) { msg.textContent = 'Placa inválida (7 caracteres, ex.: ABC1234 ou ABC1D23).'; return; }
+  if (!motivo) { msg.textContent = 'Informe o motivo do bloqueio.'; return; }
+  if (!autor) { msg.textContent = 'Informe quem está bloqueando.'; return; }
+  msg.style.color = '#9aa'; msg.textContent = 'Bloqueando…';
+  const { error } = await sb.from('oct_placas_bloqueadas').insert({
+    empresa_id: window._plEid, placa, motivo, autor, ativo: true,
+  });
+  if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
+  msg.style.color = '#4ade80'; msg.textContent = `Placa ${_plFmt(placa)} bloqueada.`;
+  document.getElementById('pl-placa').value = '';
+  document.getElementById('pl-motivo').value = '';
+  placasListar();
+}
+
+async function placaLiberar(id) {
+  if (!confirm('Liberar esta placa? Ela volta a poder abastecer a prazo.')) return;
+  const { error } = await sb.from('oct_placas_bloqueadas')
+    .update({ ativo: false, liberado_em: new Date().toISOString() }).eq('id', id);
+  if (error) { alert('Erro: ' + error.message); return; }
+  placasListar();
+}
