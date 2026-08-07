@@ -323,7 +323,24 @@ async function abrirFormProduto(id, empresaId) {
   produtoCalcFrota();
 }
 
+// Casca com try/catch: qualquer erro inesperado vira MENSAGEM NA TELA.
+// Sem isto, um erro dentro da função async rejeita a Promise em silêncio e o
+// usuário fica olhando "Salvando..." sem saber que nada vai acontecer — foi
+// exatamente o que aconteceu em 07/08/2026 e travou o cadastro de produtos.
 async function salvarProduto(id, empresaId) {
+  const msg = document.getElementById('fp-msg');
+  try {
+    await _salvarProdutoInterno(id, empresaId);
+  } catch (e) {
+    console.error('salvarProduto:', e);
+    if (msg) {
+      msg.textContent = 'Erro inesperado: ' + ((e && e.message) || e);
+      msg.style.color = '#f44';
+    }
+  }
+}
+
+async function _salvarProdutoInterno(id, empresaId) {
   const msg = document.getElementById('fp-msg');
   const nome = document.getElementById('fp-nome').value.trim();
   if (!nome) { msg.textContent = 'Nome obrigatório.'; msg.style.color = '#f44'; return; }
@@ -373,7 +390,20 @@ async function salvarProduto(id, empresaId) {
     // AUDITORIA DE PREÇO: o PDV já registrava toda troca em oct_pdv_preco_log,
     // mas a alteração pela retaguarda passava sem rastro — quem mudou o preço
     // pelo escritório era invisível. Agora os dois caminhos gravam.
-    const precoAntigo = Number(p?.preco_venda_a || 0);
+    //
+    // BUG CORRIGIDO EM 07/08/2026: aqui lia-se `p?.preco_venda_a`, e `p` NÃO
+    // existe nesta função — é uma variável local de abrirDetalheProduto(). O
+    // `?.` não protege contra variável não declarada: lança ReferenceError.
+    // Como esta função é async e ninguém capturava, a Promise rejeitava em
+    // silêncio e a tela ficava em "Salvando..." para sempre — travando o
+    // salvamento de QUALQUER produto já cadastrado, não só a troca de preço.
+    // O preço antigo agora vem do banco, que é a fonte de verdade.
+    let precoAntigo = 0;
+    try {
+      const { data: atual } = await sb.from('oct_produtos')
+        .select('preco_venda_a').eq('id', id).single();
+      precoAntigo = Number((atual && atual.preco_venda_a) || 0);
+    } catch (e) { precoAntigo = 0; }   // sem o valor antigo, só não registra a troca
     const precoNovo = Number(dados.preco_venda_a || 0);
     ({ error } = await sb.from('oct_produtos').update(dados).eq('id', id));
     if (!error && precoNovo !== precoAntigo) {
