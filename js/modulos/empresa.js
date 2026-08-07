@@ -241,6 +241,24 @@ async function moduloEmpresa() {
           <input type="checkbox" id="emp-usa-cofre" ${emp.usa_cofre ? 'checked' : ''}>
           <span><strong>Cofre inteligente</strong> — o dinheiro vai pro cofre. <span style="color:#888">O PDV oculta as formas classificadas como <em>Dinheiro</em>.</span></span>
         </label>
+
+        <!-- LIMITE DA SANGRIA: só faz sentido SEM cofre (com cofre o dinheiro
+             vai pelo depósito e a sangria nem aparece no PDV). -->
+        <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px 14px">
+          <label style="color:#ddd;font-size:0.88rem;display:block;margin-bottom:4px">
+            💰 <strong>Limite para sangria obrigatória (R$)</strong>
+          </label>
+          <p style="color:#888;font-size:0.8rem;line-height:1.5;margin-bottom:8px">
+            Quando o dinheiro pendente no PDV passar deste valor e continuar acima por
+            10 minutos, o caixa trava e exige a sangria. Os 10 minutos existem para dar
+            tempo de o cartão cair e a nota a prazo ser emitida — o que sobra é dinheiro
+            de verdade. <span style="color:#666">Vazio ou 0 usa o padrão de R$ 500,00.
+            Não se aplica a posto com cofre.</span>
+          </p>
+          <input id="emp-sangria-limite" type="number" step="10" min="0"
+            value="${emp.sangria_limite != null ? emp.sangria_limite : ''}" placeholder="500"
+            style="width:180px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd" />
+        </div>
       </div>
 
       <!-- PERFIL -->
@@ -524,6 +542,8 @@ async function salvarEmpresa() {
     nfce_proximo_numero: parseInt(document.getElementById('emp-nfce-num')?.value, 10) || 1,
     usa_edi: !!document.getElementById('emp-usa-edi')?.checked,
     usa_cofre: !!document.getElementById('emp-usa-cofre')?.checked,
+    // limite da sangria obrigatória: vazio/0 => null, e o PDV usa o padrão dele
+    sangria_limite: (parseFloat(document.getElementById('emp-sangria-limite')?.value) || 0) || null,
   };
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
