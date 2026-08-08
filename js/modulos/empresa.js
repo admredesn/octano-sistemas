@@ -252,7 +252,8 @@ async function moduloEmpresa() {
             Quando o dinheiro pendente no PDV passar deste valor e continuar acima por
             10 minutos, o caixa trava e exige a sangria. Os 10 minutos existem para dar
             tempo de o cartão cair e a nota a prazo ser emitida — o que sobra é dinheiro
-            de verdade. <span style="color:#666">Vazio ou 0 usa o padrão de R$ 500,00.
+            de verdade. <span style="color:#666"><b>Vazio ou 0 = trava DESLIGADA</b> (a
+            sangria manual continua no PDV). Preencha um valor para ligar a trava.
             Não se aplica a posto com cofre.</span>
           </p>
           <input id="emp-sangria-limite" type="number" step="10" min="0"
