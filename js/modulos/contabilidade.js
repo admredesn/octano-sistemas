@@ -165,8 +165,26 @@ async function renderSpedFiscal(empresaId, empresa) {
     + '<select id="sped-mes" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
     + ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m,i) => '<option value="'+(i+1)+'" '+(i+1===mesAtual?'selected':'')+'>'+m+'</option>').join('')
     + '</select>'
+    + '<select id="sped-ver" title="Versão do leiaute (COD_VER do 0000) — confirme com o contador" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
+    + ['018','019','020'].map(v => '<option value="'+v+'" '+(v==='019'?'selected':'')+'>leiaute '+v+'</option>').join('')
+    + '</select>'
     + '<button onclick="gerarSpedFiscal()" class="btn-salvar">Gerar SPED</button>'
     + '</div></div>'
+    // dados do CONTADOR (registro 0100) — persistidos em oct_empresas.sped_config
+    + '<details style="margin-bottom:16px;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px 16px">'
+    + '<summary style="color:#a78bfa;cursor:pointer;font-size:0.88rem">👤 Dados do contador e do posto (registro 0100 / bloco 1350) — clique para configurar</summary>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px">'
+    + ['nome:Nome do contador','cpf:CPF','crc:CRC','cnpj:CNPJ escritório','cep:CEP','endereco:Endereço','numero:Número','bairro:Bairro','fone:Telefone','email:E-mail','cod_mun:Cód. IBGE município (contador)','cod_rec:Cód. receita ICMS (ex 1057)']
+      .map(c => { const [k,rot] = c.split(':');
+        return '<div><label style="color:#888;font-size:0.72rem">'+rot+'</label><input id="sped-ctd-'+k+'" style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'; }).join('')
+    + '</div>'
+    + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Cód. IBGE do MUNICÍPIO DO POSTO (campo do 0000 — 7 dígitos)</label>'
+    + '<input id="sped-cfg-codmun" style="width:220px;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'
+    + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Bombas/lacres (1350-1370) — JSON opcional, modelo no placeholder</label>'
+    + '<textarea id="sped-cfg-bombas" rows="3" placeholder=\'[{"serie":"33351014 AB","fabricante":"GILBARCO","modelo":"PHX2220","medicao":1,"lacres":[{"numero":"H1815357-5","data":"2023-11-13"}],"bicos":[{"numero":1,"cod_item":"1","tanque":1}]}]\' style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd;font-family:monospace;font-size:0.74rem"></textarea></div>'
+    + '<button onclick="spedSalvarConfig()" class="btn-salvar" style="margin-top:10px">Salvar configuração</button>'
+    + '<span id="sped-cfg-msg" style="margin-left:10px;font-size:0.8rem;color:#888"></span>'
+    + '</details>'
     + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">'
     + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco 0</div><div style="color:#60a5fa;font-weight:600;margin-top:4px">Abertura + Cadastros</div><div style="font-size:0.75rem;color:#555;margin-top:2px">0000, 0001, 0100, 0150, 0190, 0200, 0400, 0990</div></div>'
     + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco C</div><div style="color:#4caf50;font-weight:600;margin-top:4px">Documentos Fiscais I</div><div style="font-size:0.75rem;color:#555;margin-top:2px">NF-e entrada/saida, NFC-e</div></div>'
@@ -179,105 +197,140 @@ async function renderSpedFiscal(empresaId, empresa) {
     + '</div>';
 }
 async function gerarSpedFiscal() {
+  // ============================================================
+  // REESCRITO EM 08/08/2026 sobre o EFD REAL do posto (ReceitanetBX).
+  // A montagem vive em sped_fiscal.js (spedFiscalMontar, funcao pura e
+  // testavel); aqui so se buscam os dados e se mostra o resultado.
+  // O gerador antigo nunca passaria no PVA: registros com contagem de campos
+  // errada, sem as saidas NFC-e e sem o bloco 1300 (combustiveis) — que e
+  // obrigatorio para posto revendedor.
+  // ============================================================
   const ano = parseInt(document.getElementById('sped-ano').value);
   const mes = parseInt(document.getElementById('sped-mes').value);
+  const codVer = document.getElementById('sped-ver').value;
   const empresaId = window._contab_empresa_id;
   const empresa = window._contab_empresa;
   const div = document.getElementById('sped-fiscal-preview');
-  div.innerHTML = '<p style="color:#888">Gerando...</p>';
-  const dtIni = ano+'-'+String(mes).padStart(2,'0')+'-01';
-  const dtFim = new Date(ano, mes, 0).toISOString().split('T')[0];
-  const dtIniF = dtIni.replace(/-/g,'').substring(0,8); // DDMMAAAA
-  const dtFimF = dtFim.replace(/-/g,'').substring(0,8);
-  const dtIniFmt = dtIni.split('-').reverse().join('');
-  const dtFimFmt = dtFim.split('-').reverse().join('');
-  const [nfesRes, prodRes, partRes] = await Promise.all([
-    sb.from('oct_nfe_entrada').select('*, oct_pessoas(nome,documento), oct_nfe_entrada_itens(*)').eq('empresa_id', empresaId).gte('emissao', dtIni).lte('emissao', dtFim),
-    sb.from('oct_produtos').select('id,codigo,descricao,ncm,unidade').eq('empresa_id', empresaId).eq('ativo', true),
-    sb.from('oct_pessoas').select('id,nome,documento,cidade,uf').eq('empresa_id', empresaId),
-  ]);
-  const nfes = nfesRes.data || [];
-  const prods = prodRes.data || [];
-  const partic = partRes.data || [];
-  const cnpj = (empresa?.cnpj || '').replace(/\D/g,'');
-  const ie = empresa?.ie || '0';
-  const nome = empresa?.nome || empresa?.nome_fantasia || 'EMPRESA';
-  const uf = empresa?.uf || 'MG';
-  // COD_MUN: o layout do SPED espera o codigo IBGE do municipio (7 digitos),
-  // NAO o nome. Usa o campo de codigo se existir; senao deixa vazio.
-  // (Enviar o nome onde se espera codigo numerico e rejeitado pelo PVA.)
-  const codMun = empresa?.cod_municipio || empresa?.codigo_ibge || empresa?.cod_mun || '';
-  const linhas = [];
-  let nLinha = 1;
-  const L = (txt) => { linhas.push({ n: nLinha++, txt }); };
-  // BLOCO 0
-  L('|0000|010|0|'+dtIniFmt+'|'+dtFimFmt+'|'+nome+'|'+cnpj+'||'+ie+'||'+uf+'|'+codMun+'|0|0|2|');
-  L('|0001|0|');
-  L('|0100|'+nome+'|'+cnpj+'|||'+ie+'||||||||');
-  L('|0150|001|'+nome+'|'+cnpj+'||'+ie+'||||');
-  L('|0190|LT|Litros|');
-  L('|0190|UN|Unidade|');
-  L('|0190|CX|Caixa|');
-  // 0200 - produtos
-  prods.forEach(p => {
-    L('|0200|'+p.codigo+'|'+p.descricao+'||'+(p.ncm||'')+'|||'+(p.unidade||'UN')+'||||');
-  });
-  L('|0990|'+nLinha+'|');
-  // BLOCO C
-  const c0 = nLinha;
-  L('|C001|0|');
-  nfes.forEach((nfe, idx) => {
-    const forn = nfe.oct_pessoas;
-    const cnpjForn = (forn?.documento || '').replace(/\D/g,'');
-    const emissao = (nfe.emissao || '').split('-').reverse().join('');
-    const chave = nfe.chave_nfe || '';
-    L('|C100|0|1|'+cnpjForn+'|55|'+nfe.serie+'|'+nfe.numero+'|'+chave+'|'+emissao+'|'+emissao+'|1|3|'+Number(nfe.valor_total||0).toFixed(2)+'|0|0|0|0|'+(nfe.valor_desconto||0).toFixed(2)+'|'+Number(nfe.valor_total||0).toFixed(2)+'|');
-    (nfe.oct_nfe_entrada_itens || []).forEach(it => {
-      L('|C170|'+(it.n_item||'1')+'|'+it.codigo+'|'+it.descricao+'|'+Number(it.quantidade||0).toFixed(3)+'|'+(it.unidade||'UN')+'|'+Number(it.valor_unitario||0).toFixed(4)+'|'+Number(it.valor_total||0).toFixed(2)+'|0|'+(it.cfop||'2652')+'|'+(it.ncm||'')+'|||'+Number(it.aliq_icms||0).toFixed(2)+'|'+Number(it.valor_total*Number(it.aliq_icms||0)/100).toFixed(2)+'|0|0|0|0|0|0|0|0|0|0|0|0|0|');
+  div.innerHTML = '<p style="color:#888">Buscando os dados do período...</p>';
+  const dtIni = ano + '-' + String(mes).padStart(2, '0') + '-01';
+  const dtFim = ano + '-' + String(mes).padStart(2, '0') + '-' + String(new Date(ano, mes, 0).getDate()).padStart(2, '0');
+  // dia anterior tambem: abre o estoque do 1o dia do 1300
+  const dtAntes = new Date(new Date(dtIni + 'T12:00:00').getTime() - 86400000).toISOString().slice(0, 10);
+  try {
+    const [nfces, entradas, produtos, tanques, bicos, medicoes, abastecimentos, cfgRow] = await Promise.all([
+      _spedTudo(q => sb.from('oct_nfce')
+        .select('numero,serie,chave_nfe,status,valor_total,data_emissao,criado_em,itens')
+        .eq('empresa_id', empresaId).gte('data_emissao', dtIni).lte('data_emissao', dtFim + 'T23:59:59')
+        .order('data_emissao').range(q * 1000, q * 1000 + 999)),
+      sb.from('oct_nfe_entrada')
+        .select('numero,serie,chave_nfe,emissao,entrada,valor_total,valor_desconto,valor_frete,valor_icms,valor_pis,valor_cofins,fornecedor_id,oct_pessoas(nome,documento,cidade,uf,endereco,bairro),oct_nfe_entrada_itens(*)')
+        .eq('empresa_id', empresaId).gte('emissao', dtIni).lte('emissao', dtFim)
+        .then(r => (r.data || []).map(n => Object.assign({}, n, { fornecedor: n.oct_pessoas, itens: n.oct_nfe_entrada_itens }))),
+      sb.from('oct_produtos').select('id,codigo,nome,unidade,ncm,cest,cod_anp,aliq_icms,tanque_id')
+        .eq('empresa_id', empresaId).then(r => r.data || []),
+      sb.from('oct_tanques').select('id,numero,produto_id').eq('empresa_id', empresaId).then(r => r.data || []),
+      sb.from('oct_bicos').select('numero,tanque_id').then(r => r.data || []),
+      _spedTudo(q => sb.from('oct_medicoes')
+        .select('tanque_numero,volume,medido_em').eq('empresa_id', empresaId)
+        .gte('medido_em', dtAntes).lte('medido_em', dtFim + 'T23:59:59')
+        .order('medido_em').range(q * 1000, q * 1000 + 999)),
+      _spedTudo(q => sb.from('oct_pdv_abastecimentos')
+        .select('tanque_id,bico,litros,tipo,data_abast,venc_ini,venc_fin').eq('empresa_id', empresaId)
+        .gte('data_abast', dtIni).lte('data_abast', dtFim + 'T23:59:59')
+        .order('data_abast').range(q * 1000, q * 1000 + 999)),
+      sb.from('oct_empresas').select('sped_config').eq('id', empresaId).single().then(r => r.data, () => null),
+    ]);
+    const cfg = (cfgRow && cfgRow.sped_config) || {};
+    _spedPreencherCfg(cfg);
+    const r = spedFiscalMontar({
+      codVer: codVer, dtIni: dtIni, dtFim: dtFim, empresa: empresa, cfg: cfg,
+      nfces: nfces, entradas: entradas, produtos: produtos, tanques: tanques,
+      bicos: bicos, medicoes: medicoes, abastecimentos: abastecimentos,
     });
-    L('|C190|'+nfe.cfop+'|'+Number(nfe.valor_icms||0).toFixed(2)+'|'+Number(nfe.valor_total||0).toFixed(2)+'|0|0|0|');
-  });
-  L('|C990|'+(nLinha - c0)+'|');
-  // BLOCO E - Apuracao ICMS
-  const e0 = nLinha;
-  L('|E001|0|');
-  L('|E100|'+dtIniFmt+'|'+dtFimFmt+'|');
-  const totalICMS = nfes.reduce((s,n) => s + Number(n.valor_icms||0), 0);
-  L('|E110|'+totalICMS.toFixed(2)+'|0|0|0|0|0|0|0|0|'+totalICMS.toFixed(2)+'|0|0|0|0|');
-  L('|E116|2|'+totalICMS.toFixed(2)+'|'+dtFimFmt+'|0||||||');
-  L('|E990|'+(nLinha - e0)+'|');
-  // BLOCO H - Inventario
-  const h0 = nLinha;
-  L('|H001|0|');
-  L('|H005|'+dtFimFmt+'|0|01|');
-  let hItem = 1;
-  prods.forEach(p => {
-    L('|H010|'+p.codigo+'|'+(p.unidade||'UN')+'|0|0|0||');
-    hItem++;
-  });
-  L('|H990|'+(nLinha - h0)+'|');
-  // BLOCO 9 - Encerramento (contadores dinamicos)
-  const t9 = nLinha;
-  L('|9001|0|');
-  montarBloco9(linhas, L);            // gera todos os 9900 a partir da contagem real
-  // 9990 = total de registros do bloco 9, incluindo o proprio 9990 e o 9999 (+2)
-  L('|9990|'+(nLinha - t9 + 2)+'|');
-  L('|9999|'+nLinha+'|');
-  const txtCompleto = linhas.map(l => l.txt).join('\n');
-  window._spedFiscalTxt = txtCompleto;
-  window._spedFiscalNome = 'SPED_FISCAL_'+ano+'_'+String(mes).padStart(2,'0')+'.txt';
-  div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
-    + '<div>'
-    + '<strong style="color:#4caf50">SPED Fiscal gerado — '+linhas.length+' registros</strong>'
-    + '<div style="font-size:0.78rem;color:#888;margin-top:2px">Periodo: '+dtIniFmt+' a '+dtFimFmt+' | NF-es: '+nfes.length+'</div>'
-    + '</div>'
-    + '<button onclick="downloadSped(\'fiscal\')" class="btn-salvar">Baixar TXT</button>'
-    + '</div>'
-    + '<div style="background:#0a0c12;border-radius:6px;padding:12px;font-family:monospace;font-size:0.72rem;color:#4caf50;max-height:400px;overflow-y:auto;line-height:1.6">'
-    + linhas.slice(0,80).map(l => '<div style="border-bottom:1px solid #0f1117;padding:2px 0"><span style="color:#555;margin-right:8px;min-width:40px;display:inline-block">'+l.n+'</span>'+escHtml(l.txt)+'</div>').join('')
-    + (linhas.length > 80 ? '<div style="color:#555;padding:8px 0">... mais '+(linhas.length-80)+' registros (baixe o TXT para ver completo)</div>' : '')
-    + '</div>';
+    window._spedFiscalTxt = r.linhas.join('\r\n') + '\r\n';
+    window._spedFiscalNome = 'SPED_FISCAL_' + ano + '_' + String(mes).padStart(2, '0') + '.txt';
+    const rs = r.resumo;
+    div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      + '<div><strong style="color:#4caf50">EFD ICMS/IPI gerado — ' + r.linhas.length + ' registros</strong>'
+      + '<div style="color:#888;font-size:0.8rem;margin-top:2px">'
+      + rs.saidas + ' NFC-e (' + rs.canceladas + ' canc.) R$ ' + rs.vSaidas.toFixed(2)
+      + ' · ' + rs.entradas + ' entradas R$ ' + rs.vEntradas.toFixed(2)
+      + ' · débitos R$ ' + rs.debitos.toFixed(2) + ' · créditos R$ ' + rs.creditos.toFixed(2)
+      + ' · a recolher R$ ' + rs.aRecolher.toFixed(2) + ' · ' + rs.combustiveis + ' combustível(is) no 1300</div></div>'
+      + '<button onclick="downloadSped(&quot;fiscal&quot;)" class="btn-salvar">⬇ Baixar TXT</button></div>'
+      + (r.avisos.length
+        ? '<div style="background:#2a2410;border:1px solid #b45309;border-radius:8px;padding:12px;margin-bottom:12px">'
+          + '<strong style="color:#fbbf24;font-size:0.85rem">Avisos (' + r.avisos.length + '):</strong>'
+          + '<ul style="color:#fed7aa;font-size:0.8rem;margin:6px 0 0 18px">' + r.avisos.map(a => '<li>' + escHtml(a) + '</li>').join('') + '</ul></div>'
+        : '')
+      + '<div style="background:#1a2a1a;border:1px solid #2a5a3a;border-radius:8px;padding:10px;margin-bottom:12px;color:#7be0a0;font-size:0.8rem">'
+      + 'Este arquivo NÃO vai direto para a Receita: envie ao CONTADOR para validar no PVA (o validador oficial). '
+      + 'O que esta fase não cobre (fretes D100, energia C500, inventário H) ele complementa por lá.</div>'
+      + '<pre style="color:#8a8;font-size:0.72rem;max-height:320px;overflow:auto;margin:0">'
+      + escHtml(r.linhas.slice(0, 120).join('\n'))
+      + (r.linhas.length > 120 ? '\n... mais ' + (r.linhas.length - 120) + ' registros (baixe o TXT)' : '')
+      + '</pre>';
+  } catch (e) {
+    console.error('gerarSpedFiscal:', e);
+    div.innerHTML = '<p style="color:#f44;padding:20px">Erro ao gerar: ' + escHtml(String((e && e.message) || e)) + '</p>';
+  }
 }
+
+// paginacao do PostgREST (corta em 1000): busca ate acabar
+async function _spedTudo(consulta) {
+  const tudo = [];
+  for (let p = 0; p < 30; p++) {
+    const { data, error } = await consulta(p);
+    if (error || !data || !data.length) break;
+    tudo.push.apply(tudo, data);
+    if (data.length < 1000) break;
+  }
+  return tudo;
+}
+
+// preenche os campos da tela com o sped_config salvo (sem sobrescrever o que o usuario digitou)
+function _spedPreencherCfg(cfg) {
+  const ctd = cfg.contador || {};
+  ['nome','cpf','crc','cnpj','cep','endereco','numero','bairro','fone','email','cod_mun','cod_rec'].forEach(k => {
+    const el = document.getElementById('sped-ctd-' + k);
+    if (el && !el.value) el.value = (k === 'cod_rec' ? (cfg.cod_rec || '') : (ctd[k] || ''));
+  });
+  const cm = document.getElementById('sped-cfg-codmun');
+  if (cm && !cm.value) cm.value = cfg.cod_mun || '';
+  const bb = document.getElementById('sped-cfg-bombas');
+  if (bb && !bb.value && cfg.bombas) bb.value = JSON.stringify(cfg.bombas);
+}
+
+// salva a configuracao em oct_empresas.sped_config (jsonb)
+async function spedSalvarConfig() {
+  const msg = document.getElementById('sped-cfg-msg');
+  try {
+    const ctd = {};
+    ['nome','cpf','crc','cnpj','cep','endereco','numero','bairro','fone','email','cod_mun'].forEach(k => {
+      ctd[k] = (document.getElementById('sped-ctd-' + k)?.value || '').trim();
+    });
+    let bombas = null;
+    const bTxt = (document.getElementById('sped-cfg-bombas')?.value || '').trim();
+    if (bTxt) {
+      try { bombas = JSON.parse(bTxt); }
+      catch (e) { msg.style.color = '#f44'; msg.textContent = 'JSON das bombas inválido: ' + e.message; return; }
+    }
+    const cfg = {
+      contador: ctd,
+      cod_mun: (document.getElementById('sped-cfg-codmun')?.value || '').trim(),
+      cod_rec: (document.getElementById('sped-ctd-cod_rec')?.value || '').trim(),
+    };
+    if (bombas) cfg.bombas = bombas;
+    const { error } = await sb.from('oct_empresas').update({ sped_config: cfg }).eq('id', window._contab_empresa_id);
+    if (error) throw error;
+    msg.style.color = '#4caf50'; msg.textContent = '✓ Salvo.';
+  } catch (e) {
+    msg.style.color = '#f44';
+    msg.textContent = 'Erro: ' + (e.message || e) + (String(e.message || '').indexOf('sped_config') >= 0 ? ' — rode o SQL da coluna sped_config.' : '');
+  }
+}
+
+
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function downloadSped(tipo) {
   const txt = tipo === 'fiscal' ? window._spedFiscalTxt : window._spedPisTxt;
