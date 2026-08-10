@@ -228,7 +228,7 @@ async function gerarSpedFiscal() {
         .then(r => (r.data || []).map(n => Object.assign({}, n, { fornecedor: n.oct_pessoas, itens: n.oct_nfe_entrada_itens }))),
       sb.from('oct_produtos').select('id,codigo,nome,unidade,ncm,cest,cod_anp,aliq_icms,tanque_id')
         .eq('empresa_id', empresaId).then(r => r.data || []),
-      sb.from('oct_tanques').select('id,numero,produto_id').eq('empresa_id', empresaId).then(r => r.data || []),
+      sb.from('oct_tanques').select('id,numero').eq('empresa_id', empresaId).then(r => r.data || []),
       sb.from('oct_bicos').select('numero,tanque_id').then(r => r.data || []),
       _spedTudo(q => sb.from('oct_medicoes')
         .select('tanque_numero,volume,medido_em').eq('empresa_id', empresaId)
