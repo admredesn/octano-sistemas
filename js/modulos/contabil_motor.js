@@ -48,8 +48,11 @@ const CTB_PLANO_PADRAO = [
   ["3.1.2", "CUSTO DAS MERCADORIAS", "04", "S", 3, "3.1"],
   ["3.1.2.01", "Compras", "04", "S", 4, "3.1.2"],
   ["3.1.2.01.000003", "Compras de mercadorias", "04", "A", 5, "3.1.2.01"],
+  ["3.1.3", "DESPESAS OPERACIONAIS", "04", "S", 3, "3.1"],
+  ["3.1.3.99", "Despesas gerais", "04", "S", 4, "3.1.3"],
+  ["3.1.3.99.000001", "Despesas gerais", "04", "A", 5, "3.1.3.99"],
   ["3.2", "DESPESAS", "04", "S", 2, "3"],
-  ["3.2.1", "DESPESAS OPERACIONAIS", "04", "S", 3, "3.2"],
+  ["3.2.1", "DESPESAS FINANCEIRAS", "04", "S", 3, "3.2"],
   ["3.2.1.05", "Despesas financeiras", "04", "S", 4, "3.2.1"],
   ["3.2.1.05.000001", "Taxas de cartao e adquirentes", "04", "A", 5, "3.2.1.05"],
 ];
@@ -67,6 +70,7 @@ const CTB = {
   PIS_VENDAS: "3.1.1.03.000006",
   COMPRAS: "3.1.2.01.000003",
   TAXA_CARTAO: "3.2.1.05.000001",
+  DESPESAS_GERAIS: "3.1.3.99.000001",
 };
 
 // forma de pagamento (tpag da NFC-e) -> conta que recebe o dinheiro.
@@ -84,7 +88,9 @@ function ctbContaDaForma(tpag) {
 // ============================================================
 // NÚCLEO PURO: eventos -> lançamentos. Sem rede; testável no V8.
 // d = { competencia:'AAAA-MM', nfces:[{data_emissao,valor_total,forma_pagamento,status}],
-//       taxasDia:[{dia,taxa}], entradas:[{id,numero,emissao,valor_total,fornecedor_nome}],
+//       taxasDia:[{dia,taxa}], entradas:[{id,numero,emissao,valor_total,fornecedor_id,fornecedor_nome}],
+//       pagamentos:[{id,data_pagamento,valor_pago,forma_pagamento,nfe_id,fornecedor_id,descricao}],
+//       sangrias:[{valor,recebido_em}], fornecedorConta:{<fornecedor_id>:'2.1.1.01.NNNNNN'},
 //       aliqPis:0.65?|1.65, aliqCofins:3|7.6 }  — aliquotas: informadas pela tela
 // devolve { lancamentos: [{data,valor,historico,origem,chave,partidas:[{conta,dc,valor,hist}]}], avisos }
 // ============================================================
@@ -155,7 +161,10 @@ function ctbMontarLancamentos(d) {
     });
   });
 
-  // ---- 4. COMPRAS: uma por NF-e de entrada (padrão "VR COMPRAS <n> <fornecedor>") ----
+  // ---- 4. COMPRAS: uma por NF-e de entrada. Com CONTA PRÓPRIA do fornecedor
+  //         (v2): o gabarito tem uma analítica 2.1.1.01.NNNNNN por fornecedor —
+  //         d.fornecedorConta traz o de-para; sem ele, cai na genérica. ----
+  const contaForn = (fid) => (d.fornecedorConta && d.fornecedorConta[fid]) || CTB.FORNECEDORES;
   (d.entradas || []).forEach(n => {
     const v = Number(n.valor_total || 0);
     if (v <= 0.004) return;
@@ -165,7 +174,50 @@ function ctbMontarLancamentos(d) {
       origem: "entrada", chave: String(n.id || n.chave_nfe || n.numero), competencia: comp,
       partidas: [
         { conta: CTB.COMPRAS, dc: "D", valor: Number(v.toFixed(2)) },
-        { conta: CTB.FORNECEDORES, dc: "C", valor: Number(v.toFixed(2)), hist: n.fornecedor_nome },
+        { conta: contaForn(n.fornecedor_id), dc: "C", valor: Number(v.toFixed(2)), hist: n.fornecedor_nome },
+      ],
+    });
+  });
+
+  // ---- 5. PAGAMENTOS de contas a pagar (v2). Padrão do gabarito (127×):
+  //         conta ligada a NF-e = quita o FORNECEDOR; conta avulsa (energia,
+  //         aluguel) = vira DESPESA. Sai do Caixa se pagou em dinheiro,
+  //         senão do banco. ----
+  (d.pagamentos || []).forEach(p => {
+    const v = Number(p.valor_pago || p.valor || 0);
+    if (v <= 0.004) return;
+    const ehCompra = !!p.nfe_id;
+    const debito = ehCompra ? contaForn(p.fornecedor_id) : CTB.DESPESAS_GERAIS;
+    const credito = /dinheiro/i.test(String(p.forma_pagamento || "")) ? CTB.CAIXA : CTB.BANCOS;
+    L.push({
+      data: String(p.data_pagamento || "").slice(0, 10), valor: Number(v.toFixed(2)),
+      historico: "Pagamento " + (p.descricao || "conta") + (p.fornecedor_nome ? " - " + p.fornecedor_nome : ""),
+      origem: "cta-pagar", chave: String(p.id), competencia: comp,
+      partidas: [
+        { conta: debito, dc: "D", valor: Number(v.toFixed(2)), hist: p.fornecedor_nome },
+        { conta: credito, dc: "C", valor: Number(v.toFixed(2)) },
+      ],
+    });
+  });
+
+  // ---- 6. SANGRIAS/DEPÓSITOS (v2). O padrão MAIS FREQUENTE do gabarito
+  //         (3.014×/ano): D Banco C Caixa. A sangria do PDV é a retirada do
+  //         dinheiro do caixa — contabilmente o valor sai do Caixa rumo ao
+  //         depósito. Consolidado por dia, como o contador faz. ----
+  const sangriaDia = new Map();
+  (d.sangrias || []).forEach(s => {
+    const dia = String(s.recebido_em || s.dia || "").slice(0, 10);
+    if (dia) sangriaDia.set(dia, (sangriaDia.get(dia) || 0) + Number(s.valor || 0));
+  });
+  sangriaDia.forEach((v, dia) => {
+    if (v <= 0.004) return;
+    L.push({
+      data: dia, valor: Number(v.toFixed(2)),
+      historico: "Sangria/deposito do dia " + dia.split("-").reverse().join("/"),
+      origem: "sangria-dia", chave: dia, competencia: comp,
+      partidas: [
+        { conta: CTB.BANCOS, dc: "D", valor: Number(v.toFixed(2)) },
+        { conta: CTB.CAIXA, dc: "C", valor: Number(v.toFixed(2)) },
       ],
     });
   });
@@ -199,18 +251,65 @@ async function ctbAbrir() {
     + '</div></div>'
     + '<div id="ctb-out" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:16px;min-height:160px">'
     + '<p style="color:#555;text-align:center;padding:30px">Escolha a competência (AAAA-MM) e clique em Contabilizar.</p></div></div>';
-  // semeia o plano de contas na primeira vez (idempotente pelo unique)
+  // semeia o plano de contas — só as que FALTAM, para que versões novas do
+  // gabarito (ex.: 3.1.3 Despesas gerais do v2) entrem em empresa já semeada
   try {
-    const { count } = await sb.from('oct_contabil_contas')
-      .select('id', { count: 'exact', head: true }).eq('empresa_id', eId);
-    if (!count) {
-      const linhas = CTB_PLANO_PADRAO.map(c => ({
-        empresa_id: eId, codigo: c[0], nome: c[1], natureza: c[2],
-        tipo: c[3], nivel: c[4], conta_pai: c[5],
-      }));
-      await sb.from('oct_contabil_contas').insert(linhas);
-    }
+    const tem = new Set((await sb.from('oct_contabil_contas')
+      .select('codigo').eq('empresa_id', eId).then(r => r.data || [])).map(c => c.codigo));
+    const linhas = CTB_PLANO_PADRAO.filter(c => !tem.has(c[0])).map(c => ({
+      empresa_id: eId, codigo: c[0], nome: c[1], natureza: c[2],
+      tipo: c[3], nivel: c[4], conta_pai: c[5],
+    }));
+    if (linhas.length) await sb.from('oct_contabil_contas').insert(linhas);
   } catch (e) { /* tabela pode nao existir ainda: o contabilizar avisa */ }
+}
+
+// v2: garante uma conta analítica 2.1.1.01.NNNNNN por fornecedor citado nos
+// documentos do mês. O elo fornecedor→conta fica em cod_cta_sped ('forn:<uuid>'),
+// então regerar o mês reaproveita a mesma conta em vez de criar outra.
+// Devolve o de-para { fornecedor_id: codigo }.
+async function ctbGarantirContasFornecedor(eId, docs) {
+  const mapa = {};
+  const querem = new Map();       // fornecedor_id -> nome
+  (docs || []).forEach(d => {
+    if (d.fornecedor_id && !querem.has(d.fornecedor_id))
+      querem.set(d.fornecedor_id, d.fornecedor_nome || '');
+  });
+  if (!querem.size) return mapa;
+  try {
+    const existentes = await sb.from('oct_contabil_contas')
+      .select('codigo,cod_cta_sped').eq('empresa_id', eId)
+      .like('codigo', '2.1.1.01.%').then(r => r.data || []);
+    let maxSeq = 1;               // .000001 é a genérica "Fornecedores"
+    existentes.forEach(c => {
+      const seq = Number(String(c.codigo).slice(-6));
+      if (seq > maxSeq) maxSeq = seq;
+      const m = /^forn:(.+)$/.exec(String(c.cod_cta_sped || ''));
+      if (m) mapa[m[1]] = c.codigo;
+    });
+    const novas = [];
+    querem.forEach((nomeForn, fid) => {
+      if (mapa[fid]) return;
+      maxSeq += 1;
+      const codigo = '2.1.1.01.' + String(maxSeq).padStart(6, '0');
+      mapa[fid] = codigo;
+      novas.push({
+        empresa_id: eId, codigo: codigo,
+        nome: (nomeForn || 'Fornecedor').slice(0, 80).toUpperCase(),
+        natureza: '02', tipo: 'A', nivel: 5, conta_pai: '2.1.1.01',
+        cod_cta_sped: 'forn:' + fid,
+      });
+    });
+    if (novas.length) {
+      const { error } = await sb.from('oct_contabil_contas').insert(novas);
+      if (error) throw error;
+    }
+  } catch (e) {
+    // sem o de-para tudo cai na genérica — o balancete continua fechando
+    console.warn('ctbGarantirContasFornecedor:', e);
+    return {};
+  }
+  return mapa;
 }
 
 async function ctbContabilizar() {
@@ -233,9 +332,24 @@ async function ctbContabilizar() {
       .gte('criado_em', dtIni).lte('criado_em', dtFim + 'T23:59:59')
       .order('criado_em').range(q * 1000, q * 1000 + 999));
     const entradas = await sb.from('oct_nfe_entrada')
-      .select('id,numero,chave_nfe,emissao,valor_total,oct_pessoas(nome)')
+      .select('id,numero,chave_nfe,emissao,valor_total,fornecedor_id,oct_pessoas(nome)')
       .eq('empresa_id', eId).gte('emissao', dtIni).lte('emissao', dtFim)
       .then(r => (r.data || []).map(n => Object.assign({}, n, { fornecedor_nome: (n.oct_pessoas || {}).nome })));
+
+    // v2: pagamentos do mês (pago = tem data_pagamento) e sangrias do PDV
+    const pagamentos = await sb.from('oct_contas_pagar')
+      .select('id,descricao,valor,valor_pago,data_pagamento,forma_pagamento,nfe_id,fornecedor_id,oct_pessoas(nome)')
+      .eq('empresa_id', eId).not('data_pagamento', 'is', null)
+      .gte('data_pagamento', dtIni).lte('data_pagamento', dtFim)
+      .then(r => (r.data || []).map(p => Object.assign({}, p, { fornecedor_nome: (p.oct_pessoas || {}).nome })));
+    const sangrias = await sb.from('oct_recebimentos')
+      .select('valor,dia,recebido_em').eq('empresa_id', eId).eq('origem', 'sangria')
+      .gte('dia', dtIni).lte('dia', dtFim).then(r => r.data || []);
+
+    // v2: conta analítica por fornecedor (padrão do contador: uma
+    // 2.1.1.01.NNNNNN por casa; a genérica .000001 fica de fallback)
+    const fornecedorConta = await ctbGarantirContasFornecedor(eId,
+      entradas.concat(pagamentos.filter(p => p.nfe_id)));
 
     // base tributada de PIS/COFINS por dia = itens SEM cod_anp (loja)
     const prodAnp = {};
@@ -258,7 +372,7 @@ async function ctbContabilizar() {
     });
 
     const r = ctbMontarLancamentos({
-      competencia: comp, nfces, entradas,
+      competencia: comp, nfces, entradas, pagamentos, sangrias, fornecedorConta,
       pisCofinsDia: Array.from(basePorDia, ([dia, base]) => ({ dia, base })),
       taxasDia: Array.from(taxasDia, ([dia, taxa]) => ({ dia, taxa })),
     });
