@@ -342,9 +342,12 @@ async function ctbContabilizar() {
       .eq('empresa_id', eId).not('data_pagamento', 'is', null)
       .gte('data_pagamento', dtIni).lte('data_pagamento', dtFim)
       .then(r => (r.data || []).map(p => Object.assign({}, p, { fornecedor_nome: (p.oct_pessoas || {}).nome })));
+    // filtra por recebido_em (ISO): o campo `dia` da sangria vem no formato
+    // de exibição do PDV ("10/08") e não serve para comparar datas
     const sangrias = await sb.from('oct_recebimentos')
-      .select('valor,dia,recebido_em').eq('empresa_id', eId).eq('origem', 'sangria')
-      .gte('dia', dtIni).lte('dia', dtFim).then(r => r.data || []);
+      .select('valor,recebido_em').eq('empresa_id', eId).eq('origem', 'sangria')
+      .gte('recebido_em', dtIni).lte('recebido_em', dtFim + 'T23:59:59')
+      .then(r => r.data || []);
 
     // v2: conta analítica por fornecedor (padrão do contador: uma
     // 2.1.1.01.NNNNNN por casa; a genérica .000001 fica de fallback)
