@@ -28,12 +28,14 @@ async function moduloContabilidade(subaba) {
     + '<button onclick="moduloContabilidade(\'plano\')" id="ctab-plano" class="nfe-aba '+(aba==='plano'?'ativo':'')+'">📊 Plano de Contas</button>'
     + '<button onclick="moduloContabilidade(\'fiscal\')" id="ctab-fiscal" class="nfe-aba '+(aba==='fiscal'?'ativo':'')+'">📋 SPED Fiscal</button>'
     + '<button onclick="moduloContabilidade(\'pis_cofins\')" id="ctab-pis" class="nfe-aba '+(aba==='pis_cofins'?'ativo':'')+'">💰 SPED PIS/COFINS</button>'
+    + '<button onclick="moduloContabilidade(&quot;motor&quot;)" id="ctab-motor" class="nfe-aba '+(aba==='motor'?'ativo':'')+'">🧮 Motor contábil</button>'
     + '</div>'
     + '<div id="contab-conteudo"></div>'
     + '</div>';
   if (aba === 'plano') await renderPlanoContas(empresaId);
   else if (aba === 'fiscal') await renderSpedFiscal(empresaId, empresa);
   else if (aba === 'pis_cofins') await renderSpedPisCofins(empresaId, empresa);
+  else if (aba === 'motor') await ctbAbrir();
 }
 async function renderPlanoContas(empresaId) {
   const div = document.getElementById('contab-conteudo');
