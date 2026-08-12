@@ -17,6 +17,20 @@ function _fcGrupoForma(cod) {
   if (['05', '99', '90'].includes(c)) return 'prazo';   // 05 = crédito loja = nota a prazo
   return 'outros';
 }
+// A fila grava o código `forma` genérico (99) mas o `forma_nome` tem o real
+// ("Cartão", "Crédito", "Pix"…). Prefere o NOME; sem nome, cai no código.
+function _fcGrupoNome(nome, cod) {
+  const n = String(nome || '').toLowerCase();
+  if (n) {
+    if (n.indexOf('dinheiro') >= 0) return 'dinheiro';
+    if (n.indexOf('pix') >= 0) return 'pix';
+    if (n.indexOf('créd') >= 0 || n.indexOf('cred') >= 0 || n === 'cartão' || n === 'cartao'
+        || n.indexOf('déb') >= 0 || n.indexOf('deb') >= 0) return 'cartao';
+    if (n.indexOf('prazo') >= 0) return 'prazo';
+    if (n.indexOf('cheque') >= 0) return 'cheque';
+  }
+  return _fcGrupoForma(cod);
+}
 function fcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fcMoney(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fcNum(v, casas) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: casas || 0, maximumFractionDigits: casas || 0 }); }
@@ -59,10 +73,14 @@ async function fcCarregarDados() {
   const [vRes, cRes, fRes, rRes, vlRes, tRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
-    // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom
-    // SOMA no fechamento do turno (vendido + forma) até ser transmitido
-    sb.from('oct_fila_transmissao').select('turno_id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,atualizado_em')
-      .eq('empresa_id', eid).eq('status', 'fila').in('turno_id', ids)
+    // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
+    // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
+    // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
+    // ocorrido_em dentro do período e atribuímos ao turno pela hora de abertura/
+    // fechamento — o horário é sempre gravado, o turno_id não.
+    sb.from('oct_fila_transmissao').select('bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em')
+      .eq('empresa_id', eid).eq('status', 'fila')
+      .gte('ocorrido_em', janIni).lte('ocorrido_em', janFim).order('ocorrido_em')
       .then(r => r, () => ({ data: [] })),
     // RECEBIMENTOS (maquininha/cofre/sangria): sem turno_id — casa por horário.
     // Inclui a SANGRIA (origem='sangria') que o PDV espelha aqui.
@@ -91,21 +109,32 @@ async function fcCarregarDados() {
     receb_ext: [], receb_ext_cartao: 0, receb_ext_pix: 0, receb_ext_cofre: 0,
     titulos: 0, titulos_lst: [],
   });
-  // janela de cada turno, p/ atribuir recebimentos por horário
+  // janela de cada turno, p/ atribuir recebimentos e fila por horário
   const janelas = lista.map(t => ({ id: t.id, ini: t.aberto_em, fim: t.fechado_em || new Date().toISOString() }));
+  const janOrd = janelas.slice().sort((a, b) => String(a.ini || '').localeCompare(String(b.ini || '')));
   const _turnoDe = (iso) => {
     if (!iso) return null;
     const j = janelas.find(x => x.ini && iso >= x.ini && iso <= x.fim);
     return j ? j.id : null;
   };
+  // FILA: janela exata; se cair num vão (bomba liberada com caixa fechado), joga
+  // no PRÓXIMO turno que abrir (decisão do Ronan 12/08). Sem próximo → último.
+  const _turnoFila = (iso) => {
+    if (!iso) return janOrd.length ? janOrd[janOrd.length - 1].id : null;
+    const dentro = janOrd.find(x => x.ini && iso >= x.ini && iso <= x.fim);
+    if (dentro) return dentro.id;
+    const prox = janOrd.find(x => x.ini && x.ini > iso);
+    if (prox) return prox.id;
+    return janOrd.length ? janOrd[janOrd.length - 1].id : null;
+  };
   ((fRes && fRes.data) || []).forEach(f => {
-    const t = porTurno[f.turno_id]; if (!t) return;
+    const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const litros = Number(f.litros || 0);
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
     t.venda_total += vf;
     if (litros > 0) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
-    const g = _fcGrupoForma(f.forma);
+    const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
     t.rec[g] = (t.rec[g] || 0) + vf;
   });
   (vRes.data || []).forEach(v => {
@@ -579,7 +608,8 @@ async function fcNodeDetalhe(tipo) {
     // 1b) itens da FILA DE TRANSMISSÃO baixados nesta(s) forma(s) — eles somam
     // na coluna do fechamento, então o balão TEM que mostrá-los também
     const d0 = (cache.porTurno || {})[turnoId] || {};
-    const fsFila = (d0.fila_itens || []).filter(f => cfg.formas.includes(String(f.forma || '').padStart(2, '0')));
+    // casa pelo GRUPO (via forma_nome), não pelo código — a fila grava forma=99
+    const fsFila = (d0.fila_itens || []).filter(f => _fcGrupoNome(f.forma_nome, f.forma) === tipo);
     if (fsFila.length) {
       let totF = 0;
       const linF = fsFila.map(f => {
