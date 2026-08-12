@@ -56,7 +56,7 @@ async function fcCarregarDados() {
     const f = t.fechado_em || new Date().toISOString();
     return f > m ? f : m;
   }, de);
-  const [vRes, cRes, fRes, rRes, vlRes] = await Promise.all([
+  const [vRes, cRes, fRes, rRes, vlRes, tRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom
@@ -73,6 +73,11 @@ async function fcCarregarDados() {
     sb.from('oct_vales').select('turno_id,pessoa_nome,tipo,valor,descricao,operador,criado_em')
       .eq('empresa_id', eid).in('turno_id', ids)
       .then(r => r, () => ({ data: [] })),
+    // TÍTULOS RECEBIDOS — baixa de nota a prazo antiga; no TecnoX entra no lado
+    // Vendas/Saídas. Tem turno_id.
+    sb.from('oct_recebimentos_titulo').select('turno_id,cliente_nome,valor,forma,juros,desconto,data_recebimento')
+      .eq('empresa_id', eid).in('turno_id', ids)
+      .then(r => r, () => ({ data: [] })),
   ]);
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
@@ -84,6 +89,7 @@ async function fcCarregarDados() {
     sangria_f7: 0, sangrias_lst: [],
     vale_haver: 0, vale_desconto: 0, vales_lst: [],
     receb_ext: [], receb_ext_cartao: 0, receb_ext_pix: 0, receb_ext_cofre: 0,
+    titulos: 0, titulos_lst: [],
   });
   // janela de cada turno, p/ atribuir recebimentos por horário
   const janelas = lista.map(t => ({ id: t.id, ini: t.aberto_em, fim: t.fechado_em || new Date().toISOString() }));
@@ -150,6 +156,12 @@ async function fcCarregarDados() {
     const val = Number(v.valor || 0);
     if (val >= 0) t.vale_haver += val; else t.vale_desconto += Math.abs(val);
     t.vales_lst.push(v);
+  });
+  // TÍTULOS RECEBIDOS (baixa de a-prazo antigo) — por turno_id
+  ((tRes && tRes.data) || []).forEach(x => {
+    const t = porTurno[x.turno_id]; if (!t) return;
+    t.titulos += Number(x.valor || 0);
+    t.titulos_lst.push(x);
   });
   return { turnos: lista, porTurno };
 }
@@ -238,46 +250,59 @@ function fcDetalhe(turnoId) {
   window._fcTurnoAtual = turnoId;
   const rec = d.rec || {};
 
-  // RECEBIMENTOS que entram no RESULTADO do caixa (o que já fechava). Cada linha
-  // marcada info:true é MOVIMENTAÇÃO visível mas fora da conta (senão viria em
-  // dobro: sangria é transferência do dinheiro já contado; recebimento de
-  // maquininha/cofre casa com o cupom/fila que já está somado).
-  const receb = [
+  // MODELO TECNOX (12/08): os dois lados se igualam e o "Resultado do Caixa" fica
+  // sempre 0 — a diferença real aparece em FALTA / SOBRA DE CAIXA (o plug). Cada
+  // campo é preenchido da melhor fonte do Octano; o plug absorve o que ainda não
+  // é capturado. Calibrar com um turno real do TecnoX lado a lado.
+  // O balanço fecha por FORMA DE PAGAMENTO × VENDAS (o que se paga = o que se
+  // vende). Os MOVIMENTOS de caixa (troco, depósito, despesa, sangria, vales)
+  // são o destino/uso do MESMO dinheiro já contado — entram como (mov.), fora do
+  // total, senão geram falta/sobra falsa. Troco é NET (fechamento − abertura):
+  // fundo de caixa que não mudou não é sobra.
+  const trocoNet = Number((Number(t.valor_fechamento || 0) - Number(t.valor_abertura || 0)).toFixed(2));
+  const I = { info: true };
+  // RECEBIMENTOS — formas de pagamento (entram no total) + movimentos (mov.)
+  const recebBase = [
     ['Dinheiro', rec.dinheiro],
-    ['Despesas', d.despesa],
     ['Cartão', rec.cartao],
     ['Pix', rec.pix],
     ['Nota a prazo', rec.prazo],
     ['Cheque', rec.cheque],
     ['Carta Frete', 0],
-    ['Vale Haver', d.vale_haver, { info: true }],
-    ['Vale Motorista', d.vale_desconto, { info: true }],
     ['CTF', 0],
-    ['Deposito em Conta', d.deposito],
-    ['Troco Final', 0],
-    ['Falta de Caixa', 0],
+    ['Despesas', d.despesa, I],
+    ['Deposito em Conta', d.deposito, I],
+    ['Troco Final (líq.)', trocoNet, I],
+    ['Vale Haver', d.vale_haver, I],
+    ['Vale Motorista', d.vale_desconto, I],
   ];
-  const totalReceb = receb.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
-  const vendas = [
+  // VENDAS/SAÍDAS — o que gerou o movimento (entram no total) + movimentos (mov.)
+  const vendasBase = [
     ['Venda produtos', d.venda_prod],
     ['Venda serviços', 0],
     ['Venda combustíveis', d.venda_comb],
-    ['Remessas', d.suprimento],
-    ['Cheque troco', 0],
-    ['Haver', 0],
-    ['Títulos Recebidos', 0],
-    ['Receitas', 0],
-    ['Sobra de Caixa', 0],
+    ['Títulos Recebidos', d.titulos],
+    ['Remessas', d.suprimento, I],
+    ['Cheque troco', 0, I],
+    ['Haver', 0, I],
+    ['Receitas', 0, I],
   ];
-  const totalVenda = vendas.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
-  const resultado = totalReceb - totalVenda;
+  const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
+  const somaReceb = soma(recebBase);
+  const somaVenda = soma(vendasBase);
+  const dif = Number((somaVenda - somaReceb).toFixed(2));   // >0 falta, <0 sobra
+  const faltaCaixa = dif > 0 ? dif : 0;
+  const sobraCaixa = dif < 0 ? -dif : 0;
+  const receb = recebBase.concat([['Falta de Caixa', faltaCaixa]]);
+  const vendas = vendasBase.concat([['Sobra de Caixa', sobraCaixa]]);
+  const totalReceb = somaReceb + faltaCaixa;
+  const totalVenda = somaVenda + sobraCaixa;
+  const resultado = totalReceb - totalVenda;   // ~0 por construção
 
-  // TOTAL MOVIMENTADO (o que o caixa GEROU/vendeu, escolha do Ronan 12/08):
-  // fila + cupons transmitidos (= venda_total) + vale/consumo. Nota a prazo NÃO
-  // entra de novo — é forma de pagamento de vendas já contadas em venda_total.
-  // Não soma dinheiro/cartão/Pix: esses são o COMO foi pago o mesmo valor.
+  // TOTAL MOVIMENTADO no caixa = tudo que passou (vendas/saídas: fila+transmitidos
+  // + títulos recebidos).
+  const totalMov = totalVenda;
   const cuponsTransm = Math.max(0, Number(d.venda_total || 0) - Number(d.fila_total || 0));
-  const totalMov = Number(d.venda_total || 0) + Number(d.vale_desconto || 0);
 
   const linhaVal = (rot, val, opt) => `<div class="fc-lin"><span class="fc-lbl">${rot}${opt && opt.info ? ' <span style="color:#6b7688;font-size:9px">(mov.)</span>' : ''}</span><span class="fc-box"${opt && opt.info ? ' style="opacity:.75"' : ''}>${fcMoney(val)}</span></div>`;
   const nodo = (txt, tipo) => `<li ${tipo ? `onclick="fcNode('${tipo}')" style="cursor:pointer"` : ''}>${txt}</li>`;
@@ -391,7 +416,7 @@ async function fcNode(tipo) {
   const turnoId = window._fcTurnoAtual; if (!turnoId) return;
   // nós v2 — lidos do cache (movimentação completa do PDV)
   if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales'
-      || tipo === 'movimentacao' || tipo === 'receb_ext') {
+      || tipo === 'movimentacao' || tipo === 'receb_ext' || tipo === 'titulos') {
     return fcNodeMov(tipo);
   }
   if (tipo === 'cupons' || tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
@@ -632,6 +657,21 @@ function fcNodeMov(tipo) {
   const turnoId = window._fcTurnoAtual;
   const cache = window._fcCache || {};
   const d = (cache.porTurno || {})[turnoId] || {};
+
+  if (tipo === 'titulos') {
+    const ts = d.titulos_lst || [];
+    const linhas = ts.map(x => `<tr><td class="fc-td">${_fcData(x.data_recebimento)}</td>
+      <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
+      <td class="fc-td">${fcEsc(x.forma) || '—'}</td>
+      <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
+      <td class="fc-td fc-r">${fcMoney(x.valor)}</td></tr>`);
+    const tot = ts.reduce((s, x) => s + Number(x.valor || 0), 0);
+    return fcModal('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
+         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
+      : '<p style="padding:24px;color:#777">Nenhum título recebido neste caixa.</p>');
+  }
 
   if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales') {
     let vs = d.vales_lst || [];
