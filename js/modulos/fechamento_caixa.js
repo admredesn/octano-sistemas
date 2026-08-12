@@ -178,6 +178,7 @@ async function fcListar() {
       <td class="fc-td fc-r">0,00</td>
       <td class="fc-td fc-r">0,00</td>
       <td class="fc-td fc-r">${fcMoney(d.venda_total)}</td>
+      <td class="fc-td fc-r" style="color:#f0b45c;font-weight:600">${fcMoney(Number(d.venda_total || 0) + Number(d.vale_desconto || 0))}</td>
       <td class="fc-td fc-r">${fcMoney(rec.dinheiro)}</td>
       <td class="fc-td fc-r">${fcMoney(rec.cartao)}</td>
       <td class="fc-td fc-r">${fcMoney(rec.prazo)}</td>
@@ -211,9 +212,9 @@ async function fcListar() {
             <th>Seq.</th><th>Turno</th><th>Operador</th><th>Abertura</th><th>Hora Abert.</th>
             <th>Fechamento</th><th>Hora Fec.</th><th>Situação</th>
             <th>Falta Caixa</th><th>Sobra Caixa</th><th>Diferença Caixa</th>
-            <th>Venda</th><th>Dinheiro</th><th>Cartão</th><th>Nota a prazo</th><th>Cheque</th>
+            <th>Venda</th><th>Movimentado</th><th>Dinheiro</th><th>Cartão</th><th>Nota a prazo</th><th>Cheque</th>
           </tr></thead>
-          <tbody>${linhas || '<tr><td colspan="16" style="padding:20px;text-align:center;color:#888">Nenhum turno no período.</td></tr>'}</tbody>
+          <tbody>${linhas || '<tr><td colspan="17" style="padding:20px;text-align:center;color:#888">Nenhum turno no período.</td></tr>'}</tbody>
         </table>
       </div>
     </div>`;
@@ -270,6 +271,13 @@ function fcDetalhe(turnoId) {
   ];
   const totalVenda = vendas.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const resultado = totalReceb - totalVenda;
+
+  // TOTAL MOVIMENTADO (o que o caixa GEROU/vendeu, escolha do Ronan 12/08):
+  // fila + cupons transmitidos (= venda_total) + vale/consumo. Nota a prazo NÃO
+  // entra de novo — é forma de pagamento de vendas já contadas em venda_total.
+  // Não soma dinheiro/cartão/Pix: esses são o COMO foi pago o mesmo valor.
+  const cuponsTransm = Math.max(0, Number(d.venda_total || 0) - Number(d.fila_total || 0));
+  const totalMov = Number(d.venda_total || 0) + Number(d.vale_desconto || 0);
 
   const linhaVal = (rot, val, opt) => `<div class="fc-lin"><span class="fc-lbl">${rot}${opt && opt.info ? ' <span style="color:#6b7688;font-size:9px">(mov.)</span>' : ''}</span><span class="fc-box"${opt && opt.info ? ' style="opacity:.75"' : ''}>${fcMoney(val)}</span></div>`;
   const nodo = (txt, tipo) => `<li ${tipo ? `onclick="fcNode('${tipo}')" style="cursor:pointer"` : ''}>${txt}</li>`;
@@ -341,6 +349,7 @@ function fcDetalhe(turnoId) {
           ${d.sangria_f7 > 0.009 ? `<div class="fc-lin" style="cursor:pointer" onclick="fcNode('dinheiro')"><span class="fc-lbl">Sangrias (retiradas) <span style="color:#6b7688;font-size:9px">(mov.)</span></span><span class="fc-box" style="opacity:.75">${fcMoney(d.sangria_f7)}</span></div>` : ''}
           <div class="fc-total"><span>Total Recebimentos:</span><span class="fc-box forte">${fcMoney(totalReceb)}</span></div>
           <div class="fc-total"><span>Resultado do Caixa</span><span class="fc-box ${Math.abs(resultado) < 0.01 ? 'ok' : 'alerta'}">${fcMoney(resultado)}</span></div>
+          <div class="fc-total" style="border-top:2px solid #f97316;margin-top:6px"><span>💰 Total movimentado</span><span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span></div>
         </div>
 
         <div class="fc-col">
@@ -349,6 +358,11 @@ function fcDetalhe(turnoId) {
           <div class="fc-litros">${fcNum(d.litros_comb, 3)} L de combustível &nbsp;·&nbsp; ${d.qtd_vendas} cupons</div>
           ${d.fila_total > 0.009 ? `<div class="fc-litros" style="color:#fbbf24;cursor:pointer" onclick="fcNode('fila')">⏳ ${(d.fila_itens || []).length} abastecimento(s) na fila de transmissão: ${fcMoney(d.fila_total)} (já somados acima — clique p/ detalhar)</div>` : ''}
           <div class="fc-total"><span>Total Vendas / Saída:</span><span class="fc-box forte azulf">${fcMoney(totalVenda)}</span></div>
+          <div class="fc-total" style="border-top:2px solid #f97316;margin-top:6px">
+            <span>💰 Total movimentado no caixa</span>
+            <span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span>
+          </div>
+          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + Transmitidos ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}</div>
         </div>
 
         <div class="fc-painel">
