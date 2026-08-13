@@ -300,7 +300,9 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
         origem: f.origem || "0",
         cst_icms: "90", aliq_icms: 0, aliq_icms_ad_rem: 0,
         cst_pis: "49", cst_cofins: "49", aliq_pis: 0, aliq_cofins: 0,
-        ind_combustivel: f.ind_combustivel || "N", ind_monofasico: f.ind_monofasico || "N",
+        // NF-e consolidada (CFOP 5929) referencia NFC-e já emitidas: são linhas de
+        // faturamento, NÃO dispensa de combustível — sem grupo <comb>/encerrante/cProdANP.
+        ind_combustivel: "N", ind_monofasico: "N", cod_anp: null,
       });
     }));
     if (!itens.length) throw new Error("Os cupons selecionados não têm itens em oct_pdv_vendas.");
