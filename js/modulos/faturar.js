@@ -165,6 +165,7 @@ async function fatListarTitulos() {
       <span style="display:flex;gap:8px">
         <input type="date" id="fat-venc" class="fat-inp" title="Vencimento da fatura">
         <button class="fat-btn azul" onclick="fatGerarFatura()">💠 Gerar Fatura</button>
+        <button class="fat-btn" style="background:#0e7490" onclick="fatGerarNfConsolidada()" title="Consolida os cupons selecionados numa NF-e (modelo 55, CFOP 5929) — HOMOLOGAÇÃO">🧾 Gerar NF (consolidada)</button>
       </span>
     </div>`;
 }
@@ -243,6 +244,101 @@ function fatCobrarCopiar() {
   ta.select();
   try { navigator.clipboard.writeText(ta.value); } catch (e) { document.execCommand("copy"); }
   alert("Mensagem copiada.");
+}
+
+// ============================================================
+// GERAR NF CONSOLIDADA (modelo 55, CFOP 5929) — unifica os cupons dos títulos
+// selecionados numa única NF-e que REFERENCIA as NFC-e (NFref), sem recolher
+// imposto de novo (CST 90). SEMPRE em HOMOLOGAÇÃO até o contador validar.
+// Só funciona para cupons DO OCTANO (chave real + itens em oct_pdv_vendas).
+// ============================================================
+const _FAT_SEFAZ = (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://octano-sefaz-production-66d4.up.railway.app";
+async function fatGerarNfConsolidada() {
+  const titulos = (window._fatTitulos || []).filter(t => window._fatSel.has(t.id));
+  if (!titulos.length) { alert("Selecione os títulos (cupons) a consolidar."); return; }
+  const clis = new Set(titulos.map(t => t.cliente_id));
+  if (clis.size !== 1 || !titulos[0].cliente_id) { alert("Selecione títulos de UM mesmo cliente com cadastro (uma NF-e por cliente)."); return; }
+  const chaves = Array.from(new Set(titulos.map(t => t.chave_nfe).filter(c => /^\d{44}$/.test(String(c || "")))));
+  if (!chaves.length) { alert("Nenhum título selecionado tem NFC-e do Octano (chave de 44 dígitos). Cupons do TecnoX ainda não podem ser consolidados."); return; }
+
+  _fatModal(`<div style="padding:26px;text-align:center;color:#9aa"><div style="font-size:1.6rem">📡</div><p style="margin-top:8px">Montando a NF-e consolidada em <b style="color:#f59e0b">HOMOLOGAÇÃO</b>...</p><div id="fnf-msg" style="margin-top:10px;font-size:0.85rem"></div></div>`);
+  const msg = () => document.getElementById("fnf-msg");
+  try {
+    const eid = window._fatEid;
+    // empresa (emitente) + cliente (destinatário) + cupons (itens)
+    const [empR, cliR, vendasR] = await Promise.all([
+      sb.from("oct_empresas").select("*").eq("id", eid).single(),
+      sb.from("oct_pessoas").select("*").eq("id", titulos[0].cliente_id).single(),
+      sb.from("oct_pdv_vendas").select("numero,nfce_chave,itens,valor_total").eq("empresa_id", eid).in("nfce_chave", chaves),
+    ]);
+    const emp = empR.data, cli = cliR.data, vendas = vendasR.data || [];
+    if (!emp) throw new Error("Empresa não encontrada.");
+    if (!emp.cert_path) throw new Error("Certificado não configurado (tela Empresa).");
+    const docDest = (cli.documento || "").replace(/\D/g, "");
+    if (docDest.length !== 14) throw new Error("Consolidação exige cliente PJ (CNPJ). Este cliente não tem CNPJ.");
+    const senha = (typeof getCertSenha === "function") ? getCertSenha() : null;
+    if (!senha) throw new Error("Senha do certificado não encontrada (tela Empresa).");
+
+    // itens: 1 linha por item dos cupons, CFOP 5929 + CST 90 (imposto já recolhido)
+    const itens = [];
+    vendas.forEach(v => (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
+      const f = it.fiscal || {};
+      const q = Number(it.qtd || 0), unit = Number(it.unit || 0);
+      const total = Number(it.total != null ? it.total : q * unit);
+      itens.push({
+        nItem: itens.length + 1, cProd: it.cod || ("ITEM" + (itens.length + 1)), xProd: it.desc || f.nome || "ITEM",
+        cEAN: "SEM GTIN", cEANTrib: "SEM GTIN",
+        ncm: f.ncm || "27111910", cest: f.cest || null, cfop: "5929",
+        uCom: f.unidade || (q && it.tipo === "abastecimento" ? "L" : "UN"), uTrib: f.unidade || "UN",
+        qCom: q || 1, vUnCom: unit, vProd: total,
+        origem: f.origem || "0",
+        cst_icms: "90", aliq_icms: 0, aliq_icms_ad_rem: 0,
+        cst_pis: "49", cst_cofins: "49", aliq_pis: 0, aliq_cofins: 0,
+        ind_combustivel: f.ind_combustivel || "N", ind_monofasico: f.ind_monofasico || "N",
+      });
+    }));
+    if (!itens.length) throw new Error("Os cupons selecionados não têm itens em oct_pdv_vendas.");
+
+    const empresa = {
+      cnpj: (emp.cnpj || "").replace(/\D/g, ""), nome: emp.nome, ie: (emp.ie || "").replace(/\D/g, ""),
+      logradouro: emp.endereco || "", numero: "S/N", bairro: emp.bairro || "CENTRO",
+      municipio: emp.cidade || "", c_mun: emp.c_mun || "3123205", uf: emp.uf || "MG",
+      cep: (emp.cep || "").replace(/\D/g, ""), crt: emp.regime_tributario === "simples" ? "1" : "3",
+    };
+    const destinatario = {
+      documento: docDest, nome: cli.nome || cli.razao_social || "CLIENTE",
+      logradouro: cli.endereco || "SEM ENDERECO", numero: cli.num_endereco || "S/N", bairro: cli.bairro || "CENTRO",
+      municipio: cli.cidade || "", c_mun: emp.c_mun || "3123205", uf: cli.uf || "MG",
+      cep: (cli.cep || "").replace(/\D/g, ""), ind_ie: "9",
+    };
+    // número da NF-e 55 (série própria de faturamento)
+    const { data: ult } = await sb.from("oct_nfce").select("numero").eq("empresa_id", eid).eq("modelo", "55").order("numero", { ascending: false }).limit(1);
+    const numero = ((ult && ult[0] && Number(ult[0].numero)) || 0) + 1;
+
+    const nota = {
+      numero, serie: Number(emp.nfe_serie || 1), modelo: "55",
+      natureza_op: "FATURAMENTO DE CUPONS FISCAIS", mod_frete: "9",
+      emitente: empresa, destinatario, itens, refs: chaves,
+    };
+    if (msg()) msg().textContent = `Consolidando ${chaves.length} cupom(ns), ${itens.length} item(ns)...`;
+
+    // carrega o certificado (mesmo padrão do nfce.js)
+    const { data: cb } = await sb.storage.from("octano-certs").download(emp.cert_path);
+    const b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(await cb.arrayBuffer())));
+
+    const resp = await fetch(`${_FAT_SEFAZ}/emitir`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cert_base64: b64, cert_senha: senha, ambiente: "homologacao", nota }),
+    });
+    const r = await resp.json();
+    if (r.ok) {
+      if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
+    } else {
+      if (msg()) msg().innerHTML = `<span style="color:#f87171">❌ Rejeitada: ${_fatEsc(r.erro || r.motivo || JSON.stringify(r).slice(0, 200))}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
+    }
+  } catch (e) {
+    if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
+  }
 }
 
 // ---------- BOLETO (placeholder — pronto p/ integração bancária) ----------
