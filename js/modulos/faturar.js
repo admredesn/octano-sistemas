@@ -97,7 +97,7 @@ async function fatListarTitulos() {
   const porCli = {};
   titulos.forEach(t => {
     const k = t.cliente_id || "_scli";
-    if (!porCli[k]) porCli[k] = { nome: t.cliente_nome || "Sem cliente", total: 0, qtd: 0 };
+    if (!porCli[k]) porCli[k] = { id: t.cliente_id || null, nome: t.cliente_nome || "Sem cliente", total: 0, qtd: 0 };
     porCli[k].total += Number(t.valor || 0); porCli[k].qtd++;
   });
   const devedores = Object.values(porCli).sort((a, b) => b.total - a.total);
@@ -124,6 +124,7 @@ async function fatListarTitulos() {
     <td class="fat-td" style="text-align:center;white-space:nowrap">
       <button class="fat-btn mini" style="background:#166534" onclick="fatLiquidarTitulo('${t.id}')" title="Receber/Liquidar">💰</button>
       <button class="fat-btn mini" style="background:#7c3aed;margin-left:4px" onclick="fatParcelar('${t.id}')" title="Parcelar">🔀</button>
+      <button class="fat-btn mini" style="background:#334155;margin-left:4px" onclick="fatBoleto('${t.id}')" title="Boleto">🏦</button>
       <button class="fat-btn mini" style="background:#0e7490;margin-left:4px" onclick="fatVerTitulo('${t.id}')" title="Ver título">👁</button>
     </td>
   </tr>`;
@@ -153,7 +154,7 @@ async function fatListarTitulos() {
       ${devedores.slice(0, 6).map(d => `<div class="fat-card">
         <div class="fat-card-nome">${_fatEsc(d.nome)}</div>
         <div class="fat-card-val">R$ ${_fatMoney(d.total)}</div>
-        <div class="fat-card-qtd">${d.qtd} título(s)</div></div>`).join("")}
+        <div class="fat-card-qtd">${d.qtd} título(s)${d.id ? ` · <span style="color:#25d366;cursor:pointer" onclick="fatCobrar('${d.id}')">💬 cobrar</span>` : ""}</div></div>`).join("")}
     </div>` : ""}
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px"></th><th>Emissão</th><th>Vencimento</th><th>Atraso</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th><th style="text-align:center">Ações</th></tr></thead>
@@ -199,6 +200,62 @@ function fatLimparF() {
   window._fatF = { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
   window._fatSel = new Set();
   fatListarTitulos();
+}
+
+// ---------- COBRAR cliente (WhatsApp via wa.me + copiar p/ e-mail) ----------
+async function fatCobrar(clienteId) {
+  const abertos = (window._fatTitulos || []).filter(t => t.cliente_id === clienteId && (!t.status || t.status === "aberto"));
+  if (!abertos.length) { alert("Sem títulos em aberto para este cliente."); return; }
+  let cli = {};
+  try {
+    const { data } = await sb.from("oct_pessoas").select("nome,whatsapp,telefone,email").eq("id", clienteId).single();
+    cli = data || {};
+  } catch (e) { cli = {}; }
+  const total = abertos.reduce((s, t) => s + Number(t.valor || 0), 0);
+  const emp = (typeof PDV !== "undefined" && PDV.empresa && PDV.empresa.nome) || "Posto";
+  const linhasTxt = abertos.map(t => {
+    const v = _fatVencDe(t); const a = _fatAtrasoDias(v);
+    return `• ${_fatData(t.registrado_em)} — R$ ${_fatMoney(t.valor)}${v ? " (venc " + _fatData(v) + (a > 0 ? ", " + a + "d atraso" : "") + ")" : ""}`;
+  }).join("\n");
+  const msg = `Olá ${cli.nome || abertos[0].cliente_nome || ""}! 👋\n\n` +
+    `Passando para lembrar dos seus títulos em aberto:\n${linhasTxt}\n\n` +
+    `*Total em aberto: R$ ${_fatMoney(total)}*\n\nQualquer dúvida, estamos à disposição. Obrigado!`;
+  const numDig = String(cli.whatsapp || cli.telefone || "").replace(/\D/g, "");
+  const num55 = numDig ? (numDig.length <= 11 ? "55" + numDig : numDig) : "";
+  const waUrl = num55 ? `https://wa.me/${num55}?text=${encodeURIComponent(msg)}` : "";
+  _fatModal(`
+    <div style="background:#13151f;color:#25d366;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>💬 Cobrar — ${_fatEsc(cli.nome || abertos[0].cliente_nome)}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px">
+      <div style="color:#9aa;font-size:0.8rem;margin-bottom:8px">${abertos.length} título(s) · <b style="color:#f59e0b">R$ ${_fatMoney(total)}</b>${cli.whatsapp || cli.telefone ? " · 📱 " + _fatEsc(cli.whatsapp || cli.telefone) : " · <span style='color:#f87171'>sem telefone no cadastro</span>"}</div>
+      <textarea id="fcob-msg" style="width:100%;height:170px;padding:10px;border-radius:8px;border:1px solid #2a2d3e;background:#0b0d14;color:#e5e7eb;font-size:0.82rem;box-sizing:border-box">${_fatEsc(msg)}</textarea>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+        ${waUrl ? `<a href="${waUrl}" target="_blank" class="fat-btn" style="flex:2;background:#25d366;color:#fff;text-decoration:none;text-align:center;padding:11px">💬 Abrir WhatsApp</a>` : `<span style="flex:2;color:#f87171;font-size:0.8rem;align-self:center">Cadastre o WhatsApp do cliente para enviar.</span>`}
+        <button class="fat-btn" onclick="fatCobrarCopiar()" style="flex:1">📋 Copiar</button>
+        ${cli.email ? `<a href="mailto:${_fatEsc(cli.email)}?subject=Títulos em aberto&body=${encodeURIComponent(msg)}" class="fat-btn" style="flex:1;text-decoration:none;text-align:center;padding:11px">✉ E-mail</a>` : ""}
+      </div>
+    </div>`);
+}
+function fatCobrarCopiar() {
+  const ta = document.getElementById("fcob-msg");
+  if (!ta) return;
+  ta.select();
+  try { navigator.clipboard.writeText(ta.value); } catch (e) { document.execCommand("copy"); }
+  alert("Mensagem copiada.");
+}
+
+// ---------- BOLETO (placeholder — pronto p/ integração bancária) ----------
+function fatBoleto(id) {
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🏦 Boleto</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:22px;text-align:center;color:#9aa">
+      <div style="font-size:2rem;margin-bottom:10px">🏦</div>
+      <p style="margin-bottom:6px">A geração de boleto está <b style="color:#f59e0b">pronta para receber a integração bancária</b>.</p>
+      <p style="font-size:0.8rem;color:#667">Quando o convênio de cobrança (ex.: Sicoob) for configurado, este botão passa a gerar o boleto do título/fatura direto aqui — a estrutura já espera por ele.</p>
+      <button class="fat-btn" onclick="_fatFechaModal()" style="margin-top:14px">Fechar</button>
+    </div>`);
 }
 
 // ---------- modal genérico (self-contained) ----------
