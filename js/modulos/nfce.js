@@ -496,7 +496,8 @@ async function nfceAbrirHistorico() {
       <td style="padding:7px 8px;font-size:0.7rem;color:#888">${n.ambiente||''}</td>
       <td style="padding:7px 8px;font-size:0.68rem;color:#666;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.chave_nfe||'—'}</td>
       <td style="padding:7px 8px;text-align:center;white-space:nowrap">
-        <button onclick="nfceHistImprimir(${i})" title="Imprimir cupom" style="padding:4px 8px;border-radius:4px;border:none;background:#2563eb;color:#fff;cursor:pointer;font-size:0.72rem">🖨️</button>
+        <button onclick="nfceVerCupom(${i})" title="Ver cupom completo" style="padding:4px 8px;border-radius:4px;border:none;background:#0e7490;color:#fff;cursor:pointer;font-size:0.72rem">👁</button>
+        <button onclick="nfceHistImprimir(${i})" title="Imprimir cupom" style="padding:4px 8px;border-radius:4px;border:none;background:#2563eb;color:#fff;cursor:pointer;font-size:0.72rem;margin-left:4px">🖨️</button>
         ${podeCancelar ? `<button onclick="nfceHistCancelar(${i})" title="Cancelar" style="padding:4px 8px;border-radius:4px;border:1px solid #5a2a2a;background:transparent;color:#f87171;cursor:pointer;font-size:0.72rem;margin-left:4px">✕</button>` : ''}
       </td>
     </tr>`;
@@ -658,4 +659,116 @@ Motivo (obrigatório — fica registrado):`);
   if (r.error) { alert('Erro ao dispensar: ' + r.error.message); return; }
   alert(`${alvos.length} recebimento(s) dispensado(s). O PDV para de mostrá-los em até 5 minutos.`);
   recOrfaosCarregar();
+}
+
+// ============================================================
+// VISUALIZAR CUPOM FISCAL COMPLETO (13/08/2026) — tudo que está lançado nele,
+// no modelo do TecnoX: cabeçalho, cliente, placa/km/motorista, itens com
+// tributação (CFOP/CST/NCM/ICMS/ANP), pagamentos, chave e protocolo.
+// Fonte: oct_pdv_vendas (casa pela chave da NFC-e do histórico).
+// ============================================================
+function _vcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function _vcMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+const _VC_FORMA = { '01': 'Dinheiro', '02': 'Cheque', '03': 'Crédito', '04': 'Débito', '05': 'Nota a prazo', '10': 'Vale', '15': 'Boleto', '17': 'Pix', '90': 'Sem pagto', '99': 'Outros' };
+function _vcForma(cod, nome) { return nome || _VC_FORMA[String(cod || '').padStart(2, '0')] || ('cód ' + cod); }
+
+async function nfceVerCupom(i) {
+  const n = (window._nfceHist || [])[i];
+  if (!n) return;
+  // busca a venda do PDV correspondente (tem itens com fiscal + prazo_dados)
+  let v = null;
+  try {
+    const { data } = await sb.from('oct_pdv_vendas')
+      .select('*').eq('empresa_id', _nfceEmpresaId).eq('nfce_chave', n.chave_nfe).limit(1);
+    v = (data || [])[0] || null;
+    if (!v && n.numero != null) {
+      const { data: d2 } = await sb.from('oct_pdv_vendas')
+        .select('*').eq('empresa_id', _nfceEmpresaId).eq('numero', n.numero).limit(1);
+      v = (d2 || [])[0] || null;
+    }
+  } catch (e) { v = null; }
+
+  const pd = (v && v.prazo_dados) || {};
+  const itens = (v && Array.isArray(v.itens)) ? v.itens : [];
+  const pags = (v && Array.isArray(v.pagamentos)) ? v.pagamentos : [];
+  const dt = n.data_emissao ? new Date(n.data_emissao).toLocaleString('pt-BR') : '—';
+
+  const linhasItens = itens.map(it => {
+    const f = it.fiscal || {};
+    const total = Number(it.total != null ? it.total : (Number(it.qtd || 0) * Number(it.unit || 0)));
+    return `<tr style="border-bottom:1px solid #1c2130">
+      <td style="padding:5px 7px">${_vcEsc(it.desc || f.nome || it.cod || '—')}</td>
+      <td style="padding:5px 7px;text-align:right">${Number(it.qtd || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3 })}</td>
+      <td style="padding:5px 7px;text-align:right">${Number(it.unit || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3 })}</td>
+      <td style="padding:5px 7px;text-align:right;color:#fff;font-weight:600">${_vcMoney(total)}</td>
+      <td style="padding:5px 7px;text-align:center;color:#93c0ff">${_vcEsc(f.cfop || '—')}</td>
+      <td style="padding:5px 7px;text-align:center">${_vcEsc(f.cst_icms || f.csosn || '—')}</td>
+      <td style="padding:5px 7px;text-align:center;color:#9aa">${_vcEsc(f.ncm || '—')}</td>
+      <td style="padding:5px 7px;text-align:right;color:#9aa">${f.aliq_icms ? Number(f.aliq_icms).toFixed(2) + '%' : '—'}</td>
+      <td style="padding:5px 7px;text-align:center;color:#9aa">${_vcEsc(f.cod_anp || '—')}</td>
+    </tr>`;
+  }).join('');
+
+  const linhaCampo = (rot, val) => val ? `<div style="display:flex;gap:6px;font-size:0.8rem;padding:2px 0"><span style="color:#8aa;min-width:110px">${rot}:</span><span style="color:#e5e7eb">${_vcEsc(val)}</span></div>` : '';
+  const totalPag = pags.reduce((s, p) => s + Number(p.valor || 0), 0);
+
+  let m = document.getElementById('vc-modal');
+  if (!m) { m = document.createElement('div'); m.id = 'vc-modal'; document.body.appendChild(m); }
+  m.innerHTML = `
+    <div onclick="document.getElementById('vc-modal').remove()" style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9998"></div>
+    <div style="position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(860px,94vw);max-height:88vh;overflow:auto;background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)">
+      <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center">
+        <span>🧾 Cupom Fiscal Nº ${_vcEsc(n.numero)} · Série ${_vcEsc(n.serie || v?.serie || '1')}</span>
+        <span onclick="document.getElementById('vc-modal').remove()" style="cursor:pointer">✕</span>
+      </div>
+      <div style="padding:16px 18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px">
+            <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin-bottom:5px">EMISSÃO</div>
+            ${linhaCampo('Data/hora', dt)}
+            ${linhaCampo('Operador', v?.operador)}
+            ${linhaCampo('Status', n.status)}
+            ${linhaCampo('Ambiente', n.ambiente)}
+            ${linhaCampo('Protocolo', n.protocolo)}
+            <div style="font-size:0.66rem;color:#667;word-break:break-all;margin-top:4px">Chave: ${_vcEsc(n.chave_nfe || '—')}</div>
+          </div>
+          <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px">
+            <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin-bottom:5px">CLIENTE / VEÍCULO</div>
+            ${linhaCampo('Cliente', v?.cliente_nome || 'Consumidor Final')}
+            ${linhaCampo('CNPJ/CPF', v?.cliente_cpf || n.cpf_consumidor)}
+            ${linhaCampo('Placa', pd.placa)}
+            ${linhaCampo('KM/Odômetro', pd.km)}
+            ${linhaCampo('Motorista', pd.motorista)}
+            ${linhaCampo('Veículo', pd.veiculo)}
+            ${linhaCampo('Frota', pd.frota)}
+            ${linhaCampo('Requisição', pd.requisicao)}
+            ${(!pd.placa && !pd.km && !pd.motorista) ? '<div style="color:#667;font-size:0.72rem;margin-top:4px">— sem dados de veículo neste cupom —</div>' : ''}
+          </div>
+        </div>
+        <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin-bottom:5px">ITENS</div>
+        <div style="border:1px solid #2a2d3e;border-radius:8px;overflow:auto;margin-bottom:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:0.78rem;color:#cdd6e0">
+            <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left">
+              <th style="padding:6px 7px">Produto</th><th style="padding:6px 7px;text-align:right">Qtd</th>
+              <th style="padding:6px 7px;text-align:right">Unit</th><th style="padding:6px 7px;text-align:right">Total</th>
+              <th style="padding:6px 7px;text-align:center">CFOP</th><th style="padding:6px 7px;text-align:center">CST</th>
+              <th style="padding:6px 7px;text-align:center">NCM</th><th style="padding:6px 7px;text-align:right">ICMS</th>
+              <th style="padding:6px 7px;text-align:center">ANP</th>
+            </tr></thead>
+            <tbody>${linhasItens || '<tr><td colspan="9" style="padding:14px;text-align:center;color:#667">Itens não disponíveis (venda não encontrada em oct_pdv_vendas).</td></tr>'}</tbody>
+          </table>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px">
+            <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin-bottom:5px">PAGAMENTOS</div>
+            ${pags.map(p => `<div style="display:flex;justify-content:space-between;font-size:0.8rem;padding:2px 0"><span style="color:#cbd5e1">${_vcEsc(_vcForma(p.forma, p.forma_nome))}${p.parcelas ? ' (' + p.parcelas + 'x)' : ''}${p.bandeira ? ' · ' + _vcEsc(p.bandeira) : ''}</span><span style="color:#fff">${_vcMoney(p.valor)}</span></div>`).join('') || '<div style="color:#667;font-size:0.72rem">—</div>'}
+            <div style="display:flex;justify-content:space-between;border-top:1px solid #2a2d3e;margin-top:5px;padding-top:5px;font-weight:700;color:#7ee2a0"><span>Total pago</span><span>${_vcMoney(totalPag)}</span></div>
+          </div>
+          <div style="background:#10231a;border:1px solid #245a35;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:center;align-items:center">
+            <div style="color:#8aa;font-size:0.76rem">TOTAL DO CUPOM</div>
+            <div style="color:#7ee2a0;font-size:1.6rem;font-weight:800">${_vcMoney(v?.valor_total != null ? v.valor_total : n.valor_total)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
 }
