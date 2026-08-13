@@ -121,11 +121,12 @@ async function fatListarTitulos() {
     <td class="fat-td">${_fatEsc(t.numero_nfe) || "—"}</td>
     <td class="fat-td">${_fatEsc(t.forma_nome) || "Prazo"}</td>
     <td class="fat-td fat-r">${_fatMoney(t.valor)}</td>
-    <td class="fat-td" style="text-align:center;white-space:nowrap">
-      <button class="fat-btn mini" style="background:#166534" onclick="fatLiquidarTitulo('${t.id}')" title="Receber/Liquidar">💰</button>
-      <button class="fat-btn mini" style="background:#7c3aed;margin-left:4px" onclick="fatParcelar('${t.id}')" title="Parcelar">🔀</button>
-      <button class="fat-btn mini" style="background:#334155;margin-left:4px" onclick="fatBoleto('${t.id}')" title="Boleto">🏦</button>
-      <button class="fat-btn mini" style="background:#0e7490;margin-left:4px" onclick="fatVerTitulo('${t.id}')" title="Ver título">👁</button>
+    <td class="fat-td" style="white-space:nowrap">
+      <button class="fat-abtn" style="background:#166534" onclick="fatLiquidarTitulo('${t.id}')">💰 Receber</button>
+      <button class="fat-abtn" style="background:#7c3aed" onclick="fatParcelar('${t.id}')">🔀 Parcelar</button>
+      <button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfConsolidada(['${t.id}'])">🧾 Gerar NF</button>
+      <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${t.id}')">🏦 Boleto</button>
+      <button class="fat-abtn" style="background:#1d4ed8" onclick="fatVerTitulo('${t.id}')">👁 Ver</button>
     </td>
   </tr>`;
   }).join("");
@@ -253,8 +254,13 @@ function fatCobrarCopiar() {
 // Só funciona para cupons DO OCTANO (chave real + itens em oct_pdv_vendas).
 // ============================================================
 const _FAT_SEFAZ = (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://octano-sefaz-production-66d4.up.railway.app";
-async function fatGerarNfConsolidada() {
-  const titulos = (window._fatTitulos || []).filter(t => window._fatSel.has(t.id));
+async function fatGerarNfConsolidada(ids, titulosArg) {
+  let titulos;
+  if (titulosArg && titulosArg.length) titulos = titulosArg;
+  else {
+    const alvo = (ids && ids.length) ? new Set(ids) : window._fatSel;
+    titulos = (window._fatTitulos || []).filter(t => alvo.has(t.id));
+  }
   if (!titulos.length) { alert("Selecione os títulos (cupons) a consolidar."); return; }
   const clis = new Set(titulos.map(t => t.cliente_id));
   if (clis.size !== 1 || !titulos[0].cliente_id) { alert("Selecione títulos de UM mesmo cliente com cadastro (uma NF-e por cliente)."); return; }
@@ -352,6 +358,38 @@ function fatBoleto(id) {
       <p style="font-size:0.8rem;color:#667">Quando o convênio de cobrança (ex.: Sicoob) for configurado, este botão passa a gerar o boleto do título/fatura direto aqui — a estrutura já espera por ele.</p>
       <button class="fat-btn" onclick="_fatFechaModal()" style="margin-top:14px">Fechar</button>
     </div>`);
+}
+
+// ---------- DETALHES DA FATURA (os títulos que a compõem, modelo TecnoX) ----------
+async function fatFaturaDetalhes(faturaId) {
+  const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
+    .eq("empresa_id", window._fatEid).eq("fatura_id", faturaId).order("registrado_em");
+  const titulos = ts || [];
+  const tot = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
+  const linhas = titulos.map(t => `<tr style="border-bottom:1px solid #1c2130">
+    <td style="padding:5px 7px">${_fatData(t.registrado_em)}</td>
+    <td style="padding:5px 7px">${_fatEsc(t.numero_nfe) || "—"}</td>
+    <td style="padding:5px 7px">${_fatEsc(t.forma_nome) || "Prazo"}</td>
+    <td style="padding:5px 7px;text-align:right;color:#fff">${_fatMoney(t.valor)}</td></tr>`).join("");
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>👁 Detalhes da Fatura — ${titulos.length} título(s)</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px">
+      <table style="width:100%;border-collapse:collapse;font-size:0.82rem;color:#cdd6e0">
+        <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left"><th style="padding:6px 7px">Emissão</th><th style="padding:6px 7px">NFC-e</th><th style="padding:6px 7px">Forma</th><th style="padding:6px 7px;text-align:right">Valor</th></tr></thead>
+        <tbody>${linhas || '<tr><td colspan="4" style="padding:14px;text-align:center;color:#667">Sem títulos.</td></tr>'}</tbody>
+        <tfoot><tr style="border-top:2px solid #2a2d3e"><td colspan="3" style="padding:7px;font-weight:700">Total</td><td style="padding:7px;text-align:right;font-weight:700;color:#f59e0b">${_fatMoney(tot)}</td></tr></tfoot>
+      </table>
+      <div style="text-align:right;margin-top:12px"><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button></div>
+    </div>`);
+}
+
+// Gerar NF consolidada a partir de uma FATURA (usa os títulos dela)
+async function fatGerarNfFatura(faturaId) {
+  const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
+    .eq("empresa_id", window._fatEid).eq("fatura_id", faturaId);
+  if (!ts || !ts.length) { alert("Fatura sem títulos."); return; }
+  fatGerarNfConsolidada(null, ts);
 }
 
 // ---------- modal genérico (self-contained) ----------
@@ -620,12 +658,17 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     <td class="fat-td fat-r">${_fatMoney(fatr.valor)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
-    <td class="fat-td">${status === "aberta" ? `<button class="fat-btn mini" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">${_fatData(fatr.liquidado_em)}</span>`}</td>
+    <td class="fat-td" style="white-space:nowrap">
+      ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
+      <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
+      ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
+      <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>` : ""}
+    </td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + Number(fr.valor || 0), 0);
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>${status === "aberta" ? "Ação" : "Liquidada em"}</th></tr></thead>
+      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="7" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
@@ -777,5 +820,7 @@ function _fatEstilo() {
   .fat-btn:hover{background:#242c3e;color:#fff}
   .fat-btn.azul{background:#f97316;color:#fff;border-color:#f97316}.fat-btn.azul:hover{background:#ea6a0c}
   .fat-btn.mini{padding:4px 9px;font-size:11px}
+  .fat-abtn{border:none;border-radius:5px;padding:5px 8px;font-size:10.5px;color:#fff;cursor:pointer;margin:1px 2px;white-space:nowrap;font-weight:600}
+  .fat-abtn:hover{filter:brightness(1.15)}
   </style>`;
 }
