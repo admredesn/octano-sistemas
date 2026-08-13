@@ -342,7 +342,11 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
     if (r.ok) {
       if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
     } else {
-      if (msg()) msg().innerHTML = `<span style="color:#f87171">❌ Rejeitada: ${_fatEsc(r.erro || r.motivo || JSON.stringify(r).slice(0, 200))}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
+      // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
+      const cstat = r.cstat_nfe || r.cstat_lote || "";
+      const xsd = r.aviso_xsd ? (Array.isArray(r.aviso_xsd) ? r.aviso_xsd.join(" · ") : r.aviso_xsd) : "";
+      const motivo = xsd || r.xmotivo || r.erro || r.motivo || JSON.stringify(r).slice(0, 300);
+      if (msg()) msg().innerHTML = `<span style="color:#f87171;word-break:break-word;display:block">❌ Rejeitada${cstat ? " (" + _fatEsc(cstat) + ")" : ""}:<br>${_fatEsc(motivo)}</span><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
     }
   } catch (e) {
     if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
