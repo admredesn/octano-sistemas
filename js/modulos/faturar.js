@@ -106,6 +106,7 @@ async function fatListarTitulos() {
     <td class="fat-td fat-r">${_fatMoney(t.valor)}</td>
     <td class="fat-td" style="text-align:center;white-space:nowrap">
       <button class="fat-btn mini" style="background:#166534" onclick="fatLiquidarTitulo('${t.id}')" title="Receber/Liquidar">💰</button>
+      <button class="fat-btn mini" style="background:#7c3aed;margin-left:4px" onclick="fatParcelar('${t.id}')" title="Parcelar">🔀</button>
       <button class="fat-btn mini" style="background:#0e7490;margin-left:4px" onclick="fatVerTitulo('${t.id}')" title="Ver título">👁</button>
     </td>
   </tr>`;
@@ -266,6 +267,98 @@ async function fatVerTitulo(id) {
         ${t.status !== "pago" ? `<button class="fat-btn azul" onclick="_fatFechaModal();fatLiquidarTitulo('${id}')" style="flex:1">💰 Receber</button>` : ""}
       </div>
     </div>`);
+}
+
+// ---------- PARCELAR título (divide o saldo em N parcelas) ----------
+function _fatParcelas(saldo, n, primeiroVenc, intervalo) {
+  const parc = [];
+  const base = Math.floor((saldo / n) * 100) / 100;   // valor por parcela (2 casas)
+  let acumulado = 0;
+  for (let k = 1; k <= n; k++) {
+    const val = (k === n) ? Number((saldo - acumulado).toFixed(2)) : base;   // última absorve arredondamento
+    acumulado = Number((acumulado + val).toFixed(2));
+    const d = new Date(primeiroVenc + "T00:00:00");
+    d.setDate(d.getDate() + intervalo * (k - 1));
+    parc.push({ k, valor: val, venc: d.toISOString().slice(0, 10) });
+  }
+  return parc;
+}
+function fatParcelar(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  const saldo = Number(t.valor || 0);
+  const hoje = new Date(); hoje.setDate(hoje.getDate() + _fatPrazoDias());
+  const primeiro = hoje.toISOString().slice(0, 10);
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🔀 Parcelar título — ${_fatEsc(t.cliente_nome) || "Cliente"}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px">
+      <div style="color:#9aa;font-size:0.82rem;margin-bottom:12px">Saldo a parcelar: <b style="color:#f59e0b">R$ ${_fatMoney(saldo)}</b></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div><label style="color:#9aa;font-size:0.74rem">Nº parcelas</label>
+          <input id="fpc-n" type="number" min="2" max="60" value="2" oninput="fatParcelarPreview('${id}')" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">1º vencimento</label>
+          <input id="fpc-venc" type="date" value="${primeiro}" oninput="fatParcelarPreview('${id}')" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Intervalo (dias)</label>
+          <input id="fpc-int" type="number" min="1" value="30" oninput="fatParcelarPreview('${id}')" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+      </div>
+      <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin:12px 0 5px">PARCELAS</div>
+      <div id="fpc-preview" style="max-height:34vh;overflow:auto"></div>
+      <div id="fpc-msg" style="color:#f87171;font-size:0.78rem;text-align:center;margin-top:8px"></div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Cancelar</button>
+        <button class="fat-btn azul" onclick="fatParcelarOk('${id}')" style="flex:2">Confirmar parcelamento</button>
+      </div>
+    </div>`);
+  fatParcelarPreview(id);
+}
+function fatParcelarPreview(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  const saldo = Number(t.valor || 0);
+  const n = Math.max(2, Math.min(60, parseInt(document.getElementById("fpc-n").value || "2", 10)));
+  const venc = document.getElementById("fpc-venc").value || new Date().toISOString().slice(0, 10);
+  const intervalo = Math.max(1, parseInt(document.getElementById("fpc-int").value || "30", 10));
+  const parc = _fatParcelas(saldo, n, venc, intervalo);
+  document.getElementById("fpc-preview").innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem;color:#cdd6e0">
+      <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left"><th style="padding:5px 7px">Parcela</th><th style="padding:5px 7px">Vencimento</th><th style="padding:5px 7px;text-align:right">Valor</th></tr></thead>
+      <tbody>${parc.map(p => `<tr style="border-bottom:1px solid #1c2130"><td style="padding:5px 7px">${p.k}/${n}</td><td style="padding:5px 7px">${_fatData(p.venc)}</td><td style="padding:5px 7px;text-align:right;color:#fff">${_fatMoney(p.valor)}</td></tr>`).join("")}</tbody>
+    </table>`;
+}
+async function fatParcelarOk(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  const msg = document.getElementById("fpc-msg");
+  const saldo = Number(t.valor || 0);
+  const n = Math.max(2, Math.min(60, parseInt(document.getElementById("fpc-n").value || "2", 10)));
+  const venc = document.getElementById("fpc-venc").value;
+  const intervalo = Math.max(1, parseInt(document.getElementById("fpc-int").value || "30", 10));
+  if (!venc) { msg.textContent = "Informe o 1º vencimento."; return; }
+  if (t.status === "pago") { msg.textContent = "Título já quitado."; return; }
+  msg.style.color = "#9aa"; msg.textContent = "Criando parcelas...";
+  const parc = _fatParcelas(saldo, n, venc, intervalo);
+  const rows = parc.map(p => ({
+    empresa_id: window._fatEid, cliente_id: t.cliente_id || null, cliente_nome: t.cliente_nome,
+    valor: p.valor, valor_original: p.valor, vencimento: p.venc,
+    forma_nome: "Nota a prazo (parcela " + p.k + "/" + n + ")",
+    numero_nfe: t.numero_nfe || null,
+    chave_nfe: "parcela-" + id + "-" + p.k,
+    registrado_em: t.registrado_em || new Date().toISOString(),
+    status: "aberto",
+    observacao: "Parcela " + p.k + "/" + n + " do título " + (t.numero_nfe || id),
+  }));
+  try {
+    // apaga parcelas antigas deste título (idempotência) e recria
+    await sb.from("oct_pdv_notas_prazo").delete().eq("empresa_id", window._fatEid).like("chave_nfe", "parcela-" + id + "-%");
+    await sb.from("oct_pdv_notas_prazo").insert(rows);
+    // marca o título original como parcelado (sai da lista de abertos)
+    await sb.from("oct_pdv_notas_prazo").update({ status: "parcelado", observacao: "Parcelado em " + n + "x" }).eq("id", id);
+  } catch (e) {
+    msg.style.color = "#f87171";
+    msg.textContent = "Erro: " + (e.message || e);
+    return;
+  }
+  _fatFechaModal();
+  fatListarTitulos();
 }
 
 // ---------- Gerar Fatura (Fase B — precisa da migração oct_faturas) ----------
