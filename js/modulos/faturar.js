@@ -314,7 +314,7 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
       cep: (emp.cep || "").replace(/\D/g, ""), crt: emp.regime_tributario === "simples" ? "1" : "3",
     };
     const destinatario = {
-      documento: docDest, nome: cli.nome || cli.razao_social || "CLIENTE",
+      cnpj_cpf: docDest, documento: docDest, nome: cli.nome || cli.razao_social || "CLIENTE",
       logradouro: cli.endereco || "SEM ENDERECO", numero: cli.num_endereco || "S/N", bairro: cli.bairro || "CENTRO",
       municipio: cli.cidade || "", c_mun: emp.c_mun || "3123205", uf: cli.uf || "MG",
       cep: (cli.cep || "").replace(/\D/g, ""), ind_ie: "9",
