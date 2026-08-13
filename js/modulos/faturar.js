@@ -313,11 +313,16 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
       municipio: emp.cidade || "", c_mun: emp.c_mun || "3123205", uf: emp.uf || "MG",
       cep: (emp.cep || "").replace(/\D/g, ""), crt: emp.regime_tributario === "simples" ? "1" : "3",
     };
+    // Contribuinte de ICMS? Se o cliente tem IE, indIEDest=1 + IE (senão a SEFAZ
+    // rejeita CST x Não Contribuinte — rejeição 508). Cliente de frota é contribuinte.
+    const cliIE = (cli.ie || "").replace(/\D/g, "");
+    const contribIE = !!cliIE && cliIE !== "0" && !/isent/i.test(cli.ie || "");
     const destinatario = {
       cnpj_cpf: docDest, documento: docDest, nome: cli.nome || cli.razao_social || "CLIENTE",
       logradouro: cli.endereco || "SEM ENDERECO", numero: cli.num_endereco || "S/N", bairro: cli.bairro || "CENTRO",
       municipio: cli.cidade || "", c_mun: emp.c_mun || "3123205", uf: cli.uf || "MG",
-      cep: (cli.cep || "").replace(/\D/g, ""), ind_ie: "9",
+      cep: (cli.cep || "").replace(/\D/g, ""),
+      ie: contribIE ? cliIE : "", ind_ie: contribIE ? "1" : "9",
     };
     // número da NF-e 55 (série própria de faturamento)
     const { data: ult } = await sb.from("oct_nfce").select("numero").eq("empresa_id", eid).eq("modelo", "55").order("numero", { ascending: false }).limit(1);
