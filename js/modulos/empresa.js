@@ -96,6 +96,12 @@ async function moduloEmpresa() {
           <span style="font-size:0.72rem;color:#555;margin-top:2px;display:block">Consulte no Sintegra do seu estado</span>
         </div>
 
+        <div class="form-group">
+          <label>Inscrição Municipal</label>
+          <input id="emp-im" type="text" value="${emp.inscricao_municipal || ''}" placeholder="Nº na prefeitura (NFS-e)" />
+          <span style="font-size:0.72rem;color:#555;margin-top:2px;display:block">Necessária para emitir Nota de Serviço (NFS-e)</span>
+        </div>
+
         <div class="form-group span2">
           <label>Razão Social *</label>
           <input id="emp-nome" type="text" value="${emp.nome || ''}" placeholder="Razão Social completa" />
@@ -530,6 +536,7 @@ async function salvarEmpresa() {
     nome_fantasia: document.getElementById('emp-fantasia').value.trim(),
     cnpj: document.getElementById('emp-cnpj').value.trim(),
     ie: document.getElementById('emp-ie').value.trim(),
+    inscricao_municipal: (document.getElementById('emp-im')?.value || '').trim(),
     telefone: document.getElementById('emp-telefone').value.trim(),
     email: document.getElementById('emp-email').value.trim(),
     endereco: document.getElementById('emp-endereco').value.trim(),
