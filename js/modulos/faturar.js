@@ -772,7 +772,7 @@ function _fatEstilo() {
   .fat-td{padding:6px 8px;border-bottom:1px solid #1c2130}
   .fat-r{text-align:right;font-variant-numeric:tabular-nums}
   .fat-grid tbody tr:nth-child(even){background:#141824}
-  .fat-rodape{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:11px 14px;background:#13151f;border-top:1px solid #2a2d3e}
+  .fat-rodape{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:11px 14px;background:#13151f;border-top:2px solid #f97316;position:sticky;bottom:0;z-index:6}
   .fat-btn{background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:7px 12px;font-size:12px;color:#c7d0dc;cursor:pointer}
   .fat-btn:hover{background:#242c3e;color:#fff}
   .fat-btn.azul{background:#f97316;color:#fff;border-color:#f97316}.fat-btn.azul:hover{background:#ea6a0c}
