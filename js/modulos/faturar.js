@@ -824,3 +824,5 @@ function _fatEstilo() {
   .fat-abtn:hover{filter:brightness(1.15)}
   </style>`;
 }
+
+// build faturar-actions-v2
