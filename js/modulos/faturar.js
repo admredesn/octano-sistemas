@@ -70,11 +70,28 @@ async function fatListarTitulos() {
     sb.from("oct_empresas").select("prazo_padrao_dias").eq("id", eid).single().then(r => r, () => ({ data: null })),
   ]);
   window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
-  // "em aberto" = ainda não faturado (coluna status pode não existir ainda → trata como aberto)
-  let titulos = (tiRes.data || []).filter(t => !t.status || t.status === "aberto");
+  const todos = (tiRes.data || []);
+  const F = window._fatF = window._fatF || { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
+  const ehAberto = t => !t.status || t.status === "aberto";
+  // aplica filtros (client-side sobre o carregado)
+  let titulos = todos.filter(t => {
+    // status
+    if (F.status === "aberto" && !ehAberto(t)) return false;
+    if (F.status === "vencido") { if (!ehAberto(t)) return false; const a = _fatAtrasoDias(_fatVencDe(t)); if (!(a > 0)) return false; }
+    if (F.status === "pago" && t.status !== "pago") return false;
+    if (F.status === "parcelado" && t.status !== "parcelado") return false;
+    if (F.cli && t.cliente_id !== F.cli) return false;
+    if (F.forma) { const fn = (t.forma_nome || "").toLowerCase(); if (fn.indexOf(F.forma.toLowerCase()) < 0) return false; }
+    const emi = String(t.registrado_em || t.criado_em || "").slice(0, 10);
+    if (F.de && emi && emi < F.de) return false;
+    if (F.ate && emi && emi > F.ate) return false;
+    if (F.busca) { const b = F.busca.toLowerCase(); const alvo = ((t.cliente_nome || "") + " " + (t.numero_nfe || "")).toLowerCase(); if (alvo.indexOf(b) < 0) return false; }
+    return true;
+  });
   window._fatTitulos = titulos;
-  const filtroCli = window._fatFiltroCli || "";
-  if (filtroCli) titulos = titulos.filter(t => t.cliente_id === filtroCli);
+  const filtroCli = F.cli;
+  // formas distintas p/ o seletor
+  const formasSet = Array.from(new Set(todos.map(t => (t.forma_nome || "").trim()).filter(Boolean))).sort();
 
   // resumo por cliente (quem deve quanto)
   const porCli = {};
@@ -113,10 +130,24 @@ async function fatListarTitulos() {
   }).join("");
 
   corpo.innerHTML = `
-    <div class="fat-filtros">
+    <div class="fat-filtros" style="flex-wrap:wrap;gap:8px">
       <span>Cliente:</span>
-      <select class="fat-sel" onchange="window._fatFiltroCli=this.value;fatListarTitulos()">${cliOpts}</select>
-      <span style="margin-left:auto;color:#9aa">Total em aberto: <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong></span>
+      <select class="fat-sel" onchange="fatSetF('cli',this.value)">${cliOpts}</select>
+      <span>Status:</span>
+      <select class="fat-sel" onchange="fatSetF('status',this.value)">
+        ${[["aberto", "Em aberto"], ["vencido", "Vencidos"], ["pago", "Pagos"], ["parcelado", "Parcelados"], ["todos", "Todos"]].map(s => `<option value="${s[0]}" ${F.status === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}
+      </select>
+      <span>Forma:</span>
+      <select class="fat-sel" onchange="fatSetF('forma',this.value)">
+        <option value="">Todas</option>
+        ${formasSet.map(fn => `<option value="${_fatEsc(fn)}" ${F.forma === fn ? "selected" : ""}>${_fatEsc(fn)}</option>`).join("")}
+      </select>
+      <span>Emissão:</span>
+      <input type="date" class="fat-inp" value="${F.de}" onchange="fatSetF('de',this.value)" title="de">
+      <input type="date" class="fat-inp" value="${F.ate}" onchange="fatSetF('ate',this.value)" title="até">
+      <input class="fat-inp" placeholder="🔍 cliente/NFC-e" value="${_fatEsc(F.busca)}" oninput="fatSetFBusca(this.value)" style="width:150px">
+      <button class="fat-btn mini" onclick="fatLimparF()" title="Limpar filtros">🧽</button>
+      <span style="margin-left:auto;color:#9aa">${titulos.length} título(s) · <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong></span>
     </div>
     ${devedores.length ? `<div class="fat-cards">
       ${devedores.slice(0, 6).map(d => `<div class="fat-card">
@@ -143,6 +174,31 @@ function fatToggle(id) {
   const selTotal = titulos.filter(t => window._fatSel.has(t.id)).reduce((s, t) => s + Number(t.valor || 0), 0);
   const q = document.getElementById("fat-selqtd"); if (q) q.textContent = window._fatSel.size;
   const tt = document.getElementById("fat-seltot"); if (tt) tt.textContent = _fatMoney(selTotal);
+}
+
+// ---------- filtros ----------
+function fatSetF(campo, valor) {
+  window._fatF = window._fatF || {};
+  window._fatF[campo] = valor;
+  window._fatSel = new Set();
+  fatListarTitulos();
+}
+let _fatBuscaTimer = null;
+function fatSetFBusca(valor) {
+  window._fatF = window._fatF || {};
+  window._fatF.busca = valor;
+  clearTimeout(_fatBuscaTimer);
+  _fatBuscaTimer = setTimeout(() => {
+    Promise.resolve(fatListarTitulos()).then(() => {
+      const inp = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
+      if (inp) { inp.focus(); try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) {} }
+    });
+  }, 350);
+}
+function fatLimparF() {
+  window._fatF = { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
+  window._fatSel = new Set();
+  fatListarTitulos();
 }
 
 // ---------- modal genérico (self-contained) ----------
