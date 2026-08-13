@@ -8,6 +8,22 @@
 function _fatEsc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function _fatMoney(v) { return Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function _fatData(v) { return v ? new Date(v).toLocaleDateString("pt-BR") : ""; }
+// prazo padrão da empresa (dias) — TecnoX define o vencimento no faturamento; aqui
+// estimamos por prazo padrão para mostrar vencimento/atraso do título em aberto.
+function _fatPrazoDias() { return Number(window._fatPrazo || 30); }
+function _fatVencDe(t) {
+  if (t && t.vencimento) return new Date(t.vencimento + "T00:00:00");
+  const base = t && (t.registrado_em || t.criado_em);
+  if (!base) return null;
+  const d = new Date(base); d.setDate(d.getDate() + _fatPrazoDias());
+  return d;
+}
+function _fatAtrasoDias(venc) {
+  if (!venc) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const v = new Date(venc); v.setHours(0, 0, 0, 0);
+  return Math.round((hoje - v) / 86400000);   // >0 vencido
+}
 
 async function moduloFaturar() {
   const conteudo = document.getElementById("conteudo");
@@ -48,10 +64,12 @@ async function fatListarTitulos() {
   const corpo = document.getElementById("fat-corpo");
   corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
   const eid = window._fatEid;
-  const [tiRes, cliRes] = await Promise.all([
+  const [tiRes, cliRes, empRes] = await Promise.all([
     sb.from("oct_pdv_notas_prazo").select("*").eq("empresa_id", eid).order("registrado_em", { ascending: false }),
     sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome"),
+    sb.from("oct_empresas").select("prazo_padrao_dias").eq("id", eid).single().then(r => r, () => ({ data: null })),
   ]);
+  window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
   // "em aberto" = ainda não faturado (coluna status pode não existir ainda → trata como aberto)
   let titulos = (tiRes.data || []).filter(t => !t.status || t.status === "aberto");
   window._fatTitulos = titulos;
@@ -72,14 +90,26 @@ async function fatListarTitulos() {
   const cliOpts = "<option value=''>Todos os clientes</option>" +
     (cliRes.data || []).map(c => `<option value='${c.id}' ${filtroCli === c.id ? "selected" : ""}>${_fatEsc(c.nome)}</option>`).join("");
 
-  const linhas = titulos.map(t => `<tr>
+  const linhas = titulos.map(t => {
+    const venc = _fatVencDe(t);
+    const atr = _fatAtrasoDias(venc);
+    const vencCor = atr > 0 ? "#f87171" : atr >= -3 ? "#fbbf24" : "#9aa";
+    const atrTxt = atr == null ? "—" : atr > 0 ? `<b style="color:#f87171">${atr}d</b>` : atr === 0 ? '<span style="color:#fbbf24">hoje</span>' : "—";
+    return `<tr>
     <td class="fat-td" style="text-align:center"><input type="checkbox" ${window._fatSel.has(t.id) ? "checked" : ""} onchange="fatToggle('${t.id}')"></td>
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
+    <td class="fat-td" style="color:${vencCor}">${venc ? _fatData(venc) : "—"}</td>
+    <td class="fat-td" style="text-align:center">${atrTxt}</td>
     <td class="fat-td">${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}</td>
     <td class="fat-td">${_fatEsc(t.numero_nfe) || "—"}</td>
     <td class="fat-td">${_fatEsc(t.forma_nome) || "Prazo"}</td>
     <td class="fat-td fat-r">${_fatMoney(t.valor)}</td>
-  </tr>`).join("");
+    <td class="fat-td" style="text-align:center;white-space:nowrap">
+      <button class="fat-btn mini" style="background:#166534" onclick="fatLiquidarTitulo('${t.id}')" title="Receber/Liquidar">💰</button>
+      <button class="fat-btn mini" style="background:#0e7490;margin-left:4px" onclick="fatVerTitulo('${t.id}')" title="Ver título">👁</button>
+    </td>
+  </tr>`;
+  }).join("");
 
   corpo.innerHTML = `
     <div class="fat-filtros">
@@ -94,8 +124,8 @@ async function fatListarTitulos() {
         <div class="fat-card-qtd">${d.qtd} título(s)</div></div>`).join("")}
     </div>` : ""}
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px"></th><th>Data</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th></tr></thead>
-      <tbody>${linhas || '<tr><td colspan="6" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
+      <thead><tr><th style="width:34px"></th><th>Emissão</th><th>Vencimento</th><th>Atraso</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th><th style="text-align:center">Ações</th></tr></thead>
+      <tbody>${linhas || '<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
     </table></div>
     <div class="fat-rodape">
       <span>Selecionados: <strong id="fat-selqtd">${window._fatSel.size}</strong> · Total: <strong style="color:#4ade80">R$ <span id="fat-seltot">${_fatMoney(selTotal)}</span></strong></span>
@@ -112,6 +142,130 @@ function fatToggle(id) {
   const selTotal = titulos.filter(t => window._fatSel.has(t.id)).reduce((s, t) => s + Number(t.valor || 0), 0);
   const q = document.getElementById("fat-selqtd"); if (q) q.textContent = window._fatSel.size;
   const tt = document.getElementById("fat-seltot"); if (tt) tt.textContent = _fatMoney(selTotal);
+}
+
+// ---------- modal genérico (self-contained) ----------
+function _fatModal(html) {
+  let m = document.getElementById("fat-modal");
+  if (!m) { m = document.createElement("div"); m.id = "fat-modal"; document.body.appendChild(m); }
+  m.innerHTML = `<div onclick="document.getElementById('fat-modal').remove()" style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9998"></div>
+    <div style="position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(560px,94vw);max-height:84vh;overflow:auto;background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)">${html}</div>`;
+  return m;
+}
+function _fatFechaModal() { const m = document.getElementById("fat-modal"); if (m) m.remove(); }
+
+// ---------- LIQUIDAR TÍTULO na linha (receber direto) ----------
+async function fatLiquidarTitulo(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id);
+  if (!t) return;
+  const saldo = Number(t.valor || 0);
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>💰 Receber título — ${_fatEsc(t.cliente_nome) || "Cliente"}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px">
+      <div style="color:#9aa;font-size:0.82rem;margin-bottom:12px">Saldo do título: <b style="color:#f59e0b">R$ ${_fatMoney(saldo)}</b> · NFC-e ${_fatEsc(t.numero_nfe) || "—"} · emissão ${_fatData(t.registrado_em)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label style="color:#9aa;font-size:0.74rem">Valor a receber (R$)</label>
+          <input id="flt-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.1rem"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Forma</label>
+          <select id="flt-forma" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+            <option>Dinheiro</option><option>Pix</option><option>Cartão</option><option>Cheque</option><option>Boleto</option><option>Transferência</option></select></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Juros/multa (R$)</label>
+          <input id="flt-juros" type="number" step="0.01" min="0" value="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Desconto (R$)</label>
+          <input id="flt-desc" type="number" step="0.01" min="0" value="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+      </div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
+      <input id="flt-autor" placeholder="nome" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+      <div id="flt-msg" style="color:#f87171;font-size:0.78rem;text-align:center;margin-top:8px"></div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Cancelar</button>
+        <button class="fat-btn azul" onclick="fatLiquidarTituloOk('${id}')" style="flex:2">Confirmar recebimento</button>
+      </div>
+    </div>`);
+}
+
+async function fatLiquidarTituloOk(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  const msg = document.getElementById("flt-msg");
+  const valor = parseFloat((document.getElementById("flt-valor").value || "0").replace(",", "."));
+  const juros = parseFloat((document.getElementById("flt-juros").value || "0").replace(",", ".")) || 0;
+  const desconto = parseFloat((document.getElementById("flt-desc").value || "0").replace(",", ".")) || 0;
+  const forma = document.getElementById("flt-forma").value;
+  const autor = (document.getElementById("flt-autor").value || "").trim();
+  if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!autor) { msg.textContent = "Informe quem recebeu."; return; }
+  const saldo = Number(t.valor || 0);
+  if (valor > saldo + 0.005) { msg.textContent = "Valor maior que o saldo do título."; return; }
+  msg.style.color = "#9aa"; msg.textContent = "Registrando...";
+  try {
+    // 1) baixa vinculada ao título
+    await sb.from("oct_recebimentos_titulo").insert({
+      empresa_id: window._fatEid, nota_prazo_id: id, cliente_id: t.cliente_id || null,
+      cliente_nome: t.cliente_nome, valor: Number(valor.toFixed(2)), juros, desconto, forma,
+      data_recebimento: new Date().toISOString().slice(0, 10), autor, origem: "faturar",
+    });
+    // 2) atualiza o título (reduz saldo; quita se zerou)
+    const novoSaldo = Number((saldo - valor).toFixed(2));
+    const patch = novoSaldo <= 0.005
+      ? { valor: 0, status: "pago", pago_em: new Date().toISOString() }
+      : { valor: novoSaldo };
+    await sb.from("oct_pdv_notas_prazo").update(patch).eq("id", id);
+  } catch (e) {
+    msg.style.color = "#f87171";
+    msg.textContent = /nota_prazo_id|column|does not exist/i.test(e.message || "")
+      ? "Rode a migração SQL (SQL-FATURAR-FASE1.sql) e tente de novo." : "Erro: " + (e.message || e);
+    return;
+  }
+  _fatFechaModal();
+  fatListarTitulos();
+}
+
+// ---------- VER TÍTULO (detalhe + histórico de baixas) ----------
+async function fatVerTitulo(id) {
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  let baixas = [];
+  try {
+    const { data } = await sb.from("oct_recebimentos_titulo").select("*")
+      .eq("empresa_id", window._fatEid).eq("nota_prazo_id", id).order("data_recebimento");
+    baixas = data || [];
+  } catch (e) { baixas = []; }
+  const venc = _fatVencDe(t); const atr = _fatAtrasoDias(venc);
+  const orig = t.valor_original != null ? Number(t.valor_original) : Number(t.valor || 0);
+  const recebido = baixas.reduce((s, b) => s + Number(b.valor || 0), 0);
+  const campo = (r, v) => `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span style="color:#8aa">${r}</span><span style="color:#e5e7eb">${v}</span></div>`;
+  const linhasB = baixas.map(b => `<tr style="border-bottom:1px solid #1c2130">
+    <td style="padding:5px 7px">${_fatData(b.data_recebimento)}</td>
+    <td style="padding:5px 7px">${_fatEsc(b.forma) || "—"}</td>
+    <td style="padding:5px 7px;text-align:right">${(Number(b.juros || 0) || Number(b.desconto || 0)) ? "+" + _fatMoney(b.juros) + " / -" + _fatMoney(b.desconto) : "—"}</td>
+    <td style="padding:5px 7px;text-align:right;color:#7ee2a0">${_fatMoney(b.valor)}</td>
+    <td style="padding:5px 7px;color:#9aa">${_fatEsc(b.autor) || "—"}</td></tr>`).join("");
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>👁 Título — ${_fatEsc(t.cliente_nome) || "Cliente"}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px">
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px;margin-bottom:12px">
+        ${campo("NFC-e", _fatEsc(t.numero_nfe) || "—")}
+        ${campo("Forma", _fatEsc(t.forma_nome) || "Nota a prazo")}
+        ${campo("Emissão", _fatData(t.registrado_em))}
+        ${campo("Vencimento", venc ? _fatData(venc) + (atr > 0 ? ` <b style="color:#f87171">(${atr}d atraso)</b>` : "") : "—")}
+        ${campo("Status", t.status === "pago" ? '<span style="color:#7ee2a0">PAGO</span>' : '<span style="color:#f59e0b">ABERTO</span>')}
+        ${campo("Valor original", "R$ " + _fatMoney(orig))}
+        ${campo("Já recebido", "R$ " + _fatMoney(recebido))}
+        ${campo("Saldo atual", '<b style="color:#f59e0b">R$ ' + _fatMoney(t.valor) + "</b>")}
+      </div>
+      <div style="color:#f97316;font-size:0.76rem;font-weight:700;margin-bottom:5px">HISTÓRICO DE RECEBIMENTOS</div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.8rem;color:#cdd6e0">
+        <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left"><th style="padding:6px 7px">Data</th><th style="padding:6px 7px">Forma</th><th style="padding:6px 7px;text-align:right">Juros/Desc</th><th style="padding:6px 7px;text-align:right">Valor</th><th style="padding:6px 7px">Recebeu</th></tr></thead>
+        <tbody>${linhasB || '<tr><td colspan="5" style="padding:14px;text-align:center;color:#667">Nenhum recebimento ainda.</td></tr>'}</tbody>
+      </table>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Fechar</button>
+        ${t.status !== "pago" ? `<button class="fat-btn azul" onclick="_fatFechaModal();fatLiquidarTitulo('${id}')" style="flex:1">💰 Receber</button>` : ""}
+      </div>
+    </div>`);
 }
 
 // ---------- Gerar Fatura (Fase B — precisa da migração oct_faturas) ----------
