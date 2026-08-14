@@ -180,10 +180,14 @@ async function renderSpedFiscal(empresaId, empresa) {
     + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px">'
     + ['nome:Nome do contador','cpf:CPF','crc:CRC','cnpj:CNPJ escritório','cep:CEP','endereco:Endereço','numero:Número','bairro:Bairro','fone:Telefone','email:E-mail','cod_mun:Cód. IBGE município (contador)','cod_rec:Cód. receita ICMS (ex 1057)']
       .map(c => { const [k,rot] = c.split(':');
-        return '<div><label style="color:#888;font-size:0.72rem">'+rot+'</label><input id="sped-ctd-'+k+'" style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'; }).join('')
+        // ao sair do CEP do contador, busca o IBGE do município dele automaticamente
+        const ev = k==='cep' ? ' onblur="spedIbgePorCep(this.value,\'sped-ctd-cod_mun\',\'sped-ctd-cidade\')"' : '';
+        return '<div><label style="color:#888;font-size:0.72rem">'+rot+'</label><input id="sped-ctd-'+k+'"'+ev+' style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'; }).join('')
     + '</div>'
-    + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Cód. IBGE do MUNICÍPIO DO POSTO (campo do 0000 — 7 dígitos)</label>'
-    + '<input id="sped-cfg-codmun" style="width:220px;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'
+    + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Cód. IBGE do MUNICÍPIO DO POSTO (campo do 0000 — 7 dígitos)</label><br>'
+    + '<input id="sped-cfg-codmun" style="width:220px;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" />'
+    + ' <button type="button" onclick="spedIbgePorCep(\''+((empresa&&empresa.cep)||'')+'\',\'sped-cfg-codmun\')" style="padding:7px 12px;border-radius:5px;border:1px solid #2a5a3a;background:transparent;color:#7be0a0;cursor:pointer">🔍 buscar pelo CEP do posto</button>'
+    + '<span style="font-size:0.72rem;color:#555;margin-left:8px">o IBGE vem do CEP automaticamente</span></div>'
     + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Bombas/lacres (1350-1370) — JSON opcional, modelo no placeholder</label>'
     + '<textarea id="sped-cfg-bombas" rows="3" placeholder=\'[{"serie":"33351014 AB","fabricante":"GILBARCO","modelo":"PHX2220","medicao":1,"lacres":[{"numero":"H1815357-5","data":"2023-11-13"}],"bicos":[{"numero":1,"cod_item":"1","tanque":1}]}]\' style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd;font-family:monospace;font-size:0.74rem"></textarea></div>'
     + '<button onclick="spedSalvarConfig()" class="btn-salvar" style="margin-top:10px">Salvar configuração</button>'
@@ -336,6 +340,20 @@ async function spedSalvarConfig() {
 
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// busca o código IBGE do município pelo CEP (ViaCEP) e preenche o campo destino.
+// O IBGE do 0000/0100 vem do CEP — não precisa digitar à mão.
+async function spedIbgePorCep(cep, destId, cidadeId) {
+  const c = String(cep || '').replace(/\D/g, '');
+  const dest = document.getElementById(destId);
+  if (c.length !== 8) { if (dest) { dest.placeholder = 'CEP incompleto'; } return; }
+  try {
+    const r = await fetch('https://viacep.com.br/ws/' + c + '/json/');
+    const j = await r.json();
+    if (j && j.ibge && dest) dest.value = j.ibge;
+    if (j && cidadeId) { const ce = document.getElementById(cidadeId); if (ce) ce.value = j.localidade || ''; }
+  } catch (e) { /* silencioso — sem internet, preenche manual */ }
+}
+
 // ============================================================
 //  SPED ECD (Escrituração Contábil Digital) — anual
 //  A montagem vive em sped_ecd.js (spedEcdMontar, função pura).
