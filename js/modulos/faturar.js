@@ -345,7 +345,19 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
     });
     const r = await resp.json();
     if (r.ok) {
-      if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
+      window._fatUltimoDanfe = r.nfe_proc || null;  // p/ imprimir a DANFE agora
+      // persiste a NF-e autorizada em oct_nfce (histórico + reimpressão)
+      try {
+        const valorNota = itens.reduce((s, i) => s + Number(i.vProd || 0), 0);
+        await sb.from("oct_nfce").insert({
+          empresa_id: eid, numero, serie: Number(emp.nfe_serie || 1), modelo: "55",
+          status: "autorizada", ambiente: "homologacao", valor_total: valorNota,
+          cpf_consumidor: docDest, chave_nfe: r.chave, protocolo: r.protocolo,
+          xml_autorizado: r.nfe_proc || null, data_emissao: new Date().toISOString(),
+        });
+      } catch (e) { /* não bloqueia a impressão */ }
+      const btnDanfe = r.nfe_proc ? `<button class="fat-btn" onclick="fatImprimirDanfe()" style="background:#2a5a8a;margin-right:8px">📄 Imprimir DANFE</button>` : "";
+      if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br>${btnDanfe}<button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
     } else {
       // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
       const cstat = r.cstat_nfe || r.cstat_lote || "";
@@ -356,6 +368,33 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
   } catch (e) {
     if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
   }
+}
+
+// ---------- IMPRIMIR DANFE (reaproveita o /danfe do sefaz) ----------
+async function fatImprimirDanfe(xmlOverride) {
+  const xml = xmlOverride || window._fatUltimoDanfe;
+  if (!xml) { alert("XML autorizado indisponível para gerar a DANFE."); return; }
+  try {
+    const resp = await fetch(`${_FAT_SEFAZ}/danfe`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ xml }),
+    });
+    if (!resp.ok) {
+      let det = ""; try { det = (await resp.json()).erro || ""; } catch (e) {}
+      alert("Erro ao gerar DANFE. " + det); return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");   // abre o PDF em nova aba: visualizar / imprimir (Ctrl+P)
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { alert("Erro ao imprimir DANFE: " + (e.message || e)); }
+}
+
+// reimprime a DANFE de uma NF-e consolidada já salva (pela chave)
+async function fatReimprimirDanfe(chave) {
+  const { data } = await sb.from("oct_nfce").select("xml_autorizado").eq("empresa_id", window._fatEid).eq("chave_nfe", chave).limit(1);
+  if (!data || !data[0] || !data[0].xml_autorizado) { alert("XML autorizado não encontrado para esta nota."); return; }
+  fatImprimirDanfe(data[0].xml_autorizado);
 }
 
 // ---------- BOLETO (placeholder — pronto p/ integração bancária) ----------
