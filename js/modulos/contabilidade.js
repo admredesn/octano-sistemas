@@ -29,6 +29,7 @@ async function moduloContabilidade(subaba) {
     + '<button onclick="moduloContabilidade(\'fiscal\')" id="ctab-fiscal" class="nfe-aba '+(aba==='fiscal'?'ativo':'')+'">📋 SPED Fiscal</button>'
     + '<button onclick="moduloContabilidade(\'pis_cofins\')" id="ctab-pis" class="nfe-aba '+(aba==='pis_cofins'?'ativo':'')+'">💰 SPED PIS/COFINS</button>'
     + '<button onclick="moduloContabilidade(&quot;motor&quot;)" id="ctab-motor" class="nfe-aba '+(aba==='motor'?'ativo':'')+'">🧮 Motor contábil</button>'
+    + '<button onclick="moduloContabilidade(&quot;ecd&quot;)" id="ctab-ecd" class="nfe-aba '+(aba==='ecd'?'ativo':'')+'">📚 SPED ECD</button>'
     + '</div>'
     + '<div id="contab-conteudo"></div>'
     + '</div>';
@@ -36,6 +37,7 @@ async function moduloContabilidade(subaba) {
   else if (aba === 'fiscal') await renderSpedFiscal(empresaId, empresa);
   else if (aba === 'pis_cofins') await renderSpedPisCofins(empresaId, empresa);
   else if (aba === 'motor') await ctbAbrir();
+  else if (aba === 'ecd') await renderEcd(empresaId, empresa);
 }
 async function renderPlanoContas(empresaId) {
   const div = document.getElementById('contab-conteudo');
@@ -334,11 +336,90 @@ async function spedSalvarConfig() {
 
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// ============================================================
+//  SPED ECD (Escrituração Contábil Digital) — anual
+//  A montagem vive em sped_ecd.js (spedEcdMontar, função pura).
+//  Aqui só busca os dados do motor contábil e mostra/baixa.
+// ============================================================
+async function renderEcd(empresaId, empresa) {
+  const div = document.getElementById('contab-conteudo');
+  const anoAtual = new Date().getFullYear();
+  div.innerHTML = '<div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">'
+    + '<div><h3 style="color:#a78bfa;margin-bottom:4px">📚 SPED ECD — Escrituração Contábil Digital</h3>'
+    + '<p style="color:#888;font-size:0.82rem">Livro Diário: plano de contas, saldos, lançamentos, balanço e DRE (anual)</p></div>'
+    + '<div style="display:flex;gap:10px;align-items:center">'
+    + '<select id="ecd-ano" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
+    + [anoAtual, anoAtual-1, anoAtual-2].map(a => '<option value="'+a+'" '+(a===anoAtual?'selected':'')+'>'+a+'</option>').join('')
+    + '</select>'
+    + '<button onclick="gerarEcd()" class="btn-salvar">Gerar ECD</button>'
+    + '</div></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">'
+    + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco 0</div><div style="color:#60a5fa;font-weight:600;margin-top:4px">Abertura</div><div style="font-size:0.75rem;color:#555;margin-top:2px">0000, 0001, 0007, 0990</div></div>'
+    + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco I</div><div style="color:#4caf50;font-weight:600;margin-top:4px">Escrituração</div><div style="font-size:0.75rem;color:#555;margin-top:2px">I050 plano · I155 saldos · I200/I250 lançamentos</div></div>'
+    + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Bloco J</div><div style="color:#fbbf24;font-weight:600;margin-top:4px">Demonstrações</div><div style="font-size:0.75rem;color:#555;margin-top:2px">J100 Balanço · J150 DRE · J930 signatários</div></div>'
+    + '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:14px"><div class="nfe-label">Fonte</div><div style="color:#a78bfa;font-weight:600;margin-top:4px">Motor contábil</div><div style="font-size:0.75rem;color:#555;margin-top:2px">Rode a aba 🧮 Motor antes, por competência</div></div>'
+    + '</div>'
+    + '<div style="background:#2a2410;border:1px solid #b45309;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.8rem;color:#fed7aa">'
+    + '⚠️ O Balanço (J100) e a DRE (J150) saem em <b>rascunho</b> a partir do balancete. O contador revisa a aglutinação e assina no PVA da ECD.</div>'
+    + '<div id="ecd-preview" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:16px;min-height:200px">'
+    + '<p style="color:#555;text-align:center;padding:40px">Selecione o ano e clique em Gerar ECD.</p>'
+    + '</div></div>';
+}
+
+async function gerarEcd() {
+  const ano = parseInt(document.getElementById('ecd-ano').value);
+  const empresaId = window._contab_empresa_id;
+  const empresa = window._contab_empresa;
+  const div = document.getElementById('ecd-preview');
+  div.innerHTML = '<p style="color:#888">Buscando plano de contas, lançamentos e partidas...</p>';
+  const dtIni = ano + '-01-01', dtFim = ano + '-12-31';
+  try {
+    const [contas, lancamentos, partidas, cfgRow] = await Promise.all([
+      sb.from('oct_contabil_contas').select('codigo,nome,natureza,tipo,nivel,conta_pai,cod_cta_sped')
+        .eq('empresa_id', empresaId).then(r => r.data || []),
+      _spedTudo(q => sb.from('oct_contabil_lancamentos').select('id,data,valor,historico,origem,competencia')
+        .eq('empresa_id', empresaId).lte('data', dtFim).order('data').range(q * 1000, q * 1000 + 999)),
+      _spedTudo(q => sb.from('oct_contabil_partidas').select('lancamento_id,conta_codigo,dc,valor,historico')
+        .eq('empresa_id', empresaId).range(q * 1000, q * 1000 + 999)),
+      sb.from('oct_empresas').select('sped_config').eq('id', empresaId).single().then(r => r.data, () => null),
+    ]);
+    const cfg = (cfgRow && cfgRow.sped_config) || {};
+    if (!contas.length) { div.innerHTML = '<p style="color:#f87171;padding:20px">Plano de contas contábil vazio. Rode a aba 🧮 <b>Motor contábil</b> primeiro (ele cria o plano e os lançamentos).</p>'; return; }
+    const r = spedEcdMontar({
+      empresa: empresa, spedConfig: cfg, dtIni: dtIni, dtFim: dtFim,
+      contas: contas, lancamentos: lancamentos, partidas: partidas,
+    });
+    window._spedEcdTxt = r.texto;
+    window._spedEcdNome = r.nome;
+    div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      + '<div><strong style="color:#4caf50">ECD gerada — ' + r.contagem.registros + ' registros</strong>'
+      + '<div style="color:#888;font-size:0.8rem;margin-top:2px">' + r.contagem.contas + ' contas · ' + r.contagem.lancamentos + ' lançamentos</div></div>'
+      + '<button onclick="downloadSped(&quot;ecd&quot;)" class="btn-salvar">⬇ Baixar TXT</button></div>'
+      + (r.avisos.length
+        ? '<div style="background:#2a2410;border:1px solid #b45309;border-radius:8px;padding:12px;margin-bottom:12px">'
+          + '<strong style="color:#fbbf24;font-size:0.85rem">Avisos (' + r.avisos.length + '):</strong>'
+          + '<ul style="color:#fed7aa;font-size:0.8rem;margin:6px 0 0 18px">' + r.avisos.map(a => '<li>' + escHtml(a) + '</li>').join('') + '</ul></div>'
+        : '')
+      + '<pre style="background:#0a0c10;border:1px solid #1c2130;border-radius:6px;padding:12px;overflow:auto;max-height:420px;font-size:0.72rem;color:#9fb0c4;white-space:pre">'
+      + escHtml(r.texto.split('\r\n').slice(0, 200).join('\n')) + '</pre>';
+  } catch (e) {
+    div.innerHTML = '<p style="color:#f87171;padding:20px">Erro ao gerar a ECD: ' + escHtml(e.message || String(e)) + '</p>';
+  }
+}
+
 function downloadSped(tipo) {
-  const txt = tipo === 'fiscal' ? window._spedFiscalTxt : window._spedPisTxt;
-  const nome = tipo === 'fiscal' ? window._spedFiscalNome : window._spedPisNome;
+  const map = {
+    fiscal: [window._spedFiscalTxt, window._spedFiscalNome],
+    pis: [window._spedPisTxt, window._spedPisNome],
+    ecd: [window._spedEcdTxt, window._spedEcdNome],
+  };
+  const [txt, nome] = map[tipo] || [null, null];
   if (!txt) return;
-  const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+  // SPED é ISO-8859-1 (latin1). Blob padrão gravaria UTF-8 e quebraria acentos no PVA.
+  const bytes = new Uint8Array(txt.length);
+  for (let i = 0; i < txt.length; i++) bytes[i] = txt.charCodeAt(i) & 0xff;
+  const blob = new Blob([bytes], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = nome; a.click();
