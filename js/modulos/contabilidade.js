@@ -184,6 +184,8 @@ async function renderSpedFiscal(empresaId, empresa) {
         const ev = k==='cep' ? ' onblur="spedIbgePorCep(this.value,\'sped-ctd-cod_mun\',\'sped-ctd-cidade\')"' : '';
         return '<div><label style="color:#888;font-size:0.72rem">'+rot+'</label><input id="sped-ctd-'+k+'"'+ev+' style="width:100%;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" /></div>'; }).join('')
     + '</div>'
+    + '<div style="margin-top:8px"><button type="button" onclick="spedContadorPorCnpj()" style="padding:7px 12px;border-radius:5px;border:1px solid #2a4a6a;background:transparent;color:#60a5fa;cursor:pointer">🔍 buscar contador pelo CNPJ</button>'
+    + '<span style="font-size:0.72rem;color:#555;margin-left:8px">digite o CNPJ do escritório acima e clique — preenche razão, endereço, CEP e IBGE (o CPF/CRC do responsável o contador informa)</span></div>'
     + '<div style="margin-top:10px"><label style="color:#888;font-size:0.72rem">Cód. IBGE do MUNICÍPIO DO POSTO (campo do 0000 — 7 dígitos)</label><br>'
     + '<input id="sped-cfg-codmun" style="width:220px;padding:7px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#ddd" />'
     + ' <button type="button" onclick="spedIbgePorCep(\''+((empresa&&empresa.cep)||'')+'\',\'sped-cfg-codmun\')" style="padding:7px 12px;border-radius:5px;border:1px solid #2a5a3a;background:transparent;color:#7be0a0;cursor:pointer">🔍 buscar pelo CEP do posto</button>'
@@ -352,6 +354,33 @@ async function spedIbgePorCep(cep, destId, cidadeId) {
     if (j && j.ibge && dest) dest.value = j.ibge;
     if (j && cidadeId) { const ce = document.getElementById(cidadeId); if (ce) ce.value = j.localidade || ''; }
   } catch (e) { /* silencioso — sem internet, preenche manual */ }
+}
+
+// preenche os dados do contador (registro 0100) a partir do CNPJ do escritório.
+// Razão/endereço/CEP vêm da BrasilAPI; o IBGE do município vem do CEP (ViaCEP).
+// O CPF e o CRC do responsável NÃO estão no registro do CNPJ — o contador informa.
+async function spedContadorPorCnpj() {
+  const msg = document.getElementById('sped-cfg-msg');
+  const cnpj = (document.getElementById('sped-ctd-cnpj')?.value || '').replace(/\D/g, '');
+  if (cnpj.length !== 14) { if (msg) { msg.style.color = '#f44'; msg.textContent = 'Digite o CNPJ do escritório (14 dígitos) no campo acima.'; } return; }
+  if (msg) { msg.style.color = '#888'; msg.textContent = 'Buscando dados do CNPJ...'; }
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+  try {
+    const r = await fetch('https://brasilapi.com.br/api/cnpj/v1/' + cnpj);
+    if (!r.ok) throw new Error('CNPJ não encontrado');
+    const j = await r.json();
+    set('sped-ctd-nome', j.razao_social);
+    set('sped-ctd-cep', j.cep);
+    set('sped-ctd-endereco', j.logradouro);
+    set('sped-ctd-numero', j.numero);
+    set('sped-ctd-bairro', j.bairro);
+    set('sped-ctd-fone', (j.ddd_telefone_1 || '').replace(/\D/g, ''));
+    set('sped-ctd-email', (j.email || '').toLowerCase());
+    if (j.cep) await spedIbgePorCep(j.cep, 'sped-ctd-cod_mun');
+    if (msg) { msg.style.color = '#4caf50'; msg.textContent = '✓ Contador preenchido pelo CNPJ. Falta o CPF e o CRC do responsável (o contador informa). Depois clique em Salvar.'; }
+  } catch (e) {
+    if (msg) { msg.style.color = '#f59e0b'; msg.textContent = 'Não consegui buscar o CNPJ automaticamente (' + (e.message || e) + '). Preencha manual.'; }
+  }
 }
 
 // ============================================================
