@@ -101,7 +101,7 @@ async function fcCarregarDados() {
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
     rec: { dinheiro: 0, cartao: 0, pix: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
-    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, outrosCaixa: 0, qtd_vendas: 0,
+    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
     fila_total: 0, fila_litros: 0, fila_itens: [],
     // v2 — movimentação completa
     sangria_f7: 0, sangrias_lst: [],
@@ -159,6 +159,7 @@ async function fcCarregarDados() {
     else if (tipo.includes('suprim')) t.suprimento += val;
     else if (tipo.includes('desp')) t.despesa += val;
     else if (tipo.includes('depos')) t.deposito += val;
+    else if (tipo.includes('receita')) t.receita += val;
     else t.outrosCaixa += val;
   });
   // RECEBIMENTOS externos (maquininha/cofre/sangria) — casa por horário no turno.
@@ -192,6 +193,23 @@ async function fcCarregarDados() {
     t.titulos += Number(x.valor || 0);
     t.titulos_lst.push(x);
   });
+  // ---- CONFERÊNCIA DE CAIXA FÍSICO (dinheiro esperado × contado) ----
+  // Modelo TecnoX: Falta/Sobra de Caixa = dinheiro CONTADO na gaveta − dinheiro
+  // ESPERADO pelo sistema. Só DINHEIRO (cartão/pix/prazo não entram na gaveta).
+  //   esperado = fundo abertura + vendas em dinheiro + suprimentos + receitas
+  //              − sangrias − despesas em dinheiro − depósitos
+  //   contado  = valor_fechamento (o operador informa ao fechar o turno)
+  lista.forEach(t => {
+    const d = porTurno[t.id]; if (!d) return;
+    const abertura = Number(t.valor_abertura || 0);
+    const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + Number(d.receita || 0);
+    const sai = Number(d.sangria || 0) + Number(d.despesa || 0) + Number(d.deposito || 0);
+    d.dinheiro_esperado = Math.round((entra - sai) * 100) / 100;
+    d.dinheiro_contado = (t.valor_fechamento != null) ? Number(t.valor_fechamento) : null; // null = ainda não contado
+    d.diferenca_caixa = (d.dinheiro_contado == null) ? null : Math.round((d.dinheiro_contado - d.dinheiro_esperado) * 100) / 100;
+    d.falta_caixa = (d.diferenca_caixa != null && d.diferenca_caixa < 0) ? -d.diferenca_caixa : 0;
+    d.sobra_caixa = (d.diferenca_caixa != null && d.diferenca_caixa > 0) ? d.diferenca_caixa : 0;
+  });
   return { turnos: lista, porTurno };
 }
 
@@ -215,9 +233,9 @@ async function fcListar() {
       <td class="fc-td">${_fcData(t.fechado_em)}</td>
       <td class="fc-td">${_fcHora(t.fechado_em)}</td>
       <td class="fc-td" style="color:${corSit};font-weight:600">${sit}</td>
-      <td class="fc-td fc-r">0,00</td>
-      <td class="fc-td fc-r">0,00</td>
-      <td class="fc-td fc-r">0,00</td>
+      <td class="fc-td fc-r" style="color:#e06c6c">${d.falta_caixa ? fcMoney(d.falta_caixa) : (d.diferenca_caixa == null ? '—' : '0,00')}</td>
+      <td class="fc-td fc-r" style="color:#7ee2a0">${d.sobra_caixa ? fcMoney(d.sobra_caixa) : (d.diferenca_caixa == null ? '—' : '0,00')}</td>
+      <td class="fc-td fc-r" style="font-weight:600;color:${d.diferenca_caixa == null ? '#667' : (Math.abs(d.diferenca_caixa) < 0.01 ? '#7ee2a0' : (d.diferenca_caixa < 0 ? '#e06c6c' : '#f0b45c'))}">${d.diferenca_caixa == null ? '—' : fcMoney(d.diferenca_caixa)}</td>
       <td class="fc-td fc-r">${fcMoney(d.venda_total)}</td>
       <td class="fc-td fc-r" style="color:#f0b45c;font-weight:600">${fcMoney(Number(d.venda_total || 0) + Number(d.vale_desconto || 0))}</td>
       <td class="fc-td fc-r">${fcMoney(rec.dinheiro)}</td>
@@ -319,9 +337,10 @@ function fcDetalhe(turnoId) {
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
   const somaVenda = soma(vendasBase);
-  const dif = Number((somaVenda - somaReceb).toFixed(2));   // >0 falta, <0 sobra
-  const faltaCaixa = dif > 0 ? dif : 0;
-  const sobraCaixa = dif < 0 ? -dif : 0;
+  // FALTA/SOBRA DE CAIXA = conferência de DINHEIRO FÍSICO (contado × esperado),
+  // calculada em fcCarregarDados. NÃO é mais o plug venda×forma.
+  const faltaCaixa = d.falta_caixa || 0;
+  const sobraCaixa = d.sobra_caixa || 0;
   const receb = recebBase.concat([['Falta de Caixa', faltaCaixa]]);
   const vendas = vendasBase.concat([['Sobra de Caixa', sobraCaixa]]);
   const totalReceb = somaReceb + faltaCaixa;
@@ -422,6 +441,22 @@ function fcDetalhe(turnoId) {
         <div class="fc-painel">
           <div class="fc-obscab"><span>Observação:</span><button class="fc-btn mini" onclick="fcSalvarObs()">💾 Salvar Obs.</button></div>
           <textarea id="fc-obs" class="fc-obs" placeholder="Observações do caixa...">${fcEsc(t.observacao || '')}</textarea>
+          <div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px">
+            <div style="color:#f0b45c;font-weight:700;font-size:0.82rem;margin-bottom:6px">💵 Conferência de Caixa (dinheiro)</div>
+            <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
+              <div style="display:flex;justify-content:space-between"><span>Fundo de abertura</span><b>${fcMoney(t.valor_abertura)}</b></div>
+              <div style="display:flex;justify-content:space-between"><span>+ Vendas em dinheiro</span><b>${fcMoney(rec.dinheiro)}</b></div>
+              ${d.suprimento > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Suprimentos</span><b>${fcMoney(d.suprimento)}</b></div>` : ''}
+              ${d.receita > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Receitas</span><b>${fcMoney(d.receita)}</b></div>` : ''}
+              ${d.sangria > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Sangrias</span><b>${fcMoney(d.sangria)}</b></div>` : ''}
+              ${d.despesa > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Despesas</span><b>${fcMoney(d.despesa)}</b></div>` : ''}
+              ${d.deposito > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Depósitos</span><b>${fcMoney(d.deposito)}</b></div>` : ''}
+              <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
+              <div style="display:flex;justify-content:space-between"><span>Contado (operador)</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
+              <div style="display:flex;justify-content:space-between;font-size:0.92rem;margin-top:4px"><span style="font-weight:700">${d.diferenca_caixa == null ? 'Turno em aberto' : (Math.abs(d.diferenca_caixa) < 0.01 ? '✓ Caixa confere' : (d.diferenca_caixa < 0 ? '🔴 FALTA' : '🟢 SOBRA'))}</span><b style="color:${d.diferenca_caixa == null ? '#667' : (Math.abs(d.diferenca_caixa) < 0.01 ? '#7ee2a0' : (d.diferenca_caixa < 0 ? '#e06c6c' : '#7ee2a0'))}">${d.diferenca_caixa == null ? '' : fcMoney(Math.abs(d.diferenca_caixa))}</b></div>
+            </div>
+            ${d.dinheiro_contado != null ? `<button class="fc-btn2" style="margin-top:8px;width:100%;border-color:#2a5a3a;color:#7be0a0" onclick="fcConfirmarCaixa('${turnoId}')">✔ Confirmar conferência</button>` : '<div style="font-size:0.72rem;color:#667;margin-top:6px">Turno ainda aberto — a conferência fecha quando o operador informar o dinheiro contado.</div>'}
+          </div>
           <button class="fc-btn2" onclick="fcNode('demonstrativo')">📊 Demonstrativo do Caixa</button>
           <button class="fc-btn2" onclick="fcNode('encerrantes')">🔢 Encerrantes</button>
           <button class="fc-btn2" onclick="fcNode('itens')">📋 Rel. itens vendidos</button>
@@ -815,6 +850,32 @@ async function fcSalvarObs() {
   const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
   try { await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId); alert('Observação salva.'); }
   catch (e) { alert('Não foi possível salvar (campo observacao pode não existir ainda).'); }
+}
+
+// confirma a conferência de caixa físico e persiste no turno (esperado, diferença,
+// quem/quando conferiu). O gerente audita o dinheiro contado × esperado aqui.
+async function fcConfirmarCaixa(turnoId) {
+  const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId];
+  if (!d || d.dinheiro_contado == null) { alert('Turno sem dinheiro contado — feche o turno no PDV primeiro.'); return; }
+  const dif = d.diferenca_caixa || 0;
+  const resumo = Math.abs(dif) < 0.01 ? 'Caixa confere (sem diferença).'
+    : (dif < 0 ? 'FALTA de R$ ' : 'SOBRA de R$ ') + Math.abs(dif).toFixed(2).replace('.', ',');
+  if (!confirm('Confirmar a conferência deste caixa?\n\nEsperado: R$ ' + Number(d.dinheiro_esperado || 0).toFixed(2).replace('.', ',')
+    + '\nContado: R$ ' + Number(d.dinheiro_contado || 0).toFixed(2).replace('.', ',') + '\n' + resumo)) return;
+  try {
+    const session = await getSession();
+    const { error } = await sb.from('oct_pdv_turnos').update({
+      dinheiro_esperado: d.dinheiro_esperado,
+      diferenca_caixa: dif,
+      conferido_em: new Date().toISOString(),
+      conferido_por: (session && session.user && session.user.email) || 'gerente',
+    }).eq('id', turnoId);
+    if (error) throw error;
+    alert('✔ Conferência confirmada. ' + resumo);
+  } catch (e) {
+    const m = String(e.message || e);
+    alert('Erro ao confirmar: ' + m + (/conferido|diferenca_caixa|dinheiro_esperado/.test(m) ? '\n\n→ Rode antes o SQL-CONFERENCIA-CAIXA.sql (colunas novas no turno).' : ''));
+  }
 }
 
 // ---------- estilo (tema DARK, padrão do octano) ----------
