@@ -27,9 +27,11 @@ function _ecdNum(v) {               // 1234.5 -> "1234,50" (2 casas, vírgula)
 function _ecdTxt(s) {               // remove pipe/quebra que quebrariam o registro
   return String(s == null ? "" : s).replace(/[|\r\n]/g, " ").trim();
 }
-// COD_NAT da ECD a partir da natureza da conta do motor
+// COD_NAT da ECD a partir da natureza da conta do motor.
+// O motor já grava o CÓDIGO ECD ('01'..'09'); mas aceita texto por robustez.
 function _ecdCodNat(natureza) {
-  const n = String(natureza || "").toLowerCase();
+  const n = String(natureza || "").trim().toLowerCase();
+  if (/^0?[1-9]$/.test(n)) return n.padStart(2, "0");   // já é o código ECD
   if (n.indexOf("ativo") >= 0) return "01";
   if (n.indexOf("passivo") >= 0) return "02";
   if (n.indexOf("patrim") >= 0 || n === "pl") return "03";
