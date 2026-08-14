@@ -103,6 +103,7 @@ async function fcCarregarDados() {
     rec: { dinheiro: 0, cartao: 0, pix: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
     fila_total: 0, fila_litros: 0, fila_itens: [],
+    fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
     // v2 — movimentação completa
     sangria_f7: 0, sangrias_lst: [],
     vale_haver: 0, vale_desconto: 0, vales_lst: [],
@@ -131,6 +132,12 @@ async function fcCarregarDados() {
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const litros = Number(f.litros || 0);
+    // REGRA (Ronan 14/08): fila só entra no CAIXA se o pagamento foi confirmado
+    // (recebido_em). Abastecido sem pagamento = pendência de pista, não recebimento.
+    if (!f.recebido_em) {
+      t.fila_sem_pgto += vf; t.fila_sem_pgto_itens.push(f);
+      return;
+    }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
     t.venda_total += vf;
     if (litros > 0) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
@@ -429,7 +436,8 @@ function fcDetalhe(turnoId) {
           <div class="fc-coltit">Vendas / Saídas</div>
           ${vendas.map(r => linhaVal(r[0], r[1], r[2])).join('')}
           <div class="fc-litros">${fcNum(d.litros_comb, 3)} L de combustível &nbsp;·&nbsp; ${d.qtd_vendas} cupons</div>
-          ${d.fila_total > 0.009 ? `<div class="fc-litros" style="color:#fbbf24;cursor:pointer" onclick="fcNode('fila')">⏳ ${(d.fila_itens || []).length} abastecimento(s) na fila de transmissão: ${fcMoney(d.fila_total)} (já somados acima — clique p/ detalhar)</div>` : ''}
+          ${d.fila_total > 0.009 ? `<div class="fc-litros" style="color:#fbbf24;cursor:pointer" onclick="fcNode('fila')">⏳ ${(d.fila_itens || []).length} abastecimento(s) pagos na fila de transmissão: ${fcMoney(d.fila_total)} (já somados acima — clique p/ detalhar)</div>` : ''}
+          ${d.fila_sem_pgto > 0.009 ? `<div class="fc-litros" style="color:#e06c6c">⚠ ${(d.fila_sem_pgto_itens || []).length} abastecimento(s) SEM pagamento confirmado: ${fcMoney(d.fila_sem_pgto)} (fora do caixa — pendência de pista)</div>` : ''}
           <div class="fc-total"><span>Total Vendas / Saída:</span><span class="fc-box forte azulf">${fcMoney(totalVenda)}</span></div>
           <div class="fc-total" style="border-top:2px solid #f97316;margin-top:6px">
             <span>💰 Total movimentado no caixa</span>
@@ -457,6 +465,31 @@ function fcDetalhe(turnoId) {
             </div>
             ${d.dinheiro_contado != null ? `<button class="fc-btn2" style="margin-top:8px;width:100%;border-color:#2a5a3a;color:#7be0a0" onclick="fcConfirmarCaixa('${turnoId}')">✔ Confirmar conferência</button>` : '<div style="font-size:0.72rem;color:#667;margin-top:6px">Turno ainda aberto — a conferência fecha quando o operador informar o dinheiro contado.</div>'}
           </div>
+          ${(() => {
+            // 🏦 CONCILIAÇÃO BANCÁRIA — o que o SISTEMA registrou (vendas+fila paga)
+            // × o que a MAQUININHA reportou (oct_recebimentos EDI/e-mail), por forma.
+            const sisCartao = Number(rec.cartao || 0);
+            const sisPix = Number(rec.pix || 0);
+            const maqCartao = Number(d.receb_ext_cartao || 0);
+            const maqPix = Number(d.receb_ext_pix || 0);
+            if (sisCartao < 0.01 && sisPix < 0.01 && maqCartao < 0.01 && maqPix < 0.01) return '';
+            const linha = (nome, sis, maq) => {
+              const dif = Math.round((maq - sis) * 100) / 100;
+              const ok = Math.abs(dif) < 0.01;
+              const semMaq = maq < 0.01 && sis >= 0.01;
+              return `<div style="display:flex;justify-content:space-between"><span>${nome} — sistema</span><b>${fcMoney(sis)}</b></div>
+                <div style="display:flex;justify-content:space-between"><span>${nome} — maquininha</span><b>${semMaq ? '<span style="color:#8892a0">sem dados</span>' : fcMoney(maq)}</b></div>
+                <div style="display:flex;justify-content:space-between;border-bottom:1px dashed #223044;margin-bottom:4px;padding-bottom:4px"><span style="font-weight:700">${semMaq ? '⚠ sem retorno da maquininha' : (ok ? '✓ concilia' : 'Diferença')}</span><b style="color:${semMaq ? '#f0b45c' : (ok ? '#7ee2a0' : '#e06c6c')}">${semMaq ? '' : fcMoney(Math.abs(dif))}</b></div>`;
+            };
+            return `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px">
+              <div style="color:#7ea8d8;font-weight:700;font-size:0.82rem;margin-bottom:6px">🏦 Conciliação bancária (cartão/pix)</div>
+              <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
+                ${linha('Cartão', sisCartao, maqCartao)}
+                ${linha('Pix', sisPix, maqPix)}
+              </div>
+              <div style="font-size:0.7rem;color:#667;margin-top:4px">Maquininha = recebimentos EDI/e-mail do período do turno. "Sem dados" = ingestão parada ou D-1 ainda não chegou.</div>
+            </div>`;
+          })()}
           <button class="fc-btn2" onclick="fcNode('demonstrativo')">📊 Demonstrativo do Caixa</button>
           <button class="fc-btn2" onclick="fcNode('encerrantes')">🔢 Encerrantes</button>
           <button class="fc-btn2" onclick="fcNode('itens')">📋 Rel. itens vendidos</button>
