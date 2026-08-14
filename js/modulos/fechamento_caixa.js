@@ -364,11 +364,15 @@ function fcDetalhe(turnoId) {
   // calculada em fcCarregarDados. NÃO é mais o plug venda×forma.
   const faltaCaixa = d.falta_caixa || 0;
   const sobraCaixa = d.sobra_caixa || 0;
-  const receb = recebBase.concat([['Falta de Caixa', faltaCaixa]]);
-  const vendas = vendasBase.concat([['Sobra de Caixa', sobraCaixa]]);
-  const totalReceb = somaReceb + faltaCaixa;
-  const totalVenda = somaVenda + sobraCaixa;
-  const resultado = totalReceb - totalVenda;   // ~0 por construção
+  // Falta/Sobra aparecem nas colunas (layout TecnoX) mas NÃO somam nos totais:
+  // desde 14/08 a falta vem da CONFERÊNCIA FÍSICA da gaveta, e o dinheiro dos
+  // Recebimentos já vem completo do sistema (fila paga) — somar a falta contava
+  // o mesmo dinheiro em dobro (ex.: 8.184,27 = 6.453,50 + 1.730,77 no turno 31).
+  const receb = recebBase.concat([['Falta de Caixa (conf. gaveta)', faltaCaixa]]);
+  const vendas = vendasBase.concat([['Sobra de Caixa (conf. gaveta)', sobraCaixa]]);
+  const totalReceb = somaReceb;
+  const totalVenda = somaVenda;
+  const resultado = totalReceb - totalVenda;   // sistema × sistema: ~0 quando tudo casa
 
   // TOTAL MOVIMENTADO no caixa = tudo que passou (vendas/saídas: fila+transmitidos
   // + títulos recebidos).
