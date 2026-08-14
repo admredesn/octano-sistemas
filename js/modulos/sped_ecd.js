@@ -9,7 +9,7 @@
 // contagem de campos por registro (autoverificação do bloco 9, como no sped_fiscal)
 const ECD_CAMPOS_REF = {
   "0000": 22, "0001": 1, "0007": 2, "0990": 1,
-  "I001": 1, "I010": 2, "I030": 12, "I050": 7, "I051": 3, "I052": 2,
+  "I001": 1, "I010": 2, "I030": 11, "I050": 7, "I051": 3, "I052": 2,
   "I150": 2, "I155": 14, "I200": 6, "I250": 10, "I990": 1,
   "J001": 1, "J005": 4, "J100": 14, "J150": 17, "J900": 3, "J930": 10, "J990": 1,
   "9001": 1, "9900": 2, "9990": 1, "9999": 1,
@@ -86,7 +86,8 @@ function spedEcdMontar(d) {
   // 0000: DT_INI DT_FIN NOME CNPJ UF IE COD_MUN IM IND_SIT_ESP IND_SIT_INI_PER IND_NIRE
   //       IND_FIN_ESC COD_HASH_SUB NIRE_SUBST IND_EMP_GRD_PRT TIP_ECD COD_SCP IDENT_MF
   //       IND_ESC_CONS IND_CENTRALIZADA IND_MUDANC_PC COD_PLAN_REF
-  L.push(`|0000|${dtIni}|${dtFim}|${_ecdTxt(emp.nome)}|${cnpj}|${emp.uf || "MG"}|${ie}|${codMun}|${(emp.inscricao_municipal || "").replace(/\D/g, "")}|0|0|0|0|||N|0|0|N|N|N|N|${cfg.cod_plan_ref || ""}|`);
+  // 1º campo é o literal "LECD" (confirmado na ECD real do contador). COD_PLAN_REF=1 (RFB).
+  L.push(`|0000|LECD|${dtIni}|${dtFim}|${_ecdTxt(emp.nome)}|${cnpj}|${emp.uf || "MG"}|${ie}|${codMun}|${(emp.inscricao_municipal || "").replace(/\D/g, "")}||0|0|0||0|0||N|N|0|0|${cfg.cod_plan_ref || "1"}|`);
   L.push(`|0001|0|`);
   // 0007: outras inscrições (IE) — informa a IE estadual
   if (ie) L.push(`|0007|${emp.uf || "MG"}|${ie}|`);
@@ -102,7 +103,8 @@ function spedEcdMontar(d) {
   // I030: termo de abertura do livro Diário
   const qtdLin = 0; // preenchido no fim
   const idxI030 = L.length;
-  L.push(`|I030|TERMO DE ABERTURA|LIVRO DIÁRIO|QTDLIN|${_ecdTxt(emp.nome)}||${cnpj}|${dtFim}|${dtFim}|${_ecdTxt(emp.cidade || "")}||${_ecdTxt(contador.nome || "")}||`);
+  // estrutura confirmada na ECD real: DNRC | NUM_ORD | NAT_LIVR | QTD_LIN | NOME | NIRE | CNPJ | DT_ARQ | DT_ARQ_CONV | DESC_MUN | DT_FIN
+  L.push(`|I030|TERMO DE ABERTURA|1|Livro Diario|QTDLIN|${_ecdTxt(emp.nome)}||${cnpj}|${dtIni}||${_ecdTxt(emp.cidade || "")}|${dtFim}|`);
   // I050: plano de contas
   contas.forEach(c => {
     const indCta = String(c.tipo || "").toUpperCase() === "S" ? "S" : "A";
