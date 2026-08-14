@@ -54,6 +54,24 @@ async function moduloFCaixa() {
   await fcListar();
 }
 
+// Busca TODAS as páginas de uma consulta (o PostgREST corta em 1000 linhas por
+// request — era isso que zerava os turnos a partir de 10/08: a fila do período
+// passava de 1000 itens e os últimos dias ficavam de fora). fazQuery é uma
+// função que MONTA a query (não dá p/ reusar o mesmo builder duas vezes).
+async function _fcTudo(fazQuery) {
+  const tudo = [];
+  for (let p = 0; p < 20; p++) {               // teto de segurança: 20.000 linhas
+    let lote = [];
+    try {
+      const { data } = await fazQuery().range(p * 1000, p * 1000 + 999);
+      lote = data || [];
+    } catch (e) { break; }
+    tudo.push(...lote);
+    if (lote.length < 1000) break;
+  }
+  return { data: tudo };
+}
+
 async function fcCarregarDados() {
   const eid = window._fcEmpresaId;
   const de = window._fcDe + 'T00:00:00';
@@ -78,15 +96,13 @@ async function fcCarregarDados() {
     // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
     // ocorrido_em dentro do período e atribuímos ao turno pela hora de abertura/
     // fechamento — o horário é sempre gravado, o turno_id não.
-    sb.from('oct_fila_transmissao').select('bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em')
+    _fcTudo(() => sb.from('oct_fila_transmissao').select('bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em')
       .eq('empresa_id', eid).eq('status', 'fila')
-      .gte('ocorrido_em', janIni).lte('ocorrido_em', janFim).order('ocorrido_em')
-      .then(r => r, () => ({ data: [] })),
+      .gte('ocorrido_em', janIni).lte('ocorrido_em', janFim).order('ocorrido_em')),
     // RECEBIMENTOS (maquininha/cofre/sangria): sem turno_id — casa por horário.
     // Inclui a SANGRIA (origem='sangria') que o PDV espelha aqui.
-    sb.from('oct_recebimentos').select('origem,forma,bandeira,valor,parcelas,recebido_em,conciliado,cliente')
-      .eq('empresa_id', eid).gte('recebido_em', janIni).lte('recebido_em', janFim).order('recebido_em')
-      .then(r => r, () => ({ data: [] })),
+    _fcTudo(() => sb.from('oct_recebimentos').select('origem,forma,bandeira,valor,parcelas,recebido_em,conciliado,cliente')
+      .eq('empresa_id', eid).gte('recebido_em', janIni).lte('recebido_em', janFim).order('recebido_em')),
     // VALES / HAVER — tem turno_id, liga direto
     sb.from('oct_vales').select('turno_id,pessoa_nome,tipo,valor,descricao,operador,criado_em')
       .eq('empresa_id', eid).in('turno_id', ids)
