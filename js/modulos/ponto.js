@@ -20,9 +20,20 @@ async function moduloPonto() {
   if (typeof empresaAtiva==='function' && empresaAtiva()) { const {data:_ea}=await sb.from('oct_empresas').select('nome').eq('id',empresaAtiva()).single(); if(_ea) window._pontoEmpresaNome=_ea.nome; }
 
   // funcionarios (para o filtro e para listar o quadro)
-  const { data: pessoas } = await sb.from('oct_pessoas')
+  // ERRO ≠ VAZIO (14/08): com o Supabase instável a consulta falhava e a tela
+  // dizia "nenhum funcionário" — mentira que já causou chamado. Erro agora
+  // aparece como erro, com botão de tentar de novo.
+  const { data: pessoas, error: erroPessoas } = await sb.from('oct_pessoas')
     .select('id,nome,classificacoes,tipo,ativo')
     .eq('empresa_id', empresaId).eq('ativo', true).order('nome');
+  if (erroPessoas) {
+    conteudo.innerHTML = `<div style="padding:26px;text-align:center">
+      <p style="color:#f87171;font-size:0.95rem">⚠ Não consegui consultar os funcionários (banco fora do ar ou instável).</p>
+      <p style="color:#888;font-size:0.8rem;margin:8px 0 16px">${pontoEsc(erroPessoas.message || '')}</p>
+      <button onclick="moduloPonto()" style="padding:10px 22px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">↻ Tentar de novo</button>
+    </div>`;
+    return;
+  }
   const funcionarios = (pessoas || []).filter(p => {
     const lista = Array.isArray(p.classificacoes) ? p.classificacoes : (p.tipo ? [p.tipo] : []);
     return lista.includes('funcionario');
