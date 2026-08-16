@@ -243,13 +243,23 @@ async function fcListar() {
   const { turnos, porTurno } = await fcCarregarDados();
   window._fcCache = { turnos, porTurno };
 
+  // TURNO DO DIA (pedido Ronan 15/08): a coluna "Turno" mostra a ordem DENTRO
+  // do dia (1, 2...) — "dia 14/08 06:11 turno 1" — e não o nº global (31, 32...),
+  // que continua na coluna Seq.
+  const ordemDia = {};
+  turnos.slice().sort((a, b) => String(a.aberto_em || '').localeCompare(String(b.aberto_em || '')))
+    .forEach(t => {
+      const dia = _fcData(t.aberto_em);
+      ordemDia[t.id] = (ordemDia[dia] = (ordemDia[dia] || 0) + 1);
+    });
+
   const linhas = turnos.map(t => {
     const d = porTurno[t.id] || {}; const rec = d.rec || {};
     const sit = String(t.status || '').toUpperCase();
     const corSit = sit.startsWith('ABERTO') ? '#c0392b' : '#127a2e';
     return `<tr onclick="fcDetalhe('${t.id}')" style="cursor:pointer" onmouseover="this.style.background='#1b2233'" onmouseout="this.style.background=''">
       <td class="fc-td">${t.numero ?? ''}</td>
-      <td class="fc-td">${t.numero ?? ''}</td>
+      <td class="fc-td" style="font-weight:600">${ordemDia[t.id] ?? ''}</td>
       <td class="fc-td">${fcEsc(t.operador) || ''}</td>
       <td class="fc-td">${_fcData(t.aberto_em)}</td>
       <td class="fc-td">${_fcHora(t.aberto_em)}</td>
@@ -399,7 +409,16 @@ function fcDetalhe(turnoId) {
 
       <div class="fc-cab">
         <div><label>Seq.:</label><input value="${t.numero ?? ''}" class="fc-inp2" readonly></div>
-        <div><label>Nº Turno:</label><input value="${t.numero ?? ''}" class="fc-inp2 mini" readonly></div>
+        ${(() => {
+          // TURNO DO DIA (pedido Ronan 15/08): "dia 14/08 06:11 a 14:19 turno 1".
+          // O nº global (31, 32...) não diz nada pro operador — o que importa é
+          // se foi o 1º ou 2º turno DAQUELE dia (ordem de abertura no dia).
+          const doDia = (cache.turnos || [])
+            .filter(x => _fcData(x.aberto_em) === _fcData(t.aberto_em))
+            .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+          const nDia = doDia.findIndex(x => x.id === t.id) + 1;
+          return `<div><label>Turno do dia:</label><input value="${nDia > 0 ? nDia + ' de ' + doDia.length : (t.numero ?? '')}" class="fc-inp2 mini" readonly></div>`;
+        })()}
         <div><label>Status:</label><input value="${fcEsc((t.status || '').toUpperCase())}" class="fc-inp2" readonly></div>
         <div><label>Abertura:</label><input value="${_fcData(t.aberto_em)}" class="fc-inp2 data" readonly></div>
         <div><label>Hora Aber.:</label><input value="${_fcHora(t.aberto_em)}" class="fc-inp2 mini" readonly></div>
