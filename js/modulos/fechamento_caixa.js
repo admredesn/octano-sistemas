@@ -610,6 +610,27 @@ function fcDetalhe(turnoId) {
               <div style="font-size:0.7rem;color:#667;margin-top:4px">Maquininha = recebimentos EDI/e-mail do período do turno. "Sem dados" = ingestão parada ou D-1 ainda não chegou.</div>
             </div>`;
           })()}
+          ${(() => {
+            // 🧾 MAQUININHA DO TURNO (pedido Ronan 15/08): o que o EDI/e-mail
+            // puxou DENTRO da janela do turno, total por forma+bandeira.
+            const maq = (d.receb_ext || []).filter(r => String(r.origem || '').toLowerCase().includes('pagbank'));
+            if (!maq.length) return '';
+            const por = {};
+            maq.forEach(r => {
+              const k = _fcRotForma(null, r.forma, r.bandeira);
+              por[k] = (por[k] || 0) + Number(r.valor || 0);
+            });
+            const linhas = Object.entries(por).sort((a, b) => b[1] - a[1])
+              .map(([k, v]) => `<div style="display:flex;justify-content:space-between"><span>${fcEsc(k)}</span><b>${fcMoney(v)}</b></div>`).join('');
+            const tot = maq.reduce((s, r) => s + Number(r.valor || 0), 0);
+            return `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px;cursor:pointer" onclick="fcNode('cartao')" title="Clique para ver transação a transação">
+              <div style="color:#7ea8d8;font-weight:700;font-size:0.82rem;margin-bottom:6px">🧾 Maquininha do turno (EDI/e-mail) — ${maq.length} transações</div>
+              <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
+                ${linhas}
+                <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span style="font-weight:700">Total maquininha</span><b style="color:#7ee2a0">${fcMoney(tot)}</b></div>
+              </div>
+            </div>`;
+          })()}
           <button class="fc-btn2" onclick="fcNode('demonstrativo')">📊 Demonstrativo do Caixa</button>
           <button class="fc-btn2" onclick="fcNode('encerrantes')">🔢 Encerrantes</button>
           <button class="fc-btn2" onclick="fcNode('itens')">📋 Rel. itens vendidos</button>
