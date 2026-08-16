@@ -118,27 +118,32 @@ async function fcCarregarDados() {
   // caixa/receb, que o NÚCLEO sincroniza) nunca é alterado — o ajuste vive
   // aqui e é aplicado ANTES das somas.
   window._fcConf = {};
+  let confRows = [];
   try {
     const rConf = await sb.from('oct_fc_lancamentos')
       .select('turno_id,ref_tipo,ref_id,conferido,ajuste').in('turno_id', ids);
-    (rConf.data || []).forEach(c => {
+    confRows = rConf.data || [];
+    confRows.forEach(c => {
       window._fcConf[c.ref_tipo + ':' + c.ref_id] = { conferido: !!c.conferido, ajuste: c.ajuste || null };
     });
   } catch (e) { /* tabela ainda não criada: tela segue sem conferência */ }
   const _aj = (tipo, id) => (window._fcConf[tipo + ':' + id] || {}).ajuste || null;
   ((fRes && fRes.data) || []).forEach(f => {
     const a = _aj('fila', f.id); if (!a) return;
+    if (a.excluido) { f._excluido = true; return; }
     if (a.valor != null) f.valor = a.valor;
     if (a.forma_nome) f.forma_nome = a.forma_nome;
     if (a.bandeira) f.bandeira = a.bandeira;
   });
   ((cRes && cRes.data) || []).forEach(m => {
     const a = _aj('caixa', m.id); if (!a) return;
+    if (a.excluido) { m._excluido = true; return; }
     if (a.valor != null) m.valor = a.valor;
     if (a.descricao) m.descricao = a.descricao;
   });
   ((rRes && rRes.data) || []).forEach(x => {
     const a = _aj('receb', x.id); if (!a) return;
+    if (a.excluido) { x._excluido = true; return; }
     if (a.valor != null) x.valor = a.valor;
     if (a.forma) x.forma = a.forma;
     if (a.bandeira) x.bandeira = a.bandeira;
@@ -176,6 +181,7 @@ async function fcCarregarDados() {
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
   ((fRes && fRes.data) || []).forEach(f => {
+    if (f._excluido) return;
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const litros = Number(f.litros || 0);
@@ -207,6 +213,7 @@ async function fcCarregarDados() {
     });
   });
   (cRes.data || []).forEach(m => {
+    if (m._excluido) return;
     const t = porTurno[m.turno_id]; if (!t) return;
     const tipo = String(m.tipo || '').toLowerCase(); const val = Number(m.valor || 0);
     if (tipo.includes('sangria')) t.sangria += val;
@@ -220,6 +227,7 @@ async function fcCarregarDados() {
   // NÃO entram no total de recebimentos do resultado (isso viria em dobro com os
   // cupons/fila); ficam como movimentação visível e conferência.
   ((rRes && rRes.data) || []).forEach(r => {
+    if (r._excluido) return;
     const tid = _turnoDe(r.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const origem = String(r.origem || '').toLowerCase();
     const forma = String(r.forma || '').toLowerCase();
@@ -247,6 +255,25 @@ async function fcCarregarDados() {
     t.titulos += Number(x.valor || 0);
     t.titulos_lst.push(x);
   });
+  // LANÇAMENTOS MANUAIS (botão ➕ Incluir do balão): entram nas somas do lado
+  // dos RECEBIMENTOS (revelam diferença contra as vendas — é essa a função) ou
+  // no movimento de caixa (despesa/suprimento/depósito/receita).
+  confRows.filter(c => c.ref_tipo === 'manual' && c.ajuste && !c.ajuste.excluido).forEach(c => {
+    const t = porTurno[c.turno_id]; if (!t) return;
+    const a = c.ajuste; const v = Number(a.valor || 0);
+    t.manuais = t.manuais || [];
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao });
+    const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
+    if (['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(a.secao) || ['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(g)) {
+      const chave = ['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(g) ? g : a.secao;
+      t.rec[chave] = (t.rec[chave] || 0) + v;
+    } else if (a.secao === 'despesa') t.despesa += v;
+    else if (a.secao === 'suprimento') t.suprimento += v;
+    else if (a.secao === 'deposito') t.deposito += v;
+    else if (a.secao === 'receita') t.receita += v;
+    else t.outrosCaixa += v;
+  });
+
   // ---- CONFERÊNCIA DE CAIXA FÍSICO (dinheiro esperado × contado) ----
   // Modelo TecnoX: Falta/Sobra de Caixa = dinheiro CONTADO na gaveta − dinheiro
   // ESPERADO pelo sistema. Só DINHEIRO (cartão/pix/prazo não entram na gaveta).
@@ -379,8 +406,6 @@ function fcDetalhe(turnoId) {
     ['Pix', rec.pix],
     ['Nota a prazo', rec.prazo],
     ['Cheque', rec.cheque],
-    ['Carta Frete', 0],
-    ['CTF', 0],
     ['Despesas', d.despesa, I],
     ['Deposito em Conta', d.deposito, I],
     ['Troco Final (líq.)', trocoNet, I],
@@ -468,9 +493,9 @@ function fcDetalhe(turnoId) {
           <ul>
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
-              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão', 'cartao')}${nodo('⚡ Pix', 'pix')}${nodo('📄 Nota a Prazo', 'prazo')}
+              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('📄 Nota a Prazo', 'prazo')}
               ${d.fila_total > 0.009 ? nodo('⏳ Fila de transmissão', 'fila') : ''}
-              ${nodo('CTF', 'ctf')}${nodo('🧾 Cheque', 'cheque')}${nodo('🚚 Carta Frete', 'carta_frete')}${nodo('👷 Vale Motorista', 'vale_motorista')}
+              ${nodo('🧾 Cheque', 'cheque')}
               ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
             <li>😊 Vales / Haver<ul>
@@ -611,17 +636,28 @@ async function fcNode(tipo) {
 // (overlay em oct_fc_lancamentos — o dado original nunca muda).
 // ============================================================
 window._fcLancBase = {};   // 'tipo:id' -> dados originais p/ o modal de edição
+window._fcSel = new Set(); // seleção em massa (checkbox — NÃO é o conferido)
 
-function _fcRow(refTipo, refId, tds, onclickRow) {
+// linha interativa: ☑ = MARCAR (seleção p/ ações em massa, azul); ESPAÇO ou os
+// botões Conferir = CONFERIDO (persistido, fica laranja). Igual ao TecnoX:
+// checkbox seleciona, espaço confere.
+function _fcRow(refTipo, refId, tds, btnDetalhe) {
   const k = refTipo + ':' + refId;
   const conf = (window._fcConf && window._fcConf[k] || {}).conferido;
   const aj = (window._fcConf && window._fcConf[k] || {}).ajuste;
-  return `<tr tabindex="0" data-fcref="${k}" class="${conf ? 'fc-confrow' : ''}"
-      onkeydown="fcRefKey(event,this)" ${onclickRow ? `onclick="${onclickRow}"` : ''} style="${onclickRow ? 'cursor:pointer' : ''}">
-    <td class="fc-td" style="width:26px;text-align:center"><input type="checkbox" ${conf ? 'checked' : ''}
-      onclick="event.stopPropagation();fcRefToggle('${refTipo}','${refId}',this.closest('tr'))"></td>
+  const sel = window._fcSel.has(k);
+  return `<tr tabindex="0" data-fcref="${k}" class="${conf ? 'fc-confrow' : ''}${sel ? ' fc-selrow' : ''}"
+      onkeydown="fcRefKey(event,this)" onclick="this.focus()">
+    <td class="fc-td" style="width:26px;text-align:center"><input type="checkbox" ${sel ? 'checked' : ''}
+      onclick="event.stopPropagation();fcSelToggle('${k}',this)"></td>
     ${tds}
-    <td class="fc-td" style="width:30px">${aj ? '<span title="lançamento editado" style="color:#f0b45c">✎</span>' : ''}<button class="fc-btn mini" title="Editar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button></td></tr>`;
+    <td class="fc-td" style="width:60px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button></td></tr>`;
+}
+
+function fcSelToggle(k, cb) {
+  if (window._fcSel.has(k)) window._fcSel.delete(k); else window._fcSel.add(k);
+  const tr = cb.closest('tr');
+  if (tr) tr.classList.toggle('fc-selrow', window._fcSel.has(k));
 }
 
 function fcRefKey(ev, tr) {
@@ -637,15 +673,16 @@ function fcRefKey(ev, tr) {
   }
 }
 
+function _fcConfPintar(tr, conferido) {
+  if (!tr) return;
+  tr.classList.toggle('fc-confrow', conferido);
+}
+
 async function fcRefToggle(refTipo, refId, tr) {
   const k = refTipo + ':' + refId;
   const cur = window._fcConf[k] = window._fcConf[k] || {};
   cur.conferido = !cur.conferido;
-  if (tr) {
-    tr.classList.toggle('fc-confrow', cur.conferido);
-    const cb = tr.querySelector('input[type=checkbox]');
-    if (cb) cb.checked = cur.conferido;
-  }
+  _fcConfPintar(tr || document.querySelector(`tr[data-fcref="${k}"]`), cur.conferido);
   try {
     await sb.from('oct_fc_lancamentos').upsert({
       empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
@@ -655,6 +692,193 @@ async function fcRefToggle(refTipo, refId, tr) {
   } catch (e) {
     alert('Não salvou a conferência: ' + (e.message || e) + '\n\n→ Rode o SQL-FC-LANCAMENTOS.sql no Supabase.');
   }
+}
+
+// ---- BARRA DE AÇÕES (modelo TecnoX): presente em toda lista de lançamentos ----
+function _fcToolbar() {
+  return `<div class="fc-filtros" style="gap:5px">
+    <button class="fc-btn mini" onclick="fcSelTodos(true)">☑ Marcar</button>
+    <button class="fc-btn mini" onclick="fcSelTodos(false)">☐ Desmarcar</button>
+    <span class="fc-sep"></span>
+    <button class="fc-btn mini" onclick="fcLancIncluir()">➕ Incluir</button>
+    <button class="fc-btn mini" onclick="fcLancAlterar()">✎ Alterar</button>
+    <button class="fc-btn mini" onclick="fcLancExcluir(false)">❌ Excluir</button>
+    <button class="fc-btn mini" onclick="fcLancExcluir(true)">❌ Excluir marcados</button>
+    <span class="fc-sep"></span>
+    <button class="fc-btn mini" onclick="fcConfEspaco()">☑ Conferir/Desconferir (Espaço)</button>
+    <button class="fc-btn mini" style="border-color:#2a5a3a;color:#7be0a0" onclick="fcConfTodos(true)">✔ Conferir todas (F9)</button>
+    <button class="fc-btn mini" style="border-color:#7a2a2a;color:#f0a0a0" onclick="fcConfTodos(false)">✖ Desconferir todas (F10)</button>
+  </div>`;
+}
+
+function _fcRodape(n, total) {
+  return `<div class="fc-filtros" style="justify-content:flex-end;gap:10px;border-top:1px solid #2a2d3e;border-bottom:none">
+    <span>Nº de títulos: <b style="color:#e5e7eb">${n}</b></span>
+    <span>Total: <b style="background:#10231a;border:1px solid #245a35;border-radius:5px;padding:2px 10px;color:#7ee2a0">${fcMoney(total)}</b></span>
+  </div>`;
+}
+
+function fcSelTodos(v) {
+  document.querySelectorAll('#fc-modal tr[data-fcref]').forEach(tr => {
+    const k = tr.dataset.fcref;
+    if (v) window._fcSel.add(k); else window._fcSel.delete(k);
+    tr.classList.toggle('fc-selrow', v);
+    const cb = tr.querySelector('input[type=checkbox]');
+    if (cb) cb.checked = v;
+  });
+}
+
+// conferir/desconferir a linha focada; sem foco, aplica nos MARCADOS
+function fcConfEspaco() {
+  const foco = document.activeElement && document.activeElement.closest && document.activeElement.closest('tr[data-fcref]');
+  const alvos = foco ? [foco]
+    : [...document.querySelectorAll('#fc-modal tr[data-fcref]')].filter(tr => window._fcSel.has(tr.dataset.fcref));
+  if (!alvos.length) { alert('Clique numa linha (ou marque ☑) antes de conferir.'); return; }
+  alvos.forEach(tr => {
+    const k = tr.dataset.fcref; const i = k.indexOf(':');
+    fcRefToggle(k.slice(0, i), k.slice(i + 1), tr);
+  });
+}
+
+// F9/F10 — conferir/desconferir TODAS as linhas do modal aberto (upsert em lote)
+async function fcConfTodos(v) {
+  const rows = [...document.querySelectorAll('#fc-modal tr[data-fcref]')];
+  if (!rows.length) return;
+  const payload = rows.map(tr => {
+    const k = tr.dataset.fcref; const i = k.indexOf(':');
+    const cur = window._fcConf[k] = window._fcConf[k] || {};
+    cur.conferido = v;
+    _fcConfPintar(tr, v);
+    return {
+      empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+      ref_tipo: k.slice(0, i), ref_id: k.slice(i + 1), conferido: v,
+      conferido_em: new Date().toISOString(), ajuste: cur.ajuste || null,
+    };
+  });
+  try {
+    await sb.from('oct_fc_lancamentos').upsert(payload, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+  } catch (e) {
+    alert('Não salvou: ' + (e.message || e));
+  }
+}
+
+// F9/F10 funcionam com o modal aberto (registrado uma vez)
+if (!window._fcTeclasOk) {
+  window._fcTeclasOk = true;
+  document.addEventListener('keydown', (ev) => {
+    if (!document.getElementById('fc-modal')) return;
+    if (ev.key === 'F9') { ev.preventDefault(); fcConfTodos(true); }
+    else if (ev.key === 'F10') { ev.preventDefault(); fcConfTodos(false); }
+  });
+}
+
+// INCLUIR lançamento manual na seção aberta (vira ref_tipo='manual' e SOMA no fechamento)
+function fcLancIncluir() {
+  const secao = window._fcNodeAtual || 'dinheiro';
+  const formas = ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
+  fcModal('➕ Incluir lançamento', `
+    <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
+      <p style="color:#888;font-size:0.75rem;margin-bottom:10px">Lançamento manual na seção <b>${fcEsc(secao)}</b> — entra nas somas do fechamento (auditável como manual).</p>
+      <label style="display:block;color:#9aa;font-size:0.75rem">Valor (R$) *</label>
+      <input id="fcm-valor" type="number" step="0.01" class="fc-inp2" style="width:140px">
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
+      <select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
+      <input id="fcm-bandeira" class="fc-inp2" style="width:200px" placeholder="Visa, Master, Elo...">
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
+      <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
+      <button class="fc-btn azul" style="width:100%;margin-top:14px" onclick="fcLancIncluirSalvar('${secao}')">💾 Incluir</button>
+    </div>`);
+}
+
+async function fcLancIncluirSalvar(secao) {
+  const valor = parseFloat(document.getElementById('fcm-valor').value);
+  if (isNaN(valor) || valor <= 0) { alert('Informe o valor.'); return; }
+  const ajuste = {
+    manual: true, secao, valor,
+    forma_nome: document.getElementById('fcm-forma').value,
+    bandeira: document.getElementById('fcm-bandeira').value.trim() || null,
+    descricao: document.getElementById('fcm-desc').value.trim() || null,
+  };
+  const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+  const { error } = await sb.from('oct_fc_lancamentos').insert({
+    empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+    ref_tipo: 'manual', ref_id: refId, conferido: false, ajuste,
+  });
+  if (error) { alert('Erro: ' + error.message); return; }
+  await _fcRecarregarNode();
+}
+
+// ALTERAR: 1 marcado ou a linha focada
+function fcLancAlterar() {
+  const marcados = [...window._fcSel];
+  let k = null;
+  if (marcados.length === 1) k = marcados[0];
+  else {
+    const foco = document.activeElement && document.activeElement.closest && document.activeElement.closest('tr[data-fcref]');
+    if (foco) k = foco.dataset.fcref;
+  }
+  if (!k) { alert('Marque UM lançamento (☑) ou clique na linha antes de alterar.'); return; }
+  const i = k.indexOf(':');
+  fcLancEditar(k.slice(0, i), k.slice(i + 1));
+}
+
+// EXCLUIR: manual = apaga de vez; original = overlay "excluído" (sai das somas,
+// o dado do núcleo continua intacto e dá pra desfazer no ✎)
+async function fcLancExcluir(marcados) {
+  let alvos = [];
+  if (marcados) alvos = [...window._fcSel];
+  else {
+    const foco = document.activeElement && document.activeElement.closest && document.activeElement.closest('tr[data-fcref]');
+    if (foco) alvos = [foco.dataset.fcref];
+  }
+  alvos = alvos.filter(k => !k.startsWith('venda:'));   // cupom transmitido não se exclui daqui (é fiscal)
+  if (!alvos.length) { alert('Marque (☑) ou clique num lançamento excluível.\n(Cupom já transmitido não se exclui — é documento fiscal.)'); return; }
+  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez; os demais ficam marcados como excluídos (dá pra desfazer no ✎).`)) return;
+  for (const k of alvos) {
+    const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
+    try {
+      if (refTipo === 'manual') {
+        await sb.from('oct_fc_lancamentos').delete()
+          .eq('empresa_id', window._fcEmpresaId).eq('turno_id', window._fcTurnoAtual)
+          .eq('ref_tipo', 'manual').eq('ref_id', refId);
+        delete window._fcConf[k];
+      } else {
+        const cur = window._fcConf[k] = window._fcConf[k] || {};
+        cur.ajuste = Object.assign({}, cur.ajuste || {}, { excluido: true });
+        await sb.from('oct_fc_lancamentos').upsert({
+          empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+          ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido, ajuste: cur.ajuste,
+        }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+      }
+    } catch (e) { alert('Erro ao excluir: ' + (e.message || e)); return; }
+  }
+  window._fcSel.clear();
+  await _fcRecarregarNode();
+}
+
+// recarrega os dados e reabre o mesmo balão
+async function _fcRecarregarNode() {
+  const node = window._fcNodeAtual;
+  const { turnos, porTurno } = await fcCarregarDados();
+  window._fcCache = { turnos, porTurno };
+  fcDetalhe(window._fcTurnoAtual);
+  if (node) fcNode(node);
+}
+
+// rótulo completo forma+bandeira ("Crédito Mastercard", "Débito Elo", "Pix")
+function _fcRotForma(formaNome, forma, bandeira) {
+  let f = String(formaNome || '').trim();
+  const cod = String(forma || '').padStart(2, '0');
+  const low = (f + ' ' + String(forma || '')).toLowerCase();
+  if (/créd|cred/.test(low) || cod === '03') f = 'Crédito';
+  else if (/déb|deb/.test(low) || cod === '04') f = 'Débito';
+  else if (/pix/.test(low) || ['17', '18', '19'].includes(cod)) f = 'Pix';
+  else if (/dinheiro/.test(low) || cod === '01') f = 'Dinheiro';
+  else if (!f || f === 'Cartão') f = 'Cartão';
+  const b = String(bandeira || '').trim();
+  const bCap = b ? b.charAt(0).toUpperCase() + b.slice(1).toLowerCase() : '';
+  return (f + (bCap ? ' ' + bCap : '')).trim();
 }
 
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
@@ -853,9 +1077,10 @@ async function fcNodeDetalhe(tipo) {
         <button class="fc-btn azul" onclick="fcTrocoSalvar('${campo}')">💾 Salvar</button>
         <p style="color:#667;font-size:0.72rem;margin-top:6px">Editar aqui corrige o turno — a conferência de gaveta (esperado × contado) recalcula na hora.</p>
         ${tipo === 'suprimento' ? (linhas.length
-          ? `<div style="color:#f97316;font-weight:700;font-size:0.8rem;margin:12px 0 4px">Suprimentos avulsos do caixa</div>
-             <table class="fc-grid"><thead><tr><th></th><th>Hora</th><th>Descrição</th><th>Valor</th><th></th></tr></thead><tbody>${linhas.join('')}</tbody></table>`
-          : '<p style="color:#777;margin-top:12px">Nenhum suprimento avulso lançado neste caixa.</p>') : ''}
+          ? `<div style="color:#f97316;font-weight:700;font-size:0.8rem;margin:12px 0 4px">Suprimentos avulsos do caixa</div>`
+            + _fcToolbar()
+            + `<table class="fc-grid"><thead><tr><th></th><th>Hora</th><th>Descrição</th><th>Valor</th><th></th></tr></thead><tbody>${linhas.join('')}</tbody></table>`
+          : '<p style="color:#777;margin-top:12px">Nenhum suprimento avulso lançado neste caixa (use ➕ Incluir no balão Despesas/Depósito se precisar lançar).</p>') : ''}
       </div>`);
     return;
   }
@@ -876,14 +1101,30 @@ async function fcNodeDetalhe(tipo) {
       : Promise.resolve({ data: [] }),
   ];
   const [rV, rC, rR] = await Promise.all(pedidos);
+  // aplica o overlay do gerente (ajuste/excluído) também nas consultas frescas
+  const _apl = (arr, tipoRef) => (arr || []).filter(x => {
+    const a = ((window._fcConf || {})[tipoRef + ':' + x.id] || {}).ajuste;
+    if (a) {
+      if (a.excluido) return false;
+      if (a.valor != null) x.valor = a.valor;
+      if (a.forma_nome) x.forma = a.forma_nome;
+      if (a.bandeira) x.bandeira = a.bandeira;
+      if (a.descricao) x.descricao = a.descricao;
+    }
+    return true;
+  });
+  rC.data = _apl(rC.data, 'caixa');
+  rR.data = _apl(rR.data, 'receb');
+
   const secoes = [];
+  let listaN = 0, listaTot = 0;   // rodapé: nº de títulos + total do balão
   const tab = (cab, linhas, rodape) => `<table class="fc-grid"><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead>
     <tbody>${linhas.join('')}${rodape || ''}</tbody></table>`;
   const stit = txt => `<div style="padding:10px 4px 4px;color:#f97316;font-weight:700;font-size:0.82rem">${txt}</div>`;
 
-  // filtro de BANDEIRA (cartão): estado em window._fcNodeBand, re-renderiza o nó
+  // filtro FORMA+BANDEIRA (cartão): "Crédito Mastercard", "Débito Elo", "Pix"...
   const band = (cfg.filtroBandeira && window._fcNodeBand) || '';
-  const fBand = (x) => !band || String(x.bandeira || '') === band;
+  const fBand = (x) => !band || _fcRotForma(x.forma_nome, x.forma, x.bandeira) === band;
 
   // 1) CUPONS pagos na(s) forma(s)
   if (cfg.formas && cfg.formas.length) {
@@ -898,6 +1139,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
         <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`));
     }));
+    listaN += linhas.length; listaTot += total;
     secoes.push(stit(`Cupons do caixa (${linhas.length})`));
     secoes.push(linhas.length
       ? tab(['', 'Cupom', 'Hora', tipo === 'prazo' ? 'Cliente' : 'Vendedor/Cliente', 'Valor', ''], linhas,
@@ -920,9 +1162,10 @@ async function fcNodeDetalhe(tipo) {
         return _fcRow('fila', f.id, `<td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
           <td class="fc-td">${f.bico ?? '—'}</td>
           <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
-          <td class="fc-td">${fcEsc(f.forma_nome || f.forma) || '—'}${f.bandeira ? ' ' + fcEsc(f.bandeira) : ''}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(vf)}</td>`);
       });
+      listaN += fsFila.length; listaTot += totF;
       secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
       secoes.push(tab(['', 'Combustível/Produto', 'Bico', 'Litros', 'Forma', 'Valor', ''], linF,
         `<tr><td class="fc-td" colspan="5"><b>Total na fila</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totF)}</b></td></tr>`));
@@ -939,6 +1182,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     });
     const total = ms.reduce((s, m) => s + Number(m.valor || 0), 0);
+    listaN += ms.length; listaTot += total;
     secoes.push(stit(`${tipo === 'dinheiro' ? 'Sangrias (valores retirados/depositados)' : cfg.titulo} — ${ms.length} lançamento(s)`));
     secoes.push(ms.length
       ? tab(['', 'Hora', 'Descrição', 'Forma', 'Valor', ''], linhas,
@@ -953,8 +1197,7 @@ async function fcNodeDetalhe(tipo) {
     const linhas = rs.map(r => {
       window._fcLancBase['receb:' + r.id] = { rotulo: 'Maquininha ' + (r.bandeira || r.forma || ''), valor: r.valor, forma_nome: r.forma, bandeira: r.bandeira };
       return _fcRow('receb', r.id, `<td class="fc-td">${_fcHora(r.recebido_em)}</td>
-        <td class="fc-td">${fcEsc(r.forma) || '—'}</td>
-        <td class="fc-td">${fcEsc(r.bandeira) || '—'}</td>
+        <td class="fc-td">${fcEsc(_fcRotForma(null, r.forma, r.bandeira)) || '—'}</td>
         <td class="fc-td fc-r">${r.parcelas > 1 ? r.parcelas + 'x' : '—'}</td>
         <td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
@@ -967,10 +1210,11 @@ async function fcNodeDetalhe(tipo) {
     const resumo = Object.entries(porBand).sort((a, b) => b[1].total - a[1].total)
       .map(([b, x]) => `<tr><td class="fc-td">${fcEsc(b)}</td><td class="fc-td fc-r">${x.qtd}</td><td class="fc-td fc-r">${fcMoney(x.total)}</td></tr>`);
     const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
+    listaN += rs.length; listaTot += total;
     secoes.push(stit(`Maquininha — ${rs.length} transação(ões) no período do turno`));
     secoes.push(rs.length
-      ? tab(['', 'Hora', 'Forma', 'Bandeira', 'Parc.', 'Valor', ''], linhas,
-            `<tr><td class="fc-td" colspan="5"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
+      ? tab(['', 'Hora', 'Forma/Bandeira', 'Parc.', 'Valor', ''], linhas,
+            `<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
         + stit('Resumo por bandeira')
         + tab(['Bandeira', 'Qtd', 'Total'], resumo)
       : '<p style="padding:6px 8px;color:#777">Sem transações da maquininha no período (EDI/e-mail parado ou D-1 ainda não chegou).</p>');
@@ -987,6 +1231,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td">${fcEsc(r.origem) || 'cofre'}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
     const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
+    listaN += rs.length; listaTot += total;
     secoes.push(stit(`Depósitos (cofre/sangria) — ${rs.length}`));
     secoes.push(rs.length
       ? tab(['', 'Hora', 'Origem', 'Valor', ''], linhas,
@@ -994,24 +1239,63 @@ async function fcNodeDetalhe(tipo) {
       : '<p style="padding:6px 8px;color:#777">Nenhum depósito no período do turno.</p>');
   }
 
-  // barra do filtro de bandeira (cartão) no topo
+  // LANÇAMENTOS MANUAIS desta seção (botão ➕ Incluir)
+  {
+    const gruposNode = cfg.grupos || [tipo];
+    const mans = (((cache.porTurno || {})[turnoId] || {}).manuais || [])
+      .filter(m => m.secao === tipo || gruposNode.includes(m.secao) ||
+                   gruposNode.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
+    if (mans.length) {
+      let totM = 0;
+      const linM = mans.map(m => {
+        totM += Number(m.valor || 0);
+        window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
+        return _fcRow('manual', m.id, `<td class="fc-td">✍ manual</td>
+          <td class="fc-td">${fcEsc(m.descricao) || '—'}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
+          <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
+      });
+      listaN += mans.length; listaTot += totM;
+      secoes.push(stit(`✍ Lançamentos manuais (${mans.length})`));
+      secoes.push(tab(['', 'Origem', 'Descrição', 'Forma', 'Valor', ''], linM,
+        `<tr><td class="fc-td" colspan="4"><b>Total manual</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totM)}</b></td></tr>`));
+    }
+  }
+
+  // DINHEIRO: resumo do que o sistema registrou em espécie + de onde vêm os depósitos
+  if (tipo === 'dinheiro') {
+    const d0d = (cache.porTurno || {})[turnoId] || {};
+    secoes.unshift(`<div style="padding:10px 12px;font-size:0.82rem;color:#cdd6e0;border-bottom:1px solid #2a2d3e">
+      💵 Dinheiro recebido na pista (sistema): <b style="color:#7ee2a0">${fcMoney((d0d.rec || {}).dinheiro)}</b>
+      <span style="color:#667;font-size:0.72rem;margin-left:8px">— o detalhe venda a venda fica em 📑 Cupons Fiscais; aqui entram os DEPÓSITOS (sangria/cofre). Depósito automático Brink's aparece quando a integração do cofre estiver ligada.</span>
+    </div>`);
+  }
+
+  // filtro FORMA+BANDEIRA (cartão) — nomes completos: "Crédito Mastercard"...
   if (cfg.filtroBandeira) {
     const d0b = (cache.porTurno || {})[turnoId] || {};
-    const todasBand = [...new Set(
-      (d0b.fila_itens || []).map(f => f.bandeira).concat(((rR && rR.data) || []).map(r => r.bandeira)).filter(Boolean)
+    const gruposNode = cfg.grupos || [tipo];
+    const combos = [...new Set(
+      (d0b.fila_itens || []).filter(f => gruposNode.includes(_fcGrupoNome(f.forma_nome, f.forma)))
+        .map(f => _fcRotForma(f.forma_nome, f.forma, f.bandeira))
+        .concat(((rR && rR.data) || []).map(r => _fcRotForma(null, r.forma, r.bandeira)))
+        .filter(Boolean)
     )].sort();
-    if (todasBand.length) {
-      secoes.unshift(`<div class="fc-filtros"><label>Bandeira:</label>
-        <select class="fc-inp2" onchange="window._fcNodeBand=this.value;fcNodeDetalhe('${tipo}')">
+    if (combos.length) {
+      secoes.unshift(`<div class="fc-filtros"><label>Forma/Bandeira:</label>
+        <select class="fc-inp2" style="width:200px" onchange="window._fcNodeBand=this.value;fcNodeDetalhe('${tipo}')">
           <option value="">Todas</option>
-          ${todasBand.map(b => `<option value="${fcEsc(b)}" ${band === b ? 'selected' : ''}>${fcEsc(b)}</option>`).join('')}
+          ${combos.map(b => `<option value="${fcEsc(b)}" ${band === b ? 'selected' : ''}>${fcEsc(b)}</option>`).join('')}
         </select>
-        <span style="color:#667">☑ clique/ESPAÇO = conferido (muda de cor) · ✎ = editar</span></div>`);
+        <span style="color:#667">☑ marca · ESPAÇO confere (muda de cor) · ✎ altera</span></div>`);
     }
   }
 
   if (!secoes.length)
     secoes.push('<p style="padding:24px;color:#777">Sem lançamentos deste tipo neste caixa (o octano ainda não movimenta esta categoria).</p>');
+  // barra de ações no topo + rodapé com contador/total (modelo TecnoX)
+  secoes.unshift(_fcToolbar());
+  secoes.push(_fcRodape(listaN, listaTot));
   fcModal(cfg.titulo, secoes.join(''));
 }
 
@@ -1217,7 +1501,7 @@ function _fcCuponsRender() {
       <td class="fc-td">${x.origem}</td>`, `fcCupomVer('${x.ref}','${x.id}')`);
   });
   const total = lista.reduce((s, x) => s + x.valor, 0);
-  fcModal(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, `
+  fcModal(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, _fcToolbar() + `
     <div class="fc-filtros">
       <label>Forma:</label>
       <select class="fc-inp2" onchange="window._fcCuponsFiltro.forma=this.value;_fcCuponsRender()">
@@ -1233,10 +1517,11 @@ function _fcCuponsRender() {
       </select>
       <input class="fc-inp2" placeholder="buscar cliente/vendedor..." value="${fcEsc(f.busca)}"
         oninput="window._fcCuponsFiltro.busca=this.value;clearTimeout(window._fcCupT);window._fcCupT=setTimeout(_fcCuponsRender,300)">
-      <span style="color:#667">clique = abrir venda · ☑/ESPAÇO = conferido · ✎ = editar</span>
+      <span style="color:#667">🔎 abre a venda · ☑ marca · ESPAÇO confere · ✎ altera</span>
     </div>
     <table class="fc-grid"><thead><tr><th></th><th>Seq.</th><th>Hora</th><th>Cliente/Vendedor</th><th>Forma</th><th>Desc.</th><th>Valor</th><th>Origem</th><th></th></tr></thead>
-    <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`);
+    <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`
+    + _fcRodape(lista.length, total));
 }
 
 // abre UMA venda/abastecimento com os dados completos
@@ -1406,6 +1691,8 @@ function _fcEstilo() {
   .fc-inp3{border:1px solid #2a2d3e;border-radius:6px;padding:4px 7px;font-size:11px;text-align:right;background:#0b0d14;color:#cdd6e0;width:100%;box-sizing:border-box}
   .fc-confrow{background:#3a2712 !important;outline:none}
   .fc-confrow td{color:#f0b45c !important}
+  .fc-selrow{background:#12263d !important}
+  .fc-selrow td{color:#9cc4f0}
   tr[data-fcref]:focus{outline:1px solid #f97316;outline-offset:-1px}
   .fc-filtros{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#141824;border-bottom:1px solid #2a2d3e;font-size:11px;color:#9aa}
   #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998}
