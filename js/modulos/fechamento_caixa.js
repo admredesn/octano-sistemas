@@ -54,6 +54,18 @@ async function moduloFCaixa() {
   await fcListar();
 }
 
+// ---- FUSO: os dois relógios do sistema (ver comentário nas janelas) ----
+// turno (aberto_em/fechado_em): UTC verdadeiro → parseia direto.
+function _fcTsUtc(s) { return s ? new Date(s).getTime() : 0; }
+// fila/recebimentos: hora LOCAL com +00:00 falso carimbado pelo Postgres →
+// tira o sufixo e parseia como hora local do navegador.
+function _fcTsLocal(s) {
+  if (!s) return 0;
+  const semTz = String(s).replace(/(\+00:?00|Z)$/, '');
+  const t = new Date(semTz).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
 // Busca TODAS as páginas de uma consulta (o PostgREST corta em 1000 linhas por
 // request — era isso que zerava os turnos a partir de 10/08: a fila do período
 // passava de 1000 itens e os últimos dias ficavam de fora). fazQuery é uma
@@ -83,11 +95,16 @@ async function fcCarregarDados() {
   if (!lista.length) return { turnos: [], porTurno: {} };
   const ids = lista.map(t => t.id);
   // janela total do período p/ o que NÃO tem turno_id (recebimentos por horário)
-  const janIni = lista.reduce((m, t) => t.aberto_em && t.aberto_em < m ? t.aberto_em : m, ate);
-  const janFim = lista.reduce((m, t) => {
+  const janIni0 = lista.reduce((m, t) => t.aberto_em && t.aberto_em < m ? t.aberto_em : m, ate);
+  const janFim0 = lista.reduce((m, t) => {
     const f = t.fechado_em || new Date().toISOString();
     return f > m ? f : m;
   }, de);
+  // ±6h de folga na CONSULTA: fila/receb têm +00:00 falso (hora local gravada
+  // como UTC), então o filtro do servidor cortaria a borda — a atribuição fina
+  // ao turno é feita no cliente pela régua de época (_fcTsLocal).
+  const janIni = new Date(_fcTsUtc(janIni0) - 6 * 3600e3).toISOString();
+  const janFim = new Date(_fcTsUtc(janFim0) + 6 * 3600e3).toISOString();
   const [vRes, cRes, fRes, rRes, vlRes, tRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
@@ -162,21 +179,29 @@ async function fcCarregarDados() {
     receb_ext: [], receb_ext_cartao: 0, receb_ext_pix: 0, receb_ext_cofre: 0,
     titulos: 0, titulos_lst: [],
   });
-  // janela de cada turno, p/ atribuir recebimentos e fila por horário
-  const janelas = lista.map(t => ({ id: t.id, ini: t.aberto_em, fim: t.fechado_em || new Date().toISOString() }));
-  const janOrd = janelas.slice().sort((a, b) => String(a.ini || '').localeCompare(String(b.ini || '')));
+  // janela de cada turno, p/ atribuir recebimentos e fila por horário.
+  // FUSO (15/08): o turno grava em UTC verdadeiro (+00:00 correto), mas fila/
+  // recebimentos vêm do núcleo SEM fuso (hora local) e o Postgres carimba um
+  // +00:00 FALSO neles. Comparar string com string deslocava tudo em 3h (a
+  // "madrugada sumida" do dia 13 e depósito caindo no turno errado). Régua nova:
+  // época real — turno parseia como UTC; fila/receb tiram o +00:00 mentiroso e
+  // parseiam como hora LOCAL do navegador (postos todos em UTC-3, sem DST).
+  const janelas = lista.map(t => ({ id: t.id, ini: _fcTsUtc(t.aberto_em), fim: t.fechado_em ? _fcTsUtc(t.fechado_em) : Date.now() }));
+  const janOrd = janelas.slice().sort((a, b) => a.ini - b.ini);
   const _turnoDe = (iso) => {
-    if (!iso) return null;
-    const j = janelas.find(x => x.ini && iso >= x.ini && iso <= x.fim);
+    const ts = _fcTsLocal(iso);
+    if (!ts) return null;
+    const j = janelas.find(x => x.ini && ts >= x.ini && ts <= x.fim);
     return j ? j.id : null;
   };
   // FILA: janela exata; se cair num vão (bomba liberada com caixa fechado), joga
   // no PRÓXIMO turno que abrir (decisão do Ronan 12/08). Sem próximo → último.
   const _turnoFila = (iso) => {
-    if (!iso) return janOrd.length ? janOrd[janOrd.length - 1].id : null;
-    const dentro = janOrd.find(x => x.ini && iso >= x.ini && iso <= x.fim);
+    const ts = _fcTsLocal(iso);
+    if (!ts) return janOrd.length ? janOrd[janOrd.length - 1].id : null;
+    const dentro = janOrd.find(x => x.ini && ts >= x.ini && ts <= x.fim);
     if (dentro) return dentro.id;
-    const prox = janOrd.find(x => x.ini && x.ini > iso);
+    const prox = janOrd.find(x => x.ini && x.ini > ts);
     if (prox) return prox.id;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
@@ -1086,8 +1111,11 @@ async function fcNodeDetalhe(tipo) {
   }
 
   // consultas do turno (vendas por forma, movimentos de caixa, maquininha/cofre no período)
+  // Régua de fuso (15/08): consulta larga (±6h, o +00:00 dos receb é falso) e
+  // corte fino no cliente pela época local (_fcTsLocal) contra o turno em UTC.
   const eid = window._fcEmpresaId;
-  const ini = t.aberto_em, fim = t.fechado_em || new Date().toISOString();
+  const iniE = _fcTsUtc(t.aberto_em), fimE = t.fechado_em ? _fcTsUtc(t.fechado_em) : Date.now();
+  const ini = new Date(iniE - 6 * 3600e3).toISOString(), fim = new Date(fimE + 6 * 3600e3).toISOString();
   const pedidos = [
     (cfg.formas && cfg.formas.length)
       ? sb.from('oct_pdv_vendas').select('id,numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,status').eq('turno_id', turnoId).order('data_venda')
@@ -1114,7 +1142,8 @@ async function fcNodeDetalhe(tipo) {
     return true;
   });
   rC.data = _apl(rC.data, 'caixa');
-  rR.data = _apl(rR.data, 'receb');
+  rR.data = _apl(rR.data, 'receb')
+    .filter(r => { const ts = _fcTsLocal(r.recebido_em); return ts >= iniE && ts <= fimE; });
 
   const secoes = [];
   let listaN = 0, listaTot = 0;   // rodapé: nº de títulos + total do balão
