@@ -957,7 +957,16 @@ function _fcEstilo() {
   .fc-inp2{border:1px solid #2a2d3e;border-radius:6px;padding:5px 8px;font-size:11px;background:#0b0d14;color:#e5e7eb;width:120px}
   .fc-inp2.mini{width:66px}.fc-inp2.data{width:92px}.fc-inp2.lg{width:240px}
   .fc-corpo{display:grid;grid-template-columns:220px 1fr 1fr 320px;gap:1px;background:#2a2d3e}
-  .fc-tree{background:#0f1119;padding:10px;overflow:auto;max-height:62vh}
+  /* TELA DO POSTO (15/08): sem rolagem interna na árvore (rolava dentro de
+     rolagem = 3 barras) e, em tela menor, o painel desce pra baixo das colunas
+     ocupando a largura toda — sem ele de "régua" na vertical, as colunas param
+     de esticar e some o vão preto no fim da árvore. */
+  @media (max-width:1500px){
+    .fc-corpo{grid-template-columns:200px 1fr 1fr}
+    .fc-painel{grid-column:1/-1;column-width:320px;column-gap:14px}
+    .fc-painel>*{break-inside:avoid;margin-bottom:8px}
+  }
+  .fc-tree{background:#0f1119;padding:10px}
   .fc-tree ul{list-style:none;margin:0;padding-left:15px}
   .fc-tree>ul{padding-left:2px}
   .fc-tree li{padding:3px 0;color:#c1cad6;line-height:1.5}
