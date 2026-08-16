@@ -317,7 +317,7 @@ async function fcListar() {
     const corSit = sit.startsWith('ABERTO') ? '#c0392b' : '#127a2e';
     return `<tr onclick="fcDetalhe('${t.id}')" style="cursor:pointer" onmouseover="this.style.background='#1b2233'" onmouseout="this.style.background=''">
       <td class="fc-td">${t.numero ?? ''}</td>
-      <td class="fc-td" style="font-weight:600">${ordemDia[t.id] ?? ''}</td>
+      <td class="fc-td" style="font-weight:600">${ordemDia[t.id] ? ordemDia[t.id] + 'º' : ''}</td>
       <td class="fc-td">${fcEsc(t.operador) || ''}</td>
       <td class="fc-td">${_fcData(t.aberto_em)}</td>
       <td class="fc-td">${_fcHora(t.aberto_em)}</td>
@@ -473,7 +473,7 @@ function fcDetalhe(turnoId) {
             .filter(x => _fcData(x.aberto_em) === _fcData(t.aberto_em))
             .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
           const nDia = doDia.findIndex(x => x.id === t.id) + 1;
-          return `<div><label>Turno do dia:</label><input value="${nDia > 0 ? nDia + ' de ' + doDia.length : (t.numero ?? '')}" class="fc-inp2 mini" readonly></div>`;
+          return `<div><label>Turno do dia:</label><input value="${nDia > 0 ? nDia + 'º turno' : (t.numero ?? '')}" class="fc-inp2 mini" readonly></div>`;
         })()}
         <div><label>Status:</label><input value="${fcEsc((t.status || '').toUpperCase())}" class="fc-inp2" readonly></div>
         <div><label>Abertura:</label><input value="${_fcData(t.aberto_em)}" class="fc-inp2 data" readonly></div>
