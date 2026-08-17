@@ -140,6 +140,11 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
+        <!-- TABELA DE PREÇO no cadastro (modelo TecnoX 17/08): o vínculo
+             cliente→negociação é escolhido AQUI, não dentro da tabela. -->
+        <div class="form-group"><label>💲 Tabela de preço (negociação)</label>
+          <select id="fpe-tabela-preco" disabled><option>carregando…</option></select>
+          <span style="font-size:0.72rem;color:#888">Preço que o PDV aplica p/ este cliente (as tabelas são criadas em Formas de Pagamento → Tabela de preço).</span></div>
         <!-- EXIGÊNCIAS DA NOTA A PRAZO: o PDV já pergunta esses dados na venda
              (pagamento.js > PRAZO_CAMPOS), mas até 06/08/2026 não havia onde
              LIGAR a exigência — só direto no banco. Agora é aqui. -->
@@ -189,6 +194,27 @@ async function abrirFormPessoa(id, empresaId) {
     </div>
   `;
   if (id) { colabInit(id, empresaId); frotaInit(id, empresaId); }
+  pessoaTabelaInit(id || '', empresaId);
+}
+
+// dropdown "Tabela de preço" do cadastro: lista as negociações da empresa e o
+// vínculo atual do cliente (oct_tabela_preco_clientes — 1 tabela por cliente)
+async function pessoaTabelaInit(pessoaId, empresaId) {
+  const sel = document.getElementById('fpe-tabela-preco');
+  if (!sel) return;
+  try {
+    const [tabsRes, vincRes] = await Promise.all([
+      sb.from('oct_tabelas_preco').select('id,nome').eq('empresa_id', empresaId).eq('ativo', true).order('nome'),
+      pessoaId ? sb.from('oct_tabela_preco_clientes').select('tabela_id').eq('cliente_id', pessoaId).limit(1)
+               : Promise.resolve({ data: [] }),
+    ]);
+    const atual = ((vincRes.data || [])[0] || {}).tabela_id || '';
+    sel.innerHTML = '<option value="">— sem negociação (preço de bomba) —</option>' +
+      (tabsRes.data || []).map(t => `<option value="${t.id}" ${t.id === atual ? 'selected' : ''}>${(t.nome || '').replace(/</g, '&lt;')}</option>`).join('');
+    sel.disabled = false;
+  } catch (e) {
+    sel.innerHTML = '<option value="">(erro ao carregar tabelas)</option>';
+  }
 }
 
 // ---- FROTA DA EMPRESA (placas que aparecem no app na compra a prazo) ----
@@ -381,14 +407,27 @@ async function salvarPessoa(id, empresaId) {
     observacoes: document.getElementById('fpe-obs').value.trim() || null,
   };
 
-  let error;
+  let error, pessoaId = id;
   if (id) {
     ({ error } = await sb.from('oct_pessoas').update(dados).eq('id', id));
   } else {
-    ({ error } = await sb.from('oct_pessoas').insert({ ...dados, ativo: true }));
+    const r = await sb.from('oct_pessoas').insert({ ...dados, ativo: true }).select('id').single();
+    error = r.error; pessoaId = r.data && r.data.id;
   }
 
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
+
+  // vínculo com a tabela de preço (o cadastro do cliente é o dono do vínculo)
+  try {
+    const selTab = document.getElementById('fpe-tabela-preco');
+    if (selTab && !selTab.disabled && pessoaId) {
+      await sb.from('oct_tabela_preco_clientes').delete().eq('cliente_id', pessoaId);
+      if (selTab.value) {
+        await sb.from('oct_tabela_preco_clientes').insert({
+          empresa_id: empresaId, tabela_id: selTab.value, cliente_id: pessoaId });
+      }
+    }
+  } catch (e) { /* vínculo é complemento; o cadastro já foi salvo */ }
   msg.textContent = '✅ Salvo!'; msg.style.color = '#4caf50';
   setTimeout(() => moduloPessoas(), 900);
 }

@@ -313,20 +313,11 @@ async function fpPrecoForm(t) {
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
         <div style="background:#0f1119;border-radius:8px;padding:12px">
-          <label style="color:#ddd;font-size:0.82rem;display:block;margin-bottom:6px">👤 Clientes desta negociação (<span id="fpp-cli-n">0</span>)</label>
-          <input id="fpp-cli-busca" placeholder="buscar cliente..." oninput="fpCliFiltrar(this.value)"
-            style="width:100%;padding:7px;margin-bottom:6px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:0.8rem">
-          <div style="display:flex;gap:6px;margin-bottom:6px">
-            <button onclick="fpCliMarcar(true)" class="nfe-aba" style="font-size:0.72rem">☑ marcar visíveis</button>
-            <button onclick="fpCliMarcar(false)" class="nfe-aba" style="font-size:0.72rem">☐ desmarcar visíveis</button>
-          </div>
-          <div id="fpp-cli-lista" style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
-            ${todosClientes.length ? todosClientes.map(c => `
-              <label style="color:#ddd;font-size:0.82rem;display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
-                <input type="checkbox" class="fpp-cli" value="${c.id}" onchange="fpCliConta()" ${cliVinculados.has(c.id) ? 'checked' : ''}>
-                ${fpEsc(c.nome)}
-              </label>`).join('') : '<span style="color:#666;font-size:0.78rem">Nenhum cliente cadastrado.</span>'}
-          </div>
+          <label style="color:#ddd;font-size:0.82rem;display:block;margin-bottom:6px">👤 Clientes desta negociação</label>
+          <p style="color:#7dd3fc;font-size:1.4rem;font-weight:700;margin:4px 0">${cliVinculados.size}</p>
+          <p style="color:#888;font-size:0.74rem">O vínculo é feito no CADASTRO do cliente
+            (Pessoas → editar → campo <b style="color:#ddd">💲 Tabela de preço</b>) — igual ao TecnoX.
+            Use a 🔎 consulta por cliente na lista pra conferir quem está em qual negociação.</p>
         </div>
         <div style="background:#0f1119;border-radius:8px;padding:12px">
           <label style="color:#ddd;font-size:0.82rem;display:block;margin-bottom:8px">💳 Formas que disparam esta negociação</label>
@@ -351,7 +342,6 @@ async function fpPrecoForm(t) {
   // popula o grid com as negociações existentes (inclui preco_fixo, que a
   // tela antiga ignorava — e apagava no salvar. Corrigido 17/08.)
   (itensRes.data || []).forEach(i => fpNegAdd(i));
-  fpCliConta();
 }
 
 // ---- grid de negociação: linhas dinâmicas ----
@@ -404,23 +394,6 @@ function fpNegCalc(tr) {
   tr.querySelector('.neg-final').textContent = (sel.value && (v || tipo !== 'fixo_preco')) ? final.toLocaleString('pt-BR', { minimumFractionDigits: 3 }) : '—';
 }
 
-// ---- busca/seleção de clientes ----
-function fpCliFiltrar(termo) {
-  const t = (termo || '').toLowerCase();
-  document.querySelectorAll('#fpp-cli-lista > label').forEach(el => {
-    el.style.display = el.textContent.toLowerCase().includes(t) ? '' : 'none';
-  });
-}
-function fpCliMarcar(v) {
-  document.querySelectorAll('#fpp-cli-lista > label').forEach(el => {
-    if (el.style.display !== 'none') { const cb = el.querySelector('.fpp-cli'); if (cb) cb.checked = v; }
-  });
-  fpCliConta();
-}
-function fpCliConta() {
-  const n = document.querySelectorAll('.fpp-cli:checked').length;
-  const el = document.getElementById('fpp-cli-n'); if (el) el.textContent = n;
-}
 
 // cálculo central: aplica ajuste sobre o preço base
 function fpCalcular(base, tipo, modo, valor) {
@@ -448,12 +421,8 @@ async function fpPrecoSalvar(id) {
   if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
 
   const tabelaId = salvo.id;
-  // grava vínculos de clientes (substitui os existentes)
-  const cliIds = [...document.querySelectorAll('.fpp-cli:checked')].map(c => c.value);
-  await sb.from('oct_tabela_preco_clientes').delete().eq('tabela_id', tabelaId);
-  if (cliIds.length) {
-    await sb.from('oct_tabela_preco_clientes').insert(cliIds.map(cid => ({ empresa_id: eid, tabela_id: tabelaId, cliente_id: cid })));
-  }
+  // clientes NÃO são gravados aqui (17/08): o vínculo cliente→tabela vive no
+  // CADASTRO do cliente (Pessoas → 💲 Tabela de preço), modelo TecnoX.
   // grava vínculos de formas (substitui os existentes)
   const formaIds = [...document.querySelectorAll('.fpp-forma-vinc:checked')].map(c => c.value);
   await sb.from('oct_tabela_preco_formas').delete().eq('tabela_id', tabelaId);
