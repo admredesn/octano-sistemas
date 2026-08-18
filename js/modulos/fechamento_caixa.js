@@ -582,8 +582,6 @@ function fcDetalhe(turnoId) {
           ${receb.map(r => linhaVal(r[0], r[1], r[2])).join('')}
           ${d.sangria_f7 > 0.009 ? `<div class="fc-lin" style="cursor:pointer" onclick="fcNode('dinheiro')"><span class="fc-lbl">Sangrias (retiradas) <span style="color:#6b7688;font-size:9px">(mov.)</span></span><span class="fc-box" style="opacity:.75">${fcMoney(d.sangria_f7)}</span></div>` : ''}
           <div class="fc-total"><span>Total Recebimentos:</span><span class="fc-box forte">${fcMoney(totalReceb)}</span></div>
-          <div class="fc-lin"><span class="fc-lbl">+ Troco inicial / suprimentos (entrada de caixa)</span><span class="fc-box" style="opacity:.8">${fcMoney(fundoCaixa)}</span></div>
-          <div class="fc-total"><span>= Entradas no caixa</span><span class="fc-box forte">${fcMoney(totalReceb + fundoCaixa)}</span></div>
           <div class="fc-total"><span>Resultado do Caixa</span><span class="fc-box ${Math.abs(resultado) < 0.01 ? 'ok' : 'alerta'}">${fcMoney(resultado)}</span></div>
           <div class="fc-total" style="border-top:2px solid #f97316;margin-top:6px"><span>💰 Total movimentado</span><span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span></div>
         </div>
