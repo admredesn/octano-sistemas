@@ -22,6 +22,10 @@ function _fcGrupoForma(cod) {
 function _fcGrupoNome(nome, cod) {
   const n = String(nome || '').toLowerCase();
   if (n) {
+    // FROTA antes de cartão (18/08): "cartão frota"/Prime/Fit/TicketLog/GoodCard
+    // é outra natureza — liquida pela administradora, não pela adquirente.
+    if (n.indexOf('frota') >= 0 || n.indexOf('prime') >= 0 || n.indexOf('fit') >= 0
+        || n.indexOf('ticket') >= 0 || n.indexOf('good') >= 0) return 'frota';
     if (n.indexOf('dinheiro') >= 0) return 'dinheiro';
     if (n.indexOf('pix') >= 0) return 'pix';
     if (n.indexOf('créd') >= 0 || n.indexOf('cred') >= 0 || n === 'cartão' || n === 'cartao'
@@ -169,7 +173,7 @@ async function fcCarregarDados() {
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
-    rec: { dinheiro: 0, cartao: 0, pix: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
+    rec: { dinheiro: 0, cartao: 0, pix: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
     fila_total: 0, fila_litros: 0, fila_itens: [],
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
@@ -233,7 +237,11 @@ async function fcCarregarDados() {
       else t.venda_prod += val;
     });
     (Array.isArray(v.pagamentos) ? v.pagamentos : []).forEach(p => {
-      const g = _fcGrupoForma(p.forma);
+      // RECLASSIFICAÇÃO pelo ✎ (18/08): o ajuste de forma numa venda TRANSMITIDA
+      // não muda a nota (fiscal já emitido), mas MUDA o grupo no fechamento —
+      // caso real: cupom de cartão FROTA que sai com tpag 03 genérico.
+      const ajV = _aj('venda', v.id);
+      const g = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma) : _fcGrupoForma(p.forma);
       t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
     });
   });
@@ -289,8 +297,9 @@ async function fcCarregarDados() {
     t.manuais = t.manuais || [];
     t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao });
     const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
-    if (['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(a.secao) || ['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(g)) {
-      const chave = ['dinheiro', 'cartao', 'pix', 'prazo', 'cheque'].includes(g) ? g : a.secao;
+    const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
+    if (GRUPOS_REC.includes(a.secao) || GRUPOS_REC.includes(g)) {
+      const chave = GRUPOS_REC.includes(g) ? g : a.secao;
       t.rec[chave] = (t.rec[chave] || 0) + v;
     } else if (a.secao === 'despesa') t.despesa += v;
     else if (a.secao === 'suprimento') t.suprimento += v;
@@ -429,6 +438,7 @@ function fcDetalhe(turnoId) {
     ['Dinheiro', rec.dinheiro],
     ['Cartão', rec.cartao],
     ['Pix', rec.pix],
+    ['Cartão Frota', rec.frota],
     ['Nota a prazo', rec.prazo],
     ['Cheque', rec.cheque],
     ['Despesas', d.despesa, I],
@@ -518,7 +528,7 @@ function fcDetalhe(turnoId) {
           <ul>
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
-              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('📄 Nota a Prazo', 'prazo')}
+              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('🚛 Cartão Frota', 'frota')}${nodo('📄 Nota a Prazo', 'prazo')}
               ${d.fila_total > 0.009 ? nodo('⏳ Fila de transmissão', 'fila') : ''}
               ${nodo('🧾 Cheque', 'cheque')}
               ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
@@ -933,7 +943,7 @@ function fcLancEditar(refTipo, refId) {
   const base = window._fcLancBase[k] || {};
   const aj = (window._fcConf[k] || {}).ajuste || {};
   const v = (campo) => aj[campo] != null ? aj[campo] : (base[campo] != null ? base[campo] : '');
-  const formas = ['Dinheiro', 'Cartão', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
+  const formas = ['Dinheiro', 'Cartão', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Cartão Frota', 'Nota a prazo', 'Cheque', 'Outro'];
   fcModal('✎ Editar lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
@@ -998,6 +1008,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
 const FC_DETALHES = {
   dinheiro:       { titulo: '💵 Dinheiro / Sangria', formas: [], caixa: ['sangria'], cofre: true },
   cartao:         { titulo: '💳 Cartão + Pix', formas: ['03', '04', '10', '11', '12', '13', '17', '18', '19'], grupos: ['cartao', 'pix'], filtroBandeira: true },
+  frota:          { titulo: '🚛 Cartão Frota', formas: [], grupos: ['frota'] },
   pix:            { titulo: '⚡ Pix', formas: ['17', '18', '19'], grupos: ['pix'] },
   prazo:          { titulo: '📄 Nota a Prazo', formas: ['05', '99', '90'] },
   cheque:         { titulo: '🧾 Cheque', formas: ['02'] },
@@ -1176,14 +1187,21 @@ async function fcNodeDetalhe(tipo) {
   const band = (cfg.filtroBandeira && window._fcNodeBand) || '';
   const fBand = (x) => !band || _fcRotForma(x.forma_nome, x.forma, x.bandeira) === band;
 
-  // 1) CUPONS pagos na(s) forma(s)
-  if (cfg.formas && cfg.formas.length) {
+  // 1) CUPONS pagos na(s) forma(s) — respeitando RECLASSIFICAÇÃO pelo ✎:
+  // venda ajustada p/ outro grupo (ex.: frota) some daqui e aparece lá.
+  const gruposNode0 = cfg.grupos || [tipo];
+  if ((cfg.formas && cfg.formas.length) || (cfg.grupos && cfg.grupos.length)) {
     const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
     const linhas = []; let total = 0;
     vs.forEach(v => (v.pagamentos || []).forEach(p => {
-      if (!cfg.formas.includes(String(p.forma || '').padStart(2, '0'))) return;
+      const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
+      const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma) : null;
+      const pertence = gAj
+        ? gruposNode0.includes(gAj)
+        : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
+      if (!pertence) return;
       total += Number(p.valor || 0);
-      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: _fcFormaNome(p.forma) };
+      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: (ajV && ajV.forma_nome) || _fcFormaNome(p.forma) };
       linhas.push(_fcRow('venda', v.id, `<td class="fc-td">${v.numero ?? ''}</td>
         <td class="fc-td">${_fcHora(v.data_venda)}</td>
         <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
