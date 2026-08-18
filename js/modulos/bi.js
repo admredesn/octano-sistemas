@@ -107,15 +107,29 @@ async function _biRender() {
   // fila: precisa da janela de 16d (média/meta/projeção) E do período escolhido.
   // Período antigo = duas buscas separadas (não varrer meses inúteis no meio).
   const somaDia = (iso, n) => new Date(new Date(iso + 'T12:00').getTime() + n * 864e5).toISOString().slice(0, 10);
-  const selFila = 'empresa_id,valor,desconto,acrescimo,status,ocorrido_em,criado_em';
-  const filaProm = (somaDia(per.fim, 2) >= d15)
-    ? _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', per.ini < d15 ? somaDia(per.ini, -1) : d15))
-    : Promise.all([
-        _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', d15)),
-        _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', somaDia(per.ini, -1)).lte('criado_em', somaDia(per.fim, 2))),
-      ]).then(([a, b]) => a.concat(b));
+  // VENDA = PISTA (abastecimentos crus da bomba, sem aferição — mesma fonte do
+  // Monitor; a fila só tem o que já foi baixado no PDV e fica menor que o real)
+  // + PRODUTOS de loja vendidos pela fila (item sem bico).
+  const selFila = 'empresa_id,bico,valor,desconto,acrescimo,status,ocorrido_em,criado_em';
+  const fFila = (ini, fim) => _biTudo(() => {
+    let q = sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', ini);
+    if (fim) q = q.lte('criado_em', fim);
+    return q;
+  });
+  const fPista = (ini, fim) => _biTudo(() => {
+    let q = sb.from('oct_pdv_abastecimentos').select('empresa_id,data_abast,valor_total,tipo')
+      .gte('data_abast', ini).or('tipo.is.null,tipo.neq.afericao');
+    if (fim) q = q.lte('data_abast', fim);
+    return q;
+  });
+  const umaJanela = somaDia(per.fim, 2) >= d15;
+  const iniJanela = per.ini < d15 ? somaDia(per.ini, -1) : d15;
+  const duasJanelas = (fn) => Promise.all([fn(d15, null), fn(somaDia(per.ini, -1), somaDia(per.fim, 2))])
+    .then(([a, b]) => a.concat(b));
+  const filaProm = umaJanela ? fFila(iniJanela, null) : duasJanelas(fFila);
+  const pistaProm = umaJanela ? fPista(iniJanela, null) : duasJanelas(fPista);
 
-  const [empR, cpR, cpMesR, npR, fatR, tqR, prR, fila] = await Promise.all([
+  const [empR, cpR, cpMesR, npR, fatR, tqR, prR, fila, pista] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status').eq('status', 'aberto').order('vencimento'),
     sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', per.ini).lte('competencia', per.fim),
@@ -124,6 +138,7 @@ async function _biRender() {
     sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
     sb.from('oct_produtos').select('empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
     filaProm,
+    pistaProm,
   ]);
   for (const r of [empR, cpR, cpMesR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
 
@@ -143,16 +158,23 @@ async function _biRender() {
 
   // vendas por empresa: hoje, média 14d, realizado do mês e do PERÍODO escolhido
   const vHoje = {}, vMes = {}, vDia = {}, vPer = {};
-  fila.forEach(f => {
-    if (/cancel/i.test(f.status || '')) return;
-    const dt = (f.ocorrido_em || f.criado_em || '').slice(0, 10);
-    if (!dt) return;
-    const val = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
-    const e = f.empresa_id;
+  const somaVenda = (e, dt, val) => {
+    if (!dt || !val) return;
     if (dt === hoje) vHoje[e] = (vHoje[e] || 0) + val;
     if (dt.slice(0, 7) === mes) vMes[e] = (vMes[e] || 0) + val;
     if (dt >= d15 && dt < hoje) { (vDia[e] = vDia[e] || {})[dt] = (vDia[e][dt] || 0) + val; }
     if (dt >= per.ini && dt <= per.fim) vPer[e] = (vPer[e] || 0) + val;
+  };
+  // combustível: PISTA (fonte oficial, igual ao Monitor)
+  pista.forEach(a => {
+    somaVenda(a.empresa_id, (a.data_abast || '').slice(0, 10), Number(a.valor_total || 0));
+  });
+  // produtos de loja: fila (item sem bico)
+  fila.forEach(f => {
+    if (/cancel/i.test(f.status || '')) return;
+    if (f.bico !== null && f.bico !== undefined && f.bico !== '') return;  // combustível já veio da pista
+    somaVenda(f.empresa_id, (f.ocorrido_em || f.criado_em || '').slice(0, 10),
+      Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0));
   });
   // dias decorridos do período (p/ média/dia do período)
   const perFimReal = per.fim > hoje ? hoje : per.fim;
