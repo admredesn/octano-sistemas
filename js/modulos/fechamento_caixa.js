@@ -461,7 +461,9 @@ function fcDetalhe(turnoId) {
     ['Venda serviços', 0],
     ['Venda combustíveis', d.venda_comb],
     ['Títulos Recebidos', d.titulos],
-    ['Remessas', d.suprimento, I],
+    // Remessas = TROCO INICIAL (fundo de abertura) + suprimentos avulsos
+    // (pedido Ronan 18/08 — modelo TecnoX: o fundo enviado pro caixa é remessa)
+    ['Remessas', Number(t.valor_abertura || 0) + Number(d.suprimento || 0), I],
     ['Cheque troco', 0, I],
     ['Haver', 0, I],
     ['Receitas', 0, I],
