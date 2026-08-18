@@ -222,7 +222,10 @@ async function fcCarregarDados() {
     }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
     t.venda_total += vf;
-    if (litros > 0) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
+    // combustível TEM BICO; produto de loja não (o campo litros carrega a QTD
+    // do produto — ex.: 1 óleo Mobil "1.0 L" — e enganava a régua até 18/08)
+    const ehComb = (f.bico !== null && f.bico !== undefined && f.bico !== '') && litros > 0;
+    if (ehComb) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
     const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
     t.rec[g] = (t.rec[g] || 0) + vf;
   });
