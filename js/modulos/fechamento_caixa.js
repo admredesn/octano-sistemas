@@ -863,6 +863,8 @@ if (!window._fcTeclasOk) {
 // INCLUIR lançamento manual na seção aberta (vira ref_tipo='manual' e SOMA no fechamento)
 function fcLancIncluir() {
   const secao = window._fcNodeAtual || 'dinheiro';
+  // no balão de itens vendidos, incluir = lançar item esquecido (com produto do cadastro)
+  if (secao === 'itens') { fcItemVendidoForm(); return; }
   const formas = ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
   fcModal('➕ Incluir lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
@@ -1651,44 +1653,48 @@ function fcCupomVer(ref, id) {
     <div style="padding:10px"><button class="fc-btn" onclick="_fcCuponsRender()">← Voltar para a lista</button></div>`);
 }
 function fcModalItens(vs) {
-  // (18/08 — pedido Ronan) SÓ PRODUTOS DE LOJA: combustível (inclusive cupom
-  // frota, que é etanol/gasolina) fica na aba "Combustível Vendido".
-  const map = {};
-  vs.forEach(v => (v.itens || []).filter(it => it.tipo !== 'abastecimento').forEach(it => {
-    const k = it.cod || it.desc || '?';
-    if (!map[k]) map[k] = { desc: it.desc || it.cod, qtd: 0, valor: 0 };
-    map[k].qtd += Number(it.qtd || 0);
-    map[k].valor += Math.round(Number(it.qtd || 0) * Number(it.unit || 0) * 100) / 100;
-  }));
-  // produtos vendidos pela FILA (baixados na pista, ainda sem NFC-e) também
-  // são itens vendidos do turno — sem bico = produto
+  // (18/08 — pedido Ronan) SÓ PRODUTOS DE LOJA, lançamento a lançamento, com a
+  // MESMA barra de ações dos outros balões (☑ espaço confere, ✎ altera, F9/F10).
+  window._fcNodeAtual = 'itens';
   const d0 = ((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {};
+  let linhas = ''; let n = 0, tot = 0;
+  // 1) produtos em CUPONS transmitidos
+  vs.forEach(v => {
+    const its = (v.itens || []).filter(it => it.tipo !== 'abastecimento');
+    if (!its.length) return;
+    const val = its.reduce((s, it) => s + Number(it.total ?? (Number(it.qtd || 0) * Number(it.unit || 0))), 0);
+    const qtd = its.reduce((s, it) => s + Number(it.qtd || 0), 0);
+    window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: val };
+    linhas += _fcRow('venda', v.id, `<td class="fc-td">🧾 ${fcEsc(its.map(it => it.desc || it.cod).join(' + '))} <span style="color:#888;font-size:0.7rem">(cupom ${v.numero ?? ''})</span></td>
+      <td class="fc-td fc-r">${fcNum(qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(val)}</td>`);
+    n++; tot += val;
+  });
+  // 2) produtos vendidos pela FILA (sem bico = produto)
   (d0.fila_itens || []).forEach(f => {
     if (f.bico !== null && f.bico !== undefined && f.bico !== '') return;
-    const k = 'fila:' + (f.descricao || '?');
-    if (!map[k]) map[k] = { desc: (f.descricao || '?') + ' ⏳', qtd: 0, valor: 0 };
-    map[k].qtd += Number(f.litros || 0);
-    map[k].valor += Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Produto', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
+    linhas += _fcRow('fila', f.id, `<td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'} <span style="color:#888;font-size:0.7rem">(${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || ''})</span></td>
+      <td class="fc-td fc-r">${fcNum(f.litros || 1, 3)}</td><td class="fc-td fc-r">${fcMoney(vf)}</td>`);
+    n++; tot += vf;
   });
-  let linhas = Object.values(map).sort((a, b) => b.valor - a.valor).map(m => `<tr>
-    <td class="fc-td">${fcEsc(m.desc)}</td><td class="fc-td fc-r">${fcNum(m.qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td><td class="fc-td"></td></tr>`).join('');
-  // itens lançados À MÃO (frentista esqueceu de registrar) — editáveis
+  // 3) itens lançados À MÃO (frentista esqueceu)
   (d0.manuais || []).filter(m => m.item_vendido).forEach(m => {
     window._fcLancBase['manual:' + m.id] = { rotulo: 'Item vendido — ' + (m.descricao || ''), valor: m.valor, forma_nome: m.forma_nome, secao: m.secao };
     linhas += _fcRow('manual', m.id, `<td class="fc-td">✍ ${fcEsc(m.descricao) || '—'} <span style="color:#888;font-size:0.72rem">(${fcEsc(m.forma_nome) || ''})</span></td>
       <td class="fc-td fc-r">${fcNum(m.qtd || 1, 3)}</td>
       <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
+    n++; tot += Number(m.valor || 0);
   });
-  const total = Object.values(map).reduce((s, m) => s + m.valor, 0)
-    + (d0.manuais || []).filter(m => m.item_vendido).reduce((s, m) => s + Number(m.valor || 0), 0);
-  fcModal('📋 Itens Vendidos (produtos de loja)', `
+  fcModal('📋 Itens Vendidos (produtos de loja)', _fcToolbar() + `
     <div class="fc-filtros">
       <button class="fc-btn" style="color:#4ade80" onclick="fcItemVendidoForm()">➕ Lançar item vendido (esquecido)</button>
-      <span style="color:#667">combustível fica na aba ⛽ Combustível Vendido</span>
+      <span style="color:#667">combustível fica na aba ⛽ Combustível Vendido · ☑ marca · ESPAÇO confere · ✎ altera</span>
     </div>
-    <table class="fc-grid"><thead><tr><th>Item</th><th>Qtd</th><th>Valor</th><th></th></tr></thead>
-    <tbody>${linhas || '<tr><td class="fc-td" colspan="4" style="color:#777">Nenhum produto vendido neste caixa.</td></tr>'}
-    <tr><td class="fc-td"><b>Total</b></td><td class="fc-td"></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td"></td></tr></tbody></table>`);
+    <table class="fc-grid"><thead><tr><th></th><th>Item</th><th>Qtd</th><th>Valor</th><th></th></tr></thead>
+    <tbody>${linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nenhum produto vendido neste caixa.</td></tr>'}
+    <tr><td class="fc-td" colspan="2"><b>Total</b></td><td class="fc-td"></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td class="fc-td"></td></tr></tbody></table>`
+    + _fcRodape(n, tot));
 }
 
 // ---- LANÇAR ITEM VENDIDO ESQUECIDO (18/08): entra como venda de produto E
