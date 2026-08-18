@@ -328,7 +328,12 @@ async function fcCarregarDados() {
     const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + Number(d.receita || 0);
     const sai = Number(d.sangria || 0) + Number(d.despesa || 0) + Number(d.deposito || 0);
     d.dinheiro_esperado = Math.round((entra - sai) * 100) / 100;
-    d.dinheiro_contado = (t.valor_fechamento != null) ? Number(t.valor_fechamento) : null; // null = ainda não contado
+    // CONTADO = gaveta no fechamento + DEPOSITADO NO COFRE no turno (18/08):
+    // no posto com cofre Brink's o dinheiro não fica na gaveta — sem somar o
+    // cofre, a "falta" era exatamente o valor depositado (1.202,08 × 1.202,00).
+    d.dinheiro_contado = (t.valor_fechamento != null)
+      ? Math.round((Number(t.valor_fechamento) + Number(d.receb_ext_cofre || 0)) * 100) / 100
+      : null; // null = ainda não contado
     d.diferenca_caixa = (d.dinheiro_contado == null) ? null : Math.round((d.dinheiro_contado - d.dinheiro_esperado) * 100) / 100;
     d.falta_caixa = (d.diferenca_caixa != null && d.diferenca_caixa < 0) ? -d.diferenca_caixa : 0;
     d.sobra_caixa = (d.diferenca_caixa != null && d.diferenca_caixa > 0) ? d.diferenca_caixa : 0;
@@ -444,6 +449,9 @@ function fcDetalhe(turnoId) {
   // RECEBIMENTOS — formas de pagamento (entram no total) + movimentos (mov.)
   const recebBase = [
     ['Dinheiro', rec.dinheiro],
+    // o Tijuco deposita o dinheiro no cofre Brink's — esta linha mostra o
+    // VALOR EXATO depositado dentro do turno (prova física; não soma de novo)
+    ['↳ Depositado no cofre', d.receb_ext_cofre, I],
     ['Cartão', rec.cartao],
     ['Pix', rec.pix],
     ['Cartão Frota', rec.frota],
@@ -604,7 +612,7 @@ function fcDetalhe(turnoId) {
               ${d.despesa > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Despesas</span><b>${fcMoney(d.despesa)}</b></div>` : ''}
               ${d.deposito > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Depósitos</span><b>${fcMoney(d.deposito)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
-              <div style="display:flex;justify-content:space-between"><span>Contado (operador)</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
+              <div style="display:flex;justify-content:space-between"><span>Contado (gaveta ${fcMoney(t.valor_fechamento)} + cofre ${fcMoney(d.receb_ext_cofre)})</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
               <div style="display:flex;justify-content:space-between;font-size:0.92rem;margin-top:4px"><span style="font-weight:700">${d.diferenca_caixa == null ? 'Turno em aberto' : (Math.abs(d.diferenca_caixa) < 0.01 ? '✓ Caixa confere' : (d.diferenca_caixa < 0 ? '🔴 FALTA' : '🟢 SOBRA'))}</span><b style="color:${d.diferenca_caixa == null ? '#667' : (Math.abs(d.diferenca_caixa) < 0.01 ? '#7ee2a0' : (d.diferenca_caixa < 0 ? '#e06c6c' : '#7ee2a0'))}">${d.diferenca_caixa == null ? '' : fcMoney(Math.abs(d.diferenca_caixa))}</b></div>
             </div>
             ${d.dinheiro_contado != null ? `<button class="fc-btn2" style="margin-top:8px;width:100%;border-color:#2a5a3a;color:#7be0a0" onclick="fcConfirmarCaixa('${turnoId}')">✔ Confirmar conferência</button>` : '<div style="font-size:0.72rem;color:#667;margin-top:6px">Turno ainda aberto — a conferência fecha quando o operador informar o dinheiro contado.</div>'}
