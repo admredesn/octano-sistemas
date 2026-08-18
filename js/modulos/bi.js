@@ -67,7 +67,7 @@ async function _biRender() {
   const d15 = new Date(Date.now() - 16 * 864e5).toISOString().slice(0, 10);
 
   const [empR, cpR, npR, fatR, tqR, prR, fila] = await Promise.all([
-    sb.from('oct_empresas').select('id,nome'),
+    sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status').eq('status', 'aberto').order('vencimento'),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
