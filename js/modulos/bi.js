@@ -10,6 +10,44 @@
 
 const _BI_REFRESH_MS = 60000;
 
+// ---- período selecionado (dia | semana | mes | custom) ----
+function _biPerDatas() {
+  const p = window._biPer || { tipo: 'mes' };
+  const hoje = _biHojeLocal();
+  const d = new Date(hoje + 'T12:00');
+  const iso = (x) => x.toISOString().slice(0, 10);
+  if (p.tipo === 'dia') return { ini: hoje, fim: hoje, rotulo: 'hoje' };
+  if (p.tipo === 'semana') {
+    const seg = new Date(d); seg.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const dom = new Date(seg); dom.setDate(seg.getDate() + 6);
+    return { ini: iso(seg), fim: iso(dom), rotulo: 'semana (seg–dom)' };
+  }
+  if (p.tipo === 'custom' && p.ini && p.fim) return { ini: p.ini, fim: p.fim, rotulo: _biDtBr(p.ini) + ' a ' + _biDtBr(p.fim) };
+  const fimMes = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return { ini: hoje.slice(0, 7) + '-01', fim: iso(fimMes), rotulo: 'mês de ' + d.toLocaleDateString('pt-BR', { month: 'long' }) };
+}
+function _biSetPer(tipo) { window._biPer = { tipo }; _biRender(); }
+function _biSetPerCustom() {
+  const ini = document.getElementById('bi-per-ini').value, fim = document.getElementById('bi-per-fim').value;
+  if (!ini || !fim || fim < ini) { alert('Informe data inicial e final válidas.'); return; }
+  window._biPer = { tipo: 'custom', ini, fim };
+  _biRender();
+}
+function _biToolbarPer(per) {
+  const t = (window._biPer || { tipo: 'mes' }).tipo;
+  const btn = (id, rot) => '<button onclick="_biSetPer(\'' + id + '\')" style="padding:6px 14px;border-radius:6px;cursor:pointer;border:1px solid ' +
+    (t === id ? '#f97316;background:#f97316;color:#fff;font-weight:700' : '#2a2d3e;background:#0f1117;color:#9aa') + '">' + rot + '</button>';
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
+    '<span style="color:#9aa;font-size:0.8rem">Período:</span>' +
+    btn('dia', 'Hoje') + btn('semana', 'Semana') + btn('mes', 'Mês') +
+    '<span style="display:flex;gap:4px;align-items:center;border:1px solid ' + (t === 'custom' ? '#f97316' : '#2a2d3e') + ';border-radius:6px;padding:3px 6px;background:#0f1117">' +
+      '<input id="bi-per-ini" type="date" value="' + ((window._biPer || {}).ini || per.ini) + '" style="background:transparent;border:none;color:#e0e0e0;font-size:0.78rem">' +
+      '<span style="color:#667">até</span>' +
+      '<input id="bi-per-fim" type="date" value="' + ((window._biPer || {}).fim || per.fim) + '" style="background:transparent;border:none;color:#e0e0e0;font-size:0.78rem">' +
+      '<button onclick="_biSetPerCustom()" style="padding:4px 10px;border-radius:5px;border:none;background:#f97316;color:#fff;cursor:pointer;font-size:0.75rem">OK</button></span>' +
+    '<span style="color:#667;font-size:0.75rem;margin-left:6px">mostrando: <b style="color:#c9d2dc">' + per.rotulo + '</b></span></div>';
+}
+
 function _biMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function _biK(v) { v = Number(v || 0); return v >= 1000 ? 'R$ ' + (v / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' mil' : _biMoney(v); }
 function _biHojeLocal() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -64,17 +102,28 @@ async function moduloBi() {
 async function _biRender() {
   const hoje = _biHojeLocal();
   const mes = hoje.slice(0, 7);
+  const per = _biPerDatas();
   const d15 = new Date(Date.now() - 16 * 864e5).toISOString().slice(0, 10);
+  // fila: precisa da janela de 16d (média/meta/projeção) E do período escolhido.
+  // Período antigo = duas buscas separadas (não varrer meses inúteis no meio).
+  const somaDia = (iso, n) => new Date(new Date(iso + 'T12:00').getTime() + n * 864e5).toISOString().slice(0, 10);
+  const selFila = 'empresa_id,valor,desconto,acrescimo,status,ocorrido_em,criado_em';
+  const filaProm = (somaDia(per.fim, 2) >= d15)
+    ? _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', per.ini < d15 ? somaDia(per.ini, -1) : d15))
+    : Promise.all([
+        _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', d15)),
+        _biTudo(() => sb.from('oct_fila_transmissao').select(selFila).gte('criado_em', somaDia(per.ini, -1)).lte('criado_em', somaDia(per.fim, 2))),
+      ]).then(([a, b]) => a.concat(b));
 
   const [empR, cpR, cpMesR, npR, fatR, tqR, prR, fila] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status').eq('status', 'aberto').order('vencimento'),
-    sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', mes + '-01'),
+    sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', per.ini).lte('competencia', per.fim),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
     sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
     sb.from('oct_produtos').select('empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
-    _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,valor,desconto,acrescimo,status,ocorrido_em,criado_em').gte('criado_em', d15)),
+    filaProm,
   ]);
   for (const r of [empR, cpR, cpMesR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
 
@@ -92,8 +141,8 @@ async function _biRender() {
     (custoComb[p.empresa_id] = custoComb[p.empresa_id] || {})[cl] = custo;
   });
 
-  // vendas por empresa: hoje, média 14d, realizado do mês
-  const vHoje = {}, vMes = {}, vDia = {};
+  // vendas por empresa: hoje, média 14d, realizado do mês e do PERÍODO escolhido
+  const vHoje = {}, vMes = {}, vDia = {}, vPer = {};
   fila.forEach(f => {
     if (/cancel/i.test(f.status || '')) return;
     const dt = (f.ocorrido_em || f.criado_em || '').slice(0, 10);
@@ -102,8 +151,12 @@ async function _biRender() {
     const e = f.empresa_id;
     if (dt === hoje) vHoje[e] = (vHoje[e] || 0) + val;
     if (dt.slice(0, 7) === mes) vMes[e] = (vMes[e] || 0) + val;
-    if (dt < hoje) { (vDia[e] = vDia[e] || {})[dt] = (vDia[e][dt] || 0) + val; }
+    if (dt >= d15 && dt < hoje) { (vDia[e] = vDia[e] || {})[dt] = (vDia[e][dt] || 0) + val; }
+    if (dt >= per.ini && dt <= per.fim) vPer[e] = (vPer[e] || 0) + val;
   });
+  // dias decorridos do período (p/ média/dia do período)
+  const perFimReal = per.fim > hoje ? hoje : per.fim;
+  const perDias = Math.max(1, Math.round((new Date(perFimReal + 'T12:00') - new Date(per.ini + 'T12:00')) / 864e5) + 1);
 
   const dadosPosto = empresas.map(emp => {
     const e = emp.id;
@@ -122,8 +175,10 @@ async function _biRender() {
       const dias = Math.max(1, Math.round((new Date(proxVenc + 'T12:00') - new Date(hoje + 'T12:00')) / 864e5) + 1);
       meta = { venc: proxVenc, valorAte: aPagarAte, dias, porDia: aPagarAte / dias, desc: futuras[0].descricao };
     }
-    // compras do mês (todas as NF-e viradas em título, pagas ou não)
+    // compras do período (todas as NF-e viradas em título, pagas ou não)
     const comprasMes = (cpMesR.data || []).filter(c => c.empresa_id === e).reduce((s, c) => s + Number(c.valor), 0);
+    // títulos abertos que VENCEM dentro do período
+    const vencePer = contas.filter(c => c.vencimento >= per.ini && c.vencimento <= per.fim).reduce((s, c) => s + Number(c.valor), 0);
     // contas a receber
     const receber = npR.filter(n => n.empresa_id === e).reduce((s, n) => s + Number(n.valor), 0)
       + (fatR.data || []).filter(f => f.empresa_id === e && !/liquid|pago|cancel/i.test(f.status || '')).reduce((s, f) => s + Number(f.valor), 0);
@@ -148,20 +203,22 @@ async function _biRender() {
     const projMes = (vMes[e] || 0) + media * (diasNoMes - Number(hoje.slice(8, 10)));
     return {
       ...emp, pagarTotal, nPagar: contas.length, vencidasTotal, nVencidas: vencidas.length, meta,
-      comprasMes, receber, estoque: estComb + estLoja, litros, semCusto,
-      vendaHoje: hj, media, realizadoMes: vMes[e] || 0, projMes,
+      comprasMes, vencePer, receber, estoque: estComb + estLoja, litros, semCusto,
+      vendaHoje: hj, vendaPer: vPer[e] || 0, mediaPer: (vPer[e] || 0) / perDias,
+      media, realizadoMes: vMes[e] || 0, projMes,
     };
   });
 
   // consolidado do grupo
   const g = {
-    pagarTotal: 0, vencidasTotal: 0, comprasMes: 0, receber: 0, estoque: 0, vendaHoje: 0,
-    media: 0, realizadoMes: 0, projMes: 0, metaDia: 0,
+    pagarTotal: 0, vencidasTotal: 0, comprasMes: 0, vencePer: 0, receber: 0, estoque: 0, vendaHoje: 0,
+    vendaPer: 0, mediaPer: 0, media: 0, realizadoMes: 0, projMes: 0, metaDia: 0,
   };
   dadosPosto.forEach(p => {
-    g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.comprasMes += p.comprasMes; g.receber += p.receber;
-    g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.media += p.media;
-    g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
+    g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.comprasMes += p.comprasMes;
+    g.vencePer += p.vencePer; g.receber += p.receber;
+    g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.vendaPer += p.vendaPer; g.mediaPer += p.mediaPer;
+    g.media += p.media; g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
     if (p.meta) g.metaDia += p.meta.porDia;
   });
 
@@ -172,6 +229,7 @@ async function _biRender() {
         '<span style="font-size:0.72rem;color:#667;font-weight:400;margin-left:12px">atualizado ' + agora + ' · renova a cada 60s</span>' +
         '<button class="og-fechar" title="Fechar" onclick="navegarPara(\'empresa\')">✕</button></div>' +
       '<div style="padding:14px 16px">' +
+        _biToolbarPer(per) +
         _biCardGrupo(g) +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:14px">' +
           dadosPosto.map(_biCardPosto).join('') +
@@ -204,10 +262,11 @@ function _biCardGrupo(g) {
     '<div style="font-weight:700;color:#f97316;margin-bottom:10px">🏢 GRUPO — consolidado dos postos</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">' +
       ind('💸 Contas a pagar', g.pagarTotal, '#f44336', g.vencidasTotal > 0 ? _biK(g.vencidasTotal) + ' já vencidas' : 'nada vencido') +
-      ind('🛒 Compras do mês', g.comprasMes, '#fbbf24', 'NF-e de entrada (pagas + abertas)') +
+      ind('📅 Vence no período', g.vencePer, '#fb923c', 'títulos abertos no período') +
+      ind('🛒 Compras no período', g.comprasMes, '#fbbf24', 'NF-e de entrada (pagas + abertas)') +
       ind('💰 Contas a receber', g.receber, '#4caf50', 'notas a prazo + faturas') +
       ind('🛢️ Valor em estoque', g.estoque, '#60a5fa', 'combustível + loja, a custo') +
-      ind('📈 Venda hoje', g.vendaHoje, '#e0e0e0', 'média/dia ' + _biK(g.media)) +
+      ind('💵 Venda no período', g.vendaPer, '#e0e0e0', 'média/dia ' + _biK(g.mediaPer)) +
       ind('🔮 Projeção do mês', g.projMes, '#c084fc', 'realizado ' + _biK(g.realizadoMes)) +
     '</div>' +
     '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia) + '</div></div>';
@@ -227,11 +286,13 @@ function _biCardPosto(p) {
       '<span style="font-weight:700;color:#e0e0e0">⛽ ' + p.nome + '</span>' +
       (p.nVencidas > 0 ? '<span style="font-size:0.72rem;color:#f44336;font-weight:700">' + p.nVencidas + ' vencida(s) ' + _biK(p.vencidasTotal) + '</span>' : '') + '</div>' +
     linha('💸 A pagar (' + p.nPagar + ')', p.pagarTotal, '#f44336') +
-    linha('🛒 Compras do mês', p.comprasMes, '#fbbf24') +
+    linha('📅 Vence no período', p.vencePer, '#fb923c') +
+    linha('🛒 Compras no período', p.comprasMes, '#fbbf24') +
     linha('💰 A receber', p.receber, '#4caf50') +
     linha('🛢️ Estoque (' + Math.round(p.litros).toLocaleString('pt-BR') + ' L)', p.estoque, '#60a5fa') +
+    linha('💵 Venda no período', p.vendaPer) +
+    linha('Ø Média/dia do período', p.mediaPer) +
     linha('📈 Venda hoje', p.vendaHoje) +
-    linha('Ø Média/dia (14d)', p.media) +
     linha('🔮 Projeção do mês', p.projMes, '#c084fc') +
     venc +
     '<div style="margin-top:8px">' + _biBarraMeta(p.vendaHoje, p.meta ? p.meta.porDia : 0) + '</div>' +
