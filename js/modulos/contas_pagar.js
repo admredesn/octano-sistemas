@@ -255,7 +255,7 @@ async function abrirGerenciarFixas(eId){
   const[fxR,fR,pR]=await Promise.all([
     sb.from('oct_contas_recorrentes').select('*').eq('empresa_id',eId).eq('ativo',true).order('dia_vencimento'),
     sb.from('oct_pessoas').select('id,nome').eq('empresa_id',eId).eq('tipo','fornecedor').order('nome'),
-    sb.from('oct_plano_contas').select('id,codigo,descricao').eq('empresa_id',eId).in('tipo',['custo','despesa']).eq('nivel',3).order('codigo'),
+    sb.from('oct_plano_contas').select('id,codigo,descricao').eq('empresa_id',eId).in('tipo',['custo','despesa']).eq('subtipo','analitica').eq('ativo',true).order('codigo'),
   ]);
   if(fxR.error){div.innerHTML='<p style="color:#f44;padding:12px">Erro: '+fxR.error.message+'<br>→ Rode o SQL-CONTAS-RECORRENTES.sql no Supabase.</p>';return;}
   const f=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
@@ -354,7 +354,7 @@ async function salvarPlanoConta(eId){
 async function abrirFormConta(id,eId){
   const div=document.getElementById('form-conta');div.style.display='block';div.innerHTML='<p style="color:#888;padding:12px">Carregando...</p>';div.scrollIntoView({behavior:'smooth'});
   let c=null;if(id){const{data}=await sb.from('oct_contas_pagar').select('*').eq('id',id).single();c=data;}
-  const[fR,bR,pR]=await Promise.all([sb.from('oct_pessoas').select('id,nome').eq('empresa_id',eId).eq('tipo','fornecedor').order('nome'),sb.from('oct_bancos').select('id,banco,descricao').eq('empresa_id',eId).eq('ativo',true).order('banco'),sb.from('oct_plano_contas').select('id,codigo,descricao').eq('empresa_id',eId).in('tipo',['custo','despesa']).eq('nivel',3).order('codigo')]);
+  const[fR,bR,pR]=await Promise.all([sb.from('oct_pessoas').select('id,nome').eq('empresa_id',eId).eq('tipo','fornecedor').order('nome'),sb.from('oct_bancos').select('id,banco,descricao').eq('empresa_id',eId).eq('ativo',true).order('banco'),sb.from('oct_plano_contas').select('id,codigo,descricao').eq('empresa_id',eId).in('tipo',['custo','despesa']).eq('subtipo','analitica').eq('ativo',true).order('codigo')]);
   const fOpts=(fR.data||[]).map(f=>'<option value="'+f.id+'" '+(c?.fornecedor_id===f.id?'selected':'')+'>'+f.nome+'</option>').join('');
   const bOpts=(bR.data||[]).map(b=>'<option value="'+b.id+'" '+(c?.banco_id===b.id?'selected':'')+'>'+b.banco+(b.descricao?' - '+b.descricao:'')+'</option>').join('');
   const pOpts=(pR.data||[]).map(p=>'<option value="'+p.id+'" '+(c?.plano_conta_id===p.id?'selected':'')+'>'+p.codigo+' - '+p.descricao+'</option>').join('');
