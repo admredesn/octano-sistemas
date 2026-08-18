@@ -1151,7 +1151,10 @@ async function fcNodeDetalhe(tipo) {
   const iniE = _fcTsUtc(t.aberto_em), fimE = t.fechado_em ? _fcTsUtc(t.fechado_em) : Date.now();
   const ini = new Date(iniE - 6 * 3600e3).toISOString(), fim = new Date(fimE + 6 * 3600e3).toISOString();
   const pedidos = [
-    (cfg.formas && cfg.formas.length)
+    // vendas: busca também quando o nó é por GRUPOS (ex.: 🚛 frota, que não
+    // tem código próprio — vive de nome/reclassificação). Era só cfg.formas
+    // e o cupom reclassificado nunca aparecia no balão (18/08).
+    ((cfg.formas && cfg.formas.length) || (cfg.grupos && cfg.grupos.length))
       ? sb.from('oct_pdv_vendas').select('id,numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,status').eq('turno_id', turnoId).order('data_venda')
       : Promise.resolve({ data: [] }),
     (cfg.caixa && cfg.caixa.length)
