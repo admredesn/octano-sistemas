@@ -111,14 +111,15 @@ async function _biRender() {
     const pagarTotal = contas.reduce((s, c) => s + Number(c.valor), 0);
     const vencidas = contas.filter(c => c.vencimento < hoje);
     const vencidasTotal = vencidas.reduce((s, c) => s + Number(c.valor), 0);
-    // próximo vencimento: a data aberta mais próxima (vencida conta como "hoje")
-    const proxVenc = contas.length ? (contas[0].vencimento < hoje ? hoje : contas[0].vencimento) : null;
-    // meta: tudo que vence até essa data / dias restantes
+    // meta do dia: SÓ o próximo vencimento FUTURO (>= hoje). Conta vencida não
+    // vira meta (daria "vender R$100 mil hoje") — vencida é alerta p/ liquidar.
+    const futuras = contas.filter(c => c.vencimento >= hoje);
     let meta = null;
-    if (proxVenc) {
-      const aPagarAte = contas.filter(c => c.vencimento <= proxVenc).reduce((s, c) => s + Number(c.valor), 0);
+    if (futuras.length) {
+      const proxVenc = futuras[0].vencimento;
+      const aPagarAte = futuras.filter(c => c.vencimento <= proxVenc).reduce((s, c) => s + Number(c.valor), 0);
       const dias = Math.max(1, Math.round((new Date(proxVenc + 'T12:00') - new Date(hoje + 'T12:00')) / 864e5) + 1);
-      meta = { venc: contas[0].vencimento, valorAte: aPagarAte, dias, porDia: aPagarAte / dias, desc: contas[0].descricao };
+      meta = { venc: proxVenc, valorAte: aPagarAte, dias, porDia: aPagarAte / dias, desc: futuras[0].descricao };
     }
     // contas a receber
     const receber = npR.filter(n => n.empresa_id === e).reduce((s, n) => s + Number(n.valor), 0)
