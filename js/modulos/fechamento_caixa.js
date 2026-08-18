@@ -448,10 +448,11 @@ function fcDetalhe(turnoId) {
   const I = { info: true };
   // RECEBIMENTOS — formas de pagamento (entram no total) + movimentos (mov.)
   const recebBase = [
-    ['Dinheiro', rec.dinheiro],
-    // o Tijuco deposita o dinheiro no cofre Brink's — esta linha mostra o
-    // VALOR EXATO depositado dentro do turno (prova física; não soma de novo)
-    ['↳ Depositado no cofre', d.receb_ext_cofre, I],
+    // DINHEIRO = o DEPOSITADO NO COFRE no turno (decisão Ronan 18/08): é o
+    // físico que entrou, sem dedução de despesa (despesa tem linha própria e
+    // pode nem ter saído do dinheiro). A venda em dinheiro do sistema segue
+    // na conferência de gaveta ("Vendas em dinheiro").
+    ['Dinheiro (depositado no cofre)', d.receb_ext_cofre],
     ['Cartão', rec.cartao],
     ['Pix', rec.pix],
     ['Cartão Frota', rec.frota],
