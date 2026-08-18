@@ -241,7 +241,9 @@ async function fcCarregarDados() {
       // não muda a nota (fiscal já emitido), mas MUDA o grupo no fechamento —
       // caso real: cupom de cartão FROTA que sai com tpag 03 genérico.
       const ajV = _aj('venda', v.id);
-      const g = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma) : _fcGrupoForma(p.forma);
+      // prioridade: ajuste do gerente > NOME gravado pelo PDV (18/08) > código
+      const g = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
+        : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
       t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
     });
   });
@@ -1195,7 +1197,8 @@ async function fcNodeDetalhe(tipo) {
     const linhas = []; let total = 0;
     vs.forEach(v => (v.pagamentos || []).forEach(p => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
-      const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma) : null;
+      const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
+        : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
       const pertence = gAj
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
