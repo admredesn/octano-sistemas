@@ -37,6 +37,7 @@ async function moduloContasPagar(){
         '<button class="og-tb-btn" onclick="renderTitulosPagar()"><div class="og-tb-ico">🔍</div><div>Filtrar</div></button>'+
         '<button class="og-tb-btn" onclick="limparFiltros()"><div class="og-tb-ico">✖</div><div>Limpar</div></button>'+
         '<div class="og-tb-sep"></div>'+
+        '<button class="og-tb-btn" onclick="abrirGerenciarFixas(\''+empresaId+'\')"><div class="og-tb-ico">🔁</div><div>Fixas</div></button>'+
         '<button class="og-tb-btn" onclick="abrirGerenciarBancos(\''+empresaId+'\')"><div class="og-tb-ico">🏦</div><div>Bancos</div></button>'+
         '<button class="og-tb-btn" onclick="abrirGerenciarPlano(\''+empresaId+'\')"><div class="og-tb-ico">📊</div><div>Plano Contas</div></button>'+
       '</div>'+
@@ -48,6 +49,7 @@ async function moduloContasPagar(){
           '<div style="background:#1a1d2e;border:1px solid #2a2d3e;border-radius:8px;padding:12px;cursor:pointer" onclick="aplicarFiltroRapido(\'todos\')"><div class="nfe-label">📋 Total geral</div><div style="font-size:1.2rem;font-weight:700;color:#e0e0e0;margin-top:4px">R$ '+f(tA+tPM)+'</div><div style="font-size:0.72rem;color:#888">'+window._todasContas.length+' título(s)</div></div>'+
         '</div>'+
         '<div id="form-conta" style="display:none;margin-bottom:12px"></div>'+
+        '<div id="form-fixas" style="display:none;margin-bottom:12px"></div>'+
         '<div id="form-bancos" style="display:none;margin-bottom:12px"></div>'+
         '<div id="form-plano" style="display:none;margin-bottom:12px"></div>'+
         '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px;margin-bottom:12px">'+
@@ -242,6 +244,68 @@ async function confirmarPagamento(id){
 }
 
 async function excluirConta(id){if(!confirm('Excluir este título?'))return;await sb.from('oct_contas_pagar').delete().eq('id',id);moduloContasPagar();}
+
+// ---- CONTAS FIXAS/RECORRENTES (aluguel, contador, sistemas, manutenção) ----
+// O sync 6/6h materializa um título por mês (mês atual até dezembro) em
+// oct_contas_pagar, id determinístico — editar/pagar um título gerado não é
+// desfeito pelo gerador. Excluir a fixa desativa (títulos já gerados ficam).
+async function abrirGerenciarFixas(eId){
+  const div=document.getElementById('form-fixas');div.style.display=div.style.display==='none'?'block':'none';if(div.style.display==='none')return;
+  div.innerHTML='<p style="color:#888;padding:12px">Carregando...</p>';div.scrollIntoView({behavior:'smooth'});
+  const[fxR,fR,pR]=await Promise.all([
+    sb.from('oct_contas_recorrentes').select('*').eq('empresa_id',eId).eq('ativo',true).order('dia_vencimento'),
+    sb.from('oct_pessoas').select('id,nome').eq('empresa_id',eId).eq('tipo','fornecedor').order('nome'),
+    sb.from('oct_plano_contas').select('id,codigo,descricao').eq('empresa_id',eId).in('tipo',['custo','despesa']).eq('nivel',3).order('codigo'),
+  ]);
+  if(fxR.error){div.innerHTML='<p style="color:#f44;padding:12px">Erro: '+fxR.error.message+'<br>→ Rode o SQL-CONTAS-RECORRENTES.sql no Supabase.</p>';return;}
+  const f=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
+  const fixas=fxR.data||[];
+  const totalMes=fixas.reduce((s,x)=>s+Number(x.valor_previsto),0);
+  const cards=fixas.length===0?'<p style="color:#555;margin-bottom:16px">Nenhuma conta fixa cadastrada.</p>':
+    '<table class="nfe-tabela" style="width:100%;margin-bottom:16px"><thead><tr style="background:#1a1d2e"><th>Descrição</th><th>Categoria</th><th>Dia venc.</th><th>Valor previsto</th><th></th></tr></thead><tbody>'+
+    fixas.map(x=>'<tr><td style="padding:6px 8px;font-weight:600">'+x.descricao+'</td>'+
+      '<td style="padding:6px 8px;color:#888">'+(x.categoria||'')+'</td>'+
+      '<td style="padding:6px 8px">dia '+x.dia_vencimento+'</td>'+
+      '<td style="padding:6px 8px;color:#f97316;font-weight:700">R$ '+f(x.valor_previsto)+'</td>'+
+      '<td style="padding:6px 8px"><button onclick="excluirFixa(\''+x.id+'\',\''+eId+'\')" style="padding:3px 8px;border-radius:4px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer;font-size:0.72rem">Desativar</button></td></tr>').join('')+
+    '<tr style="background:#1a1d2e"><td colspan="3" style="padding:8px;font-weight:700">Total fixo/mês</td><td style="padding:8px;color:#f97316;font-weight:700">R$ '+f(totalMes)+'</td><td></td></tr></tbody></table>';
+  const fOpts=(fR.data||[]).map(x=>'<option value="'+x.id+'">'+x.nome+'</option>').join('');
+  const pOpts=(pR.data||[]).map(x=>'<option value="'+x.id+'">'+x.codigo+' - '+x.descricao+'</option>').join('');
+  div.innerHTML='<div style="background:#13151f;border:1px solid #7c5cbf;border-radius:12px;padding:20px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="color:#c084fc">🔁 Contas fixas (recorrentes)</h3>'+
+    '<button onclick="document.getElementById(\'form-fixas\').style.display=\'none\'" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">X</button></div>'+
+    '<p style="color:#888;font-size:0.78rem;margin-bottom:14px">O sistema lança um título por mês (do mês atual até dezembro) automaticamente, com o valor previsto — quando a fatura real chegar, é só editar o título do mês na lista. Desativar não apaga os títulos já lançados.</p>'+
+    cards+
+    '<div class="modulo-header"><h2>+ Nova conta fixa</h2></div>'+
+    '<div class="form-grid" style="max-width:760px">'+
+      '<div class="form-group span2"><label>Descrição *</label><input id="fx-desc" type="text" placeholder="Aluguel do posto, Contador, Sistema X..." /></div>'+
+      '<div class="form-group"><label>Categoria</label><select id="fx-cat"><option value="aluguel">Aluguel</option><option value="contador">Contador</option><option value="sistema">Sistema/Software</option><option value="manutencao">Manutenção</option><option value="servico" selected>Outro serviço</option></select></div>'+
+      '<div class="form-group"><label>Valor previsto (R$) *</label><input id="fx-valor" type="number" step="0.01" /></div>'+
+      '<div class="form-group"><label>Dia do vencimento *</label><input id="fx-dia" type="number" min="1" max="31" value="5" /></div>'+
+      '<div class="form-group"><label>Fornecedor</label><select id="fx-forn"><option value="">--</option>'+fOpts+'</select></div>'+
+      '<div class="form-group span2"><label>Plano de contas</label><select id="fx-plano"><option value="">Sem categoria</option>'+pOpts+'</select></div>'+
+    '</div>'+
+    '<div class="form-acoes"><button onclick="salvarFixa(\''+eId+'\')" class="btn-salvar" style="background:#7c5cbf">Salvar conta fixa</button><span id="fx-msg" class="form-msg"></span></div></div>';
+}
+
+async function salvarFixa(eId){
+  const msg=document.getElementById('fx-msg');
+  const desc=document.getElementById('fx-desc').value.trim();
+  const valor=parseFloat(document.getElementById('fx-valor').value);
+  const dia=parseInt(document.getElementById('fx-dia').value);
+  if(!desc||!valor||!dia){msg.textContent='Descrição, valor e dia obrigatórios.';msg.style.color='#f44';return;}
+  msg.textContent='Salvando...';msg.style.color='#aaa';
+  const{error}=await sb.from('oct_contas_recorrentes').insert({empresa_id:eId,descricao:desc,valor_previsto:valor,dia_vencimento:dia,categoria:document.getElementById('fx-cat').value,fornecedor_id:document.getElementById('fx-forn').value||null,plano_conta_id:document.getElementById('fx-plano').value||null});
+  if(error){msg.textContent='Erro: '+error.message;msg.style.color='#f44';return;}
+  msg.textContent='Salva! Os títulos do ano entram no próximo ciclo (até 6h) — ou peça para gerar agora.';msg.style.color='#4caf50';
+  abrirGerenciarFixas(eId);abrirGerenciarFixas(eId);
+}
+
+async function excluirFixa(id,eId){
+  if(!confirm('Desativar esta conta fixa? Os títulos já lançados permanecem.'))return;
+  await sb.from('oct_contas_recorrentes').update({ativo:false}).eq('id',id);
+  abrirGerenciarFixas(eId);abrirGerenciarFixas(eId);
+}
 
 async function abrirGerenciarBancos(eId){
   const div=document.getElementById('form-bancos');div.style.display=div.style.display==='none'?'block':'none';if(div.style.display==='none')return;
