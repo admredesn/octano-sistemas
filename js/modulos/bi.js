@@ -66,16 +66,17 @@ async function _biRender() {
   const mes = hoje.slice(0, 7);
   const d15 = new Date(Date.now() - 16 * 864e5).toISOString().slice(0, 10);
 
-  const [empR, cpR, npR, fatR, tqR, prR, fila] = await Promise.all([
+  const [empR, cpR, cpMesR, npR, fatR, tqR, prR, fila] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status').eq('status', 'aberto').order('vencimento'),
+    sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', mes + '-01'),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
     sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
     sb.from('oct_produtos').select('empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
     _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,valor,desconto,acrescimo,status,ocorrido_em,criado_em').gte('criado_em', d15)),
   ]);
-  for (const r of [empR, cpR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
+  for (const r of [empR, cpR, cpMesR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
 
   const empresas = (empR.data || []).map(e => ({ id: e.id, nome: _biNomeCurto(e.nome) }))
     .sort((a, b) => a.nome.localeCompare(b.nome));
@@ -121,6 +122,8 @@ async function _biRender() {
       const dias = Math.max(1, Math.round((new Date(proxVenc + 'T12:00') - new Date(hoje + 'T12:00')) / 864e5) + 1);
       meta = { venc: proxVenc, valorAte: aPagarAte, dias, porDia: aPagarAte / dias, desc: futuras[0].descricao };
     }
+    // compras do mês (todas as NF-e viradas em título, pagas ou não)
+    const comprasMes = (cpMesR.data || []).filter(c => c.empresa_id === e).reduce((s, c) => s + Number(c.valor), 0);
     // contas a receber
     const receber = npR.filter(n => n.empresa_id === e).reduce((s, n) => s + Number(n.valor), 0)
       + (fatR.data || []).filter(f => f.empresa_id === e && !/liquid|pago|cancel/i.test(f.status || '')).reduce((s, f) => s + Number(f.valor), 0);
@@ -145,18 +148,18 @@ async function _biRender() {
     const projMes = (vMes[e] || 0) + media * (diasNoMes - Number(hoje.slice(8, 10)));
     return {
       ...emp, pagarTotal, nPagar: contas.length, vencidasTotal, nVencidas: vencidas.length, meta,
-      receber, estoque: estComb + estLoja, litros, semCusto,
+      comprasMes, receber, estoque: estComb + estLoja, litros, semCusto,
       vendaHoje: hj, media, realizadoMes: vMes[e] || 0, projMes,
     };
   });
 
   // consolidado do grupo
   const g = {
-    pagarTotal: 0, vencidasTotal: 0, receber: 0, estoque: 0, vendaHoje: 0,
+    pagarTotal: 0, vencidasTotal: 0, comprasMes: 0, receber: 0, estoque: 0, vendaHoje: 0,
     media: 0, realizadoMes: 0, projMes: 0, metaDia: 0,
   };
   dadosPosto.forEach(p => {
-    g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.receber += p.receber;
+    g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.comprasMes += p.comprasMes; g.receber += p.receber;
     g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.media += p.media;
     g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
     if (p.meta) g.metaDia += p.meta.porDia;
@@ -201,6 +204,7 @@ function _biCardGrupo(g) {
     '<div style="font-weight:700;color:#f97316;margin-bottom:10px">🏢 GRUPO — consolidado dos postos</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">' +
       ind('💸 Contas a pagar', g.pagarTotal, '#f44336', g.vencidasTotal > 0 ? _biK(g.vencidasTotal) + ' já vencidas' : 'nada vencido') +
+      ind('🛒 Compras do mês', g.comprasMes, '#fbbf24', 'NF-e de entrada (pagas + abertas)') +
       ind('💰 Contas a receber', g.receber, '#4caf50', 'notas a prazo + faturas') +
       ind('🛢️ Valor em estoque', g.estoque, '#60a5fa', 'combustível + loja, a custo') +
       ind('📈 Venda hoje', g.vendaHoje, '#e0e0e0', 'média/dia ' + _biK(g.media)) +
@@ -223,6 +227,7 @@ function _biCardPosto(p) {
       '<span style="font-weight:700;color:#e0e0e0">⛽ ' + p.nome + '</span>' +
       (p.nVencidas > 0 ? '<span style="font-size:0.72rem;color:#f44336;font-weight:700">' + p.nVencidas + ' vencida(s) ' + _biK(p.vencidasTotal) + '</span>' : '') + '</div>' +
     linha('💸 A pagar (' + p.nPagar + ')', p.pagarTotal, '#f44336') +
+    linha('🛒 Compras do mês', p.comprasMes, '#fbbf24') +
     linha('💰 A receber', p.receber, '#4caf50') +
     linha('🛢️ Estoque (' + Math.round(p.litros).toLocaleString('pt-BR') + ' L)', p.estoque, '#60a5fa') +
     linha('📈 Venda hoje', p.vendaHoje) +
