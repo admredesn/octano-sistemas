@@ -997,8 +997,8 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
 // cartao (15/08): Pix aparece JUNTO do cartão + filtro por bandeira.
 const FC_DETALHES = {
   dinheiro:       { titulo: '💵 Dinheiro / Sangria', formas: [], caixa: ['sangria'], cofre: true },
-  cartao:         { titulo: '💳 Cartão + Pix', formas: ['03', '04', '10', '11', '12', '13', '17', '18', '19'], grupos: ['cartao', 'pix'], maq: ['créd', 'cred', 'déb', 'deb', 'pix'], filtroBandeira: true },
-  pix:            { titulo: '⚡ Pix', formas: ['17', '18', '19'], grupos: ['pix'], maq: ['pix'] },
+  cartao:         { titulo: '💳 Cartão + Pix', formas: ['03', '04', '10', '11', '12', '13', '17', '18', '19'], grupos: ['cartao', 'pix'], filtroBandeira: true },
+  pix:            { titulo: '⚡ Pix', formas: ['17', '18', '19'], grupos: ['pix'] },
   prazo:          { titulo: '📄 Nota a Prazo', formas: ['05', '99', '90'] },
   cheque:         { titulo: '🧾 Cheque', formas: ['02'] },
   ctf:            { titulo: 'CTF', formas: [] },
@@ -1240,35 +1240,10 @@ async function fcNodeDetalhe(tipo) {
       : '<p style="padding:6px 8px;color:#777">Nenhum lançamento neste caixa.</p>');
   }
 
-  // 3) MAQUININHA (cartão/pix) — cada transação é um lançamento conferível;
-  //    o resumo por bandeira fica embaixo. Filtro de bandeira em cima (cartão).
-  if (cfg.maq) {
-    const rs = (rR.data || []).filter(r => cfg.maq.some(p => String(r.forma || '').toLowerCase().includes(p))).filter(fBand);
-    const linhas = rs.map(r => {
-      window._fcLancBase['receb:' + r.id] = { rotulo: 'Maquininha ' + (r.bandeira || r.forma || ''), valor: r.valor, forma_nome: r.forma, bandeira: r.bandeira };
-      return _fcRow('receb', r.id, `<td class="fc-td">${_fcHora(r.recebido_em)}</td>
-        <td class="fc-td">${fcEsc(_fcRotForma(null, r.forma, r.bandeira)) || '—'}</td>
-        <td class="fc-td fc-r">${r.parcelas > 1 ? r.parcelas + 'x' : '—'}</td>
-        <td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
-    });
-    const porBand = {};
-    rs.forEach(r => {
-      const b = (r.bandeira || r.forma || '—');
-      porBand[b] = porBand[b] || { qtd: 0, total: 0 };
-      porBand[b].qtd++; porBand[b].total += Number(r.valor || 0);
-    });
-    const resumo = Object.entries(porBand).sort((a, b) => b[1].total - a[1].total)
-      .map(([b, x]) => `<tr><td class="fc-td">${fcEsc(b)}</td><td class="fc-td fc-r">${x.qtd}</td><td class="fc-td fc-r">${fcMoney(x.total)}</td></tr>`);
-    const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
-    listaN += rs.length; listaTot += total;
-    secoes.push(stit(`Maquininha — ${rs.length} transação(ões) no período do turno`));
-    secoes.push(rs.length
-      ? tab(['', 'Hora', 'Forma/Bandeira', 'Parc.', 'Valor', ''], linhas,
-            `<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
-        + stit('Resumo por bandeira')
-        + tab(['Bandeira', 'Qtd', 'Total'], resumo)
-      : '<p style="padding:6px 8px;color:#777">Sem transações da maquininha no período (EDI/e-mail parado ou D-1 ainda não chegou).</p>');
-  }
+  // (18/08 — pedido Ronan) a lista de transações da MAQUININHA saiu deste
+  // balão: o operador confere a FILA; a prova da maquininha vive nos painéis
+  // "Conciliação bancária" e "Maquininha do turno" do fechamento. Mostrar as
+  // duas listas juntas confundia (parecia dinheiro em dobro).
 
   // 4) DEPÓSITOS DO COFRE / SANGRIA AUTOMÁTICA (dinheiro) — o VALOR DEPOSITADO
   if (cfg.cofre) {
