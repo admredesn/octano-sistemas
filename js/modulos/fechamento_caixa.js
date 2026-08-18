@@ -300,7 +300,10 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd });
+    // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
+    // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
+    if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
     // A SEÇÃO manda (18/08): despesa lançada "em Dinheiro" é DESPESA — sai da
     // gaveta e desconta do esperado. A forma só diz de onde o dinheiro saiu.
     // (antes a forma vencia e a despesa virava RECEBIMENTO de dinheiro,
@@ -1636,16 +1639,110 @@ function fcCupomVer(ref, id) {
     <div style="padding:10px"><button class="fc-btn" onclick="_fcCuponsRender()">← Voltar para a lista</button></div>`);
 }
 function fcModalItens(vs) {
+  // (18/08 — pedido Ronan) SÓ PRODUTOS DE LOJA: combustível (inclusive cupom
+  // frota, que é etanol/gasolina) fica na aba "Combustível Vendido".
   const map = {};
-  vs.forEach(v => (v.itens || []).forEach(it => {
+  vs.forEach(v => (v.itens || []).filter(it => it.tipo !== 'abastecimento').forEach(it => {
     const k = it.cod || it.desc || '?';
     if (!map[k]) map[k] = { desc: it.desc || it.cod, qtd: 0, valor: 0 };
     map[k].qtd += Number(it.qtd || 0);
     map[k].valor += Math.round(Number(it.qtd || 0) * Number(it.unit || 0) * 100) / 100;
   }));
-  const linhas = Object.values(map).sort((a, b) => b.valor - a.valor).map(m => `<tr>
-    <td class="fc-td">${fcEsc(m.desc)}</td><td class="fc-td fc-r">${fcNum(m.qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td></tr>`).join('');
-  fcModal('Itens Vendidos', `<table class="fc-grid"><thead><tr><th>Item</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>${linhas}</tbody></table>`);
+  // produtos vendidos pela FILA (baixados na pista, ainda sem NFC-e) também
+  // são itens vendidos do turno — sem bico = produto
+  const d0 = ((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {};
+  (d0.fila_itens || []).forEach(f => {
+    if (f.bico !== null && f.bico !== undefined && f.bico !== '') return;
+    const k = 'fila:' + (f.descricao || '?');
+    if (!map[k]) map[k] = { desc: (f.descricao || '?') + ' ⏳', qtd: 0, valor: 0 };
+    map[k].qtd += Number(f.litros || 0);
+    map[k].valor += Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+  });
+  let linhas = Object.values(map).sort((a, b) => b.valor - a.valor).map(m => `<tr>
+    <td class="fc-td">${fcEsc(m.desc)}</td><td class="fc-td fc-r">${fcNum(m.qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td><td class="fc-td"></td></tr>`).join('');
+  // itens lançados À MÃO (frentista esqueceu de registrar) — editáveis
+  (d0.manuais || []).filter(m => m.item_vendido).forEach(m => {
+    window._fcLancBase['manual:' + m.id] = { rotulo: 'Item vendido — ' + (m.descricao || ''), valor: m.valor, forma_nome: m.forma_nome, secao: m.secao };
+    linhas += _fcRow('manual', m.id, `<td class="fc-td">✍ ${fcEsc(m.descricao) || '—'} <span style="color:#888;font-size:0.72rem">(${fcEsc(m.forma_nome) || ''})</span></td>
+      <td class="fc-td fc-r">${fcNum(m.qtd || 1, 3)}</td>
+      <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
+  });
+  const total = Object.values(map).reduce((s, m) => s + m.valor, 0)
+    + (d0.manuais || []).filter(m => m.item_vendido).reduce((s, m) => s + Number(m.valor || 0), 0);
+  fcModal('📋 Itens Vendidos (produtos de loja)', `
+    <div class="fc-filtros">
+      <button class="fc-btn" style="color:#4ade80" onclick="fcItemVendidoForm()">➕ Lançar item vendido (esquecido)</button>
+      <span style="color:#667">combustível fica na aba ⛽ Combustível Vendido</span>
+    </div>
+    <table class="fc-grid"><thead><tr><th>Item</th><th>Qtd</th><th>Valor</th><th></th></tr></thead>
+    <tbody>${linhas || '<tr><td class="fc-td" colspan="4" style="color:#777">Nenhum produto vendido neste caixa.</td></tr>'}
+    <tr><td class="fc-td"><b>Total</b></td><td class="fc-td"></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td"></td></tr></tbody></table>`);
+}
+
+// ---- LANÇAR ITEM VENDIDO ESQUECIDO (18/08): entra como venda de produto E
+// como recebimento da forma escolhida — os dois lados do fechamento crescem
+// juntos. Vira lançamento manual auditável (ajuste.item_vendido). ----
+async function fcItemVendidoForm() {
+  fcModal('➕ Lançar item vendido', '<p style="padding:20px;color:#888">Carregando produtos...</p>');
+  let prods = [];
+  try {
+    const r = await sb.from('oct_produtos').select('id,nome,preco_venda_a')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true).order('nome');
+    prods = r.data || [];
+  } catch (e) {}
+  window._fcProdsIV = prods;
+  fcModal('➕ Lançar item vendido', `
+    <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
+      <p style="color:#888;font-size:0.75rem;margin-bottom:10px">Produto que o frentista vendeu e esqueceu de registrar. Entra como VENDA e como RECEBIMENTO da forma escolhida (auditável como manual).</p>
+      <label style="display:block;color:#9aa;font-size:0.75rem">Produto *</label>
+      <select id="fciv-prod" class="fc-inp2" style="width:100%" onchange="fcIVPreco()">
+        <option value="">— escolha —</option>
+        ${prods.map(p => `<option value="${p.id}" data-preco="${p.preco_venda_a || 0}">${fcEsc(p.nome)}</option>`).join('')}
+      </select>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <div><label style="display:block;color:#9aa;font-size:0.75rem">Qtd</label>
+          <input id="fciv-qtd" type="number" step="0.001" value="1" class="fc-inp2" style="width:90px" oninput="fcIVPreco()"></div>
+        <div><label style="display:block;color:#9aa;font-size:0.75rem">Valor total (R$) *</label>
+          <input id="fciv-valor" type="number" step="0.01" class="fc-inp2" style="width:130px"></div>
+        <div><label style="display:block;color:#9aa;font-size:0.75rem">Forma de pagamento</label>
+          <select id="fciv-forma" class="fc-inp2" style="width:170px">
+            ${['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Cartão Frota', 'Nota a prazo'].map(f => `<option>${f}</option>`).join('')}
+          </select></div>
+      </div>
+      <button class="fc-btn azul" style="width:100%;margin-top:14px" onclick="fcItemVendidoSalvar()">💾 Lançar</button>
+      <div id="fciv-msg" style="margin-top:8px;font-size:0.78rem;color:#f87171"></div>
+    </div>`);
+}
+
+function fcIVPreco() {
+  const sel = document.getElementById('fciv-prod');
+  const preco = Number((sel.selectedOptions[0] || {}).dataset?.preco || 0);
+  const qtd = parseFloat(document.getElementById('fciv-qtd').value) || 0;
+  if (preco > 0 && qtd > 0) document.getElementById('fciv-valor').value = (preco * qtd).toFixed(2);
+}
+
+async function fcItemVendidoSalvar() {
+  const sel = document.getElementById('fciv-prod');
+  const nome = (sel.selectedOptions[0] || {}).textContent || '';
+  const qtd = parseFloat(document.getElementById('fciv-qtd').value) || 1;
+  const valor = parseFloat(document.getElementById('fciv-valor').value);
+  const forma = document.getElementById('fciv-forma').value;
+  const msg = document.getElementById('fciv-msg');
+  if (!sel.value) { msg.textContent = 'Escolha o produto.'; return; }
+  if (isNaN(valor) || valor <= 0) { msg.textContent = 'Informe o valor.'; return; }
+  const secao = _fcGrupoNome(forma, '');
+  const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  const { error } = await sb.from('oct_fc_lancamentos').insert({
+    empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+    ref_tipo: 'manual', ref_id: refId, conferido: false,
+    ajuste: { manual: true, item_vendido: true, secao, valor, qtd,
+              forma_nome: forma, descricao: nome, produto_id: sel.value },
+  });
+  if (error) { msg.textContent = 'Erro: ' + error.message; return; }
+  const { turnos, porTurno } = await fcCarregarDados();
+  window._fcCache = { turnos, porTurno };
+  fcDetalhe(window._fcTurnoAtual);
+  fcNode('itens');
 }
 function fcModalCombustivel(vs) {
   const map = {};
