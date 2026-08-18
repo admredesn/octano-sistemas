@@ -110,7 +110,7 @@ async function fcCarregarDados() {
   const janIni = new Date(_fcTsUtc(janIni0) - 6 * 3600e3).toISOString();
   const janFim = new Date(_fcTsUtc(janFim0) + 6 * 3600e3).toISOString();
   const [vRes, cRes, fRes, rRes, vlRes, tRes] = await Promise.all([
-    sb.from('oct_pdv_vendas').select('turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
+    sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
     // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
