@@ -298,16 +298,22 @@ async function fcCarregarDados() {
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
     t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao });
-    const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
-    const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
-    if (GRUPOS_REC.includes(a.secao) || GRUPOS_REC.includes(g)) {
-      const chave = GRUPOS_REC.includes(g) ? g : a.secao;
-      t.rec[chave] = (t.rec[chave] || 0) + v;
-    } else if (a.secao === 'despesa') t.despesa += v;
+    // A SEÇÃO manda (18/08): despesa lançada "em Dinheiro" é DESPESA — sai da
+    // gaveta e desconta do esperado. A forma só diz de onde o dinheiro saiu.
+    // (antes a forma vencia e a despesa virava RECEBIMENTO de dinheiro,
+    // inflando o Resultado do Caixa — caso papelaria R$30,48.)
+    if (a.secao === 'despesa') t.despesa += v;
     else if (a.secao === 'suprimento') t.suprimento += v;
     else if (a.secao === 'deposito') t.deposito += v;
     else if (a.secao === 'receita') t.receita += v;
-    else t.outrosCaixa += v;
+    else if (a.secao === 'sangria') t.sangria += v;
+    else {
+      const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
+      const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
+      const chave = GRUPOS_REC.includes(g) ? g : (GRUPOS_REC.includes(a.secao) ? a.secao : 'outros');
+      if (chave === 'outros') t.outrosCaixa += v;
+      else t.rec[chave] = (t.rec[chave] || 0) + v;
+    }
   });
 
   // ---- CONFERÊNCIA DE CAIXA FÍSICO (dinheiro esperado × contado) ----
