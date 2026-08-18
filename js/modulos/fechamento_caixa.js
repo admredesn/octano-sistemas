@@ -461,11 +461,13 @@ function fcDetalhe(turnoId) {
     ['Cartão Frota', rec.frota],
     ['Nota a prazo', rec.prazo],
     ['Cheque', rec.cheque],
-    ['Despesas', d.despesa, I],
-    ['Deposito em Conta', d.deposito, I],
-    // mostra o LANÇADO pelo operador no fechamento (era o "líquido"
-    // fechamento−abertura, que não batia com nada visível — 18/08)
-    ['Troco Final (gaveta)', Number(t.valor_fechamento || 0), I],
+    // MODELO DO RONAN (18/08): o lado esquerdo é a PRESTAÇÃO DE CONTAS — onde
+    // o dinheiro foi parar. Despesa paga, depósito em banco e o que ficou na
+    // gaveta SOMAM aqui; contra vendas + troco inicial do outro lado, a
+    // diferença é a falta/sobra (bate com a conferência de gaveta).
+    ['Despesas', d.despesa],
+    ['Deposito em Conta', d.deposito],
+    ['Troco Final (gaveta)', Number(t.valor_fechamento || 0)],
     ['Vale Haver', d.vale_haver, I],
     ['Vale Motorista', d.vale_desconto, I],
   ];
@@ -496,11 +498,11 @@ function fcDetalhe(turnoId) {
   // o mesmo dinheiro em dobro (ex.: 8.184,27 = 6.453,50 + 1.730,77 no turno 31).
   const receb = recebBase.concat([['Falta de Caixa (conf. gaveta)', faltaCaixa]]);
   const vendas = vendasBase.concat([['Sobra de Caixa (conf. gaveta)', sobraCaixa]]);
-  const totalReceb = somaReceb;                // SÓ recebimentos de cliente (18/08)
-  const totalVenda = somaVenda;                // vendas + Remessas (fundo saindo)
-  // fundo entra como ENTRADA DE CAIXA à parte (não é recebimento de cliente)
-  const fundoCaixa = Number(t.valor_abertura || 0) + Number(d.suprimento || 0);
-  const resultado = (totalReceb + fundoCaixa) - totalVenda;   // ~0 quando tudo casa
+  const totalReceb = somaReceb;   // prestação de contas: cofre+maquininha+frota+despesas+gaveta
+  const totalVenda = somaVenda;   // origem: vendas + troco inicial (Remessas)
+  // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA
+  // (deve bater com a conferência de gaveta — dois caminhos, mesmo número)
+  const resultado = totalReceb - totalVenda;
 
   // TOTAL MOVIMENTADO no caixa = tudo que passou (vendas/saídas: fila+transmitidos
   // + títulos recebidos).
