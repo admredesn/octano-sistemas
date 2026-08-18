@@ -945,13 +945,33 @@ async function fcLancExcluir(marcados) {
   await _fcRecarregarNode();
 }
 
-// recarrega os dados e reabre o mesmo balão
-async function _fcRecarregarNode() {
-  const node = window._fcNodeAtual;
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
-  fcDetalhe(window._fcTurnoAtual);
-  if (node) fcNode(node);
+// ---- RECARREGAMENTO CENTRAL (18/08): toda ação que muda valor chama isto.
+// Erro aparece (nada de falhar em silêncio e a tela ficar velha).
+async function fcRecarregar(reabrirNode) {
+  try {
+    const { turnos, porTurno } = await fcCarregarDados();
+    window._fcCache = { turnos, porTurno };
+    if (window._fcTurnoAtual) fcDetalhe(window._fcTurnoAtual);
+    else fcListar();
+    if (reabrirNode) fcNode(reabrirNode);
+  } catch (e) {
+    alert('Falha ao atualizar a tela: ' + ((e && e.message) || e));
+  }
+}
+async function _fcRecarregarNode() { await fcRecarregar(window._fcNodeAtual); }
+
+// AUTO-ATUALIZAÇÃO (18/08): com a tela do turno aberta, os números se
+// renovam sozinhos a cada 30s — depósito do cofre, venda nova, edição de
+// outro usuário. Pausa quando um modal está aberto (não atrapalha edição).
+if (!window._fcAutoTimer) {
+  window._fcAutoTimer = setInterval(() => {
+    try {
+      if (!window._fcTurnoAtual) return;
+      if (document.getElementById('fc-modal')) return;
+      if (!document.querySelector('.fc-corpo')) return;   // F.Caixa não está na tela
+      fcRecarregar();
+    } catch (e) { /* nunca derruba o timer */ }
+  }, 30000);
 }
 
 // rótulo completo forma+bandeira ("Crédito Mastercard", "Débito Elo", "Pix")
@@ -1026,11 +1046,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
     return;
   }
   // recarrega os dados (o ajuste entra nas somas) e reabre onde estava
-  const node = window._fcNodeAtual;
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
-  fcDetalhe(window._fcTurnoAtual);
-  if (node) fcNode(node);
+  await fcRecarregar(window._fcNodeAtual);
 }
 
 // ---------- BALÕES da árvore lateral: detalhamento de cada recebimento/remessa ----------
@@ -1390,9 +1406,7 @@ async function fcTrocoSalvar(campo) {
   if (isNaN(val) || val < 0) { alert('Valor inválido.'); return; }
   const { error } = await sb.from('oct_pdv_turnos').update({ [campo]: val }).eq('id', window._fcTurnoAtual);
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
-  fcDetalhe(window._fcTurnoAtual);
+  await fcRecarregar(window._fcNodeAtual);
 }
 
 // lança a falta (vale: pessoa deve) ou sobra (haver) para o responsável escolhido
@@ -1435,9 +1449,7 @@ async function fcDifLancar(dif) {
     operador: 'retaguarda',
   });
   if (error) { alert('Erro ao lançar: ' + error.message); return; }
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
-  fcDetalhe(window._fcTurnoAtual);
+  await fcRecarregar();
   alert(`${dif < 0 ? 'Falta' : 'Sobra'} de ${fcMoney(Math.abs(dif))} lançada para ${pnome}.`);
 }
 // ---------- Nós de MOVIMENTAÇÃO (vales, recebimentos externos, ledger) ----------
@@ -1739,10 +1751,7 @@ async function fcItemVendidoSalvar() {
               forma_nome: forma, descricao: nome, produto_id: sel.value },
   });
   if (error) { msg.textContent = 'Erro: ' + error.message; return; }
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
-  fcDetalhe(window._fcTurnoAtual);
-  fcNode('itens');
+  await fcRecarregar('itens');
 }
 function fcModalCombustivel(vs) {
   const map = {};
@@ -1797,6 +1806,7 @@ async function fcConfirmarCaixa(turnoId) {
     }).eq('id', turnoId);
     if (error) throw error;
     alert('✔ Conferência confirmada. ' + resumo);
+    fcRecarregar();
   } catch (e) {
     const m = String(e.message || e);
     alert('Erro ao confirmar: ' + m + (/conferido|diferenca_caixa|dinheiro_esperado/.test(m) ? '\n\n→ Rode antes o SQL-CONFERENCIA-CAIXA.sql (colunas novas no turno).' : ''));
