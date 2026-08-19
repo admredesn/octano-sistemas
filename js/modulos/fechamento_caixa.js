@@ -572,15 +572,11 @@ function fcDetalhe(turnoId) {
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
               ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('🚛 Cartão Frota', 'frota')}${nodo('📄 Nota a Prazo', 'prazo')}
-              ${d.fila_total > 0.009 ? nodo('⏳ Fila de transmissão', 'fila') : ''}
               ${nodo('🧾 Cheque', 'cheque')}
               ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
-            <li>😊 Vales / Haver<ul>
-              ${nodo('🤝 Haver (crédito/troco)', 'vale_haver')}${nodo('👷 Vale / Consumo', 'vale_motorista')}${nodo('📒 Todos os vales', 'vales')}
-            </ul></li>
             <li>📁 Remessas<ul>
-              ${nodo('Suprimentos', 'suprimento')}${nodo('Haver', 'haver')}${nodo('Cheque Troco', 'cheque_troco')}${nodo('Títulos Recebidos', 'titulos')}${nodo('Receita', 'receita')}
+              ${nodo('Suprimentos', 'suprimento')}${nodo('Títulos Recebidos', 'titulos')}${nodo('Receita', 'receita')}
             </ul></li>
             <li>📁 Diferença de Caixa<ul>
               ${nodo('🔴 Falta de Caixa', 'diferenca')}${nodo('🟢 Sobra de Caixa', 'diferenca')}
