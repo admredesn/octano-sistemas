@@ -129,10 +129,11 @@ async function _biRender() {
   const filaProm = umaJanela ? fFila(iniJanela, null) : duasJanelas(fFila);
   const pistaProm = umaJanela ? fPista(iniJanela, null) : duasJanelas(fPista);
 
-  const [empR, cpR, cpMesR, npR, fatR, tqR, prR, fila, pista] = await Promise.all([
+  const [empR, cpR, cpMesR, fixasR, npR, fatR, tqR, prR, fila, pista] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
-    sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status').eq('status', 'aberto').order('vencimento'),
+    sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status,categoria').eq('status', 'aberto').order('vencimento'),
     sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', per.ini).lte('competencia', per.fim),
+    sb.from('oct_contas_recorrentes').select('empresa_id,valor_previsto').eq('ativo', true),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
     sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
@@ -187,16 +188,29 @@ async function _biRender() {
     const pagarTotal = contas.reduce((s, c) => s + Number(c.valor), 0);
     const vencidas = contas.filter(c => c.vencimento < hoje);
     const vencidasTotal = vencidas.reduce((s, c) => s + Number(c.valor), 0);
-    // meta do dia: SÓ o próximo vencimento FUTURO (>= hoje). Conta vencida não
-    // vira meta (daria "vender R$100 mil hoje") — vencida é alerta p/ liquidar.
-    const futuras = contas.filter(c => c.vencimento >= hoje);
-    let meta = null;
-    if (futuras.length) {
-      const proxVenc = futuras[0].vencimento;
-      const aPagarAte = futuras.filter(c => c.vencimento <= proxVenc).reduce((s, c) => s + Number(c.valor), 0);
-      const dias = Math.max(1, Math.round((new Date(proxVenc + 'T12:00') - new Date(hoje + 'T12:00')) / 864e5) + 1);
-      meta = { venc: proxVenc, valorAte: aPagarAte, dias, porDia: aPagarAte / dias, desc: futuras[0].descricao };
-    }
+    // META DO DIA (modelo Ronan 18/08): custo fixo do mês DILUÍDO por dia
+    // + cada boleto aberto diluído pelos dias até o SEU vencimento.
+    //   fixo/dia   = Σ contas fixas cadastradas (🔁 Fixas) ÷ dias do mês
+    //   boleto/dia = Σ valor ÷ dias-até-vencer (título futuro, não-recorrente —
+    //                o recorrente já está no fixo, contar de novo dobraria)
+    // Vencida NÃO entra (alerta separado; meta é ritmo, não resgate).
+    const diasMes = new Date(Number(hoje.slice(0, 4)), Number(hoje.slice(5, 7)), 0).getDate();
+    const fixoMes = (fixasR.data || []).filter(x => x.empresa_id === e)
+      .reduce((s, x) => s + Number(x.valor_previsto), 0);
+    const fixoDia = fixoMes / diasMes;
+    const futuras = contas.filter(c => c.vencimento >= hoje && c.categoria !== 'recorrente');
+    let boletosDia = 0;
+    futuras.forEach(c => {
+      const dias = Math.max(1, Math.round((new Date(c.vencimento + 'T12:00') - new Date(hoje + 'T12:00')) / 864e5) + 1);
+      boletosDia += Number(c.valor) / dias;
+    });
+    const meta = (fixoDia + boletosDia) > 0 ? {
+      porDia: fixoDia + boletosDia, fixoDia, boletosDia, fixoMes,
+      nBoletos: futuras.length,
+      venc: futuras.length ? futuras[0].vencimento : null,
+      valorAte: futuras.length ? futuras.filter(c => c.vencimento <= futuras[0].vencimento)
+        .reduce((s, c) => s + Number(c.valor), 0) : 0,
+    } : null;
     // compras do período (todas as NF-e viradas em título, pagas ou não)
     const comprasMes = (cpMesR.data || []).filter(c => c.empresa_id === e).reduce((s, c) => s + Number(c.valor), 0);
     // títulos abertos que VENCEM dentro do período
@@ -241,7 +255,7 @@ async function _biRender() {
     g.vencePer += p.vencePer; g.receber += p.receber;
     g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.vendaPer += p.vendaPer; g.mediaPer += p.mediaPer;
     g.media += p.media; g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
-    if (p.meta) g.metaDia += p.meta.porDia;
+    if (p.meta) { g.metaDia += p.meta.porDia; g.fixoDia = (g.fixoDia || 0) + p.meta.fixoDia; g.boletosDia = (g.boletosDia || 0) + p.meta.boletosDia; }
   });
 
   const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -262,16 +276,19 @@ async function _biRender() {
       '</div></div>';
 }
 
-function _biBarraMeta(vendido, metaDia) {
-  if (!metaDia || metaDia <= 0) return '<div style="color:#667;font-size:0.75rem">Sem conta aberta — sem meta do dia.</div>';
+function _biBarraMeta(vendido, metaDia, fixoDia, boletosDia) {
+  if (!metaDia || metaDia <= 0) return '<div style="color:#667;font-size:0.75rem">Sem custo fixo nem boleto aberto — sem meta do dia.</div>';
   const pct = Math.round(vendido / metaDia * 100);
   const cor = pct >= 100 ? '#4caf50' : pct >= 60 ? '#fbbf24' : '#f97316';
+  const quebra = (fixoDia || boletosDia)
+    ? 'fixo ' + _biK(fixoDia || 0) + ' + boletos ' + _biK(boletosDia || 0) + ' = '
+    : '';
   return '<div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#9aa;margin-bottom:3px">' +
       '<span>Evolução do dia</span><span style="color:' + cor + ';font-weight:700">' + pct + '%</span></div>' +
     '<div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;height:14px;overflow:hidden">' +
       '<div style="width:' + Math.min(100, pct) + '%;height:100%;background:' + cor + ';transition:width .6s"></div></div>' +
     '<div style="display:flex;justify-content:space-between;font-size:0.72rem;color:#778;margin-top:3px">' +
-      '<span>vendido ' + _biK(vendido) + '</span><span>meta/dia ' + _biK(metaDia) + '</span></div>';
+      '<span>vendido ' + _biK(vendido) + '</span><span>' + quebra + 'meta/dia ' + _biK(metaDia) + '</span></div>';
 }
 
 function _biCardGrupo(g) {
@@ -291,17 +308,18 @@ function _biCardGrupo(g) {
       ind('💵 Venda no período', g.vendaPer, '#e0e0e0', 'média/dia ' + _biK(g.mediaPer)) +
       ind('🔮 Projeção do mês', g.projMes, '#c084fc', 'realizado ' + _biK(g.realizadoMes)) +
     '</div>' +
-    '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia) + '</div></div>';
+    '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia, g.fixoDia, g.boletosDia) + '</div></div>';
 }
 
 function _biCardPosto(p) {
   const linha = (rot, val, cor) =>
     '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a1d2e;font-size:0.82rem">' +
       '<span style="color:#9aa">' + rot + '</span><span style="font-weight:700;color:' + (cor || '#e0e0e0') + '">' + _biK(val) + '</span></div>';
-  const venc = p.meta
+  const venc = (p.meta && p.meta.venc)
     ? '<div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;padding:8px;margin:8px 0;font-size:0.75rem;color:#9aa">' +
-        '⏰ Próx. vencimento <b style="color:' + (p.meta.venc < _biHojeLocal() ? '#f44336' : '#fbbf24') + '">' + _biDtBr(p.meta.venc) + '</b>' +
-        ' — a pagar até lá <b style="color:#e0e0e0">' + _biK(p.meta.valorAte) + '</b> em ' + p.meta.dias + ' dia(s)</div>'
+        '⏰ Próx. vencimento <b style="color:#fbbf24">' + _biDtBr(p.meta.venc) + '</b>' +
+        ' — <b style="color:#e0e0e0">' + _biK(p.meta.valorAte) + '</b> · ' + p.meta.nBoletos + ' boleto(s) aberto(s) no ritmo' +
+        (p.meta.fixoMes ? ' · fixo do mês ' + _biK(p.meta.fixoMes) : '') + '</div>'
     : '';
   return '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:14px">' +
     '<div style="display:flex;justify-content:space-between;margin-bottom:8px">' +
@@ -317,7 +335,7 @@ function _biCardPosto(p) {
     linha('📈 Venda hoje', p.vendaHoje) +
     linha('🔮 Projeção do mês', p.projMes, '#c084fc') +
     venc +
-    '<div style="margin-top:8px">' + _biBarraMeta(p.vendaHoje, p.meta ? p.meta.porDia : 0) + '</div>' +
+    '<div style="margin-top:8px">' + _biBarraMeta(p.vendaHoje, p.meta ? p.meta.porDia : 0, p.meta ? p.meta.fixoDia : 0, p.meta ? p.meta.boletosDia : 0) + '</div>' +
     (p.semCusto && p.semCusto.length ? '<div style="font-size:0.7rem;color:#a63;margin-top:6px">⚠ sem custo cadastrado: ' + p.semCusto.join(', ') + ' (estoque desses fora da conta)</div>' : '') +
   '</div>';
 }
