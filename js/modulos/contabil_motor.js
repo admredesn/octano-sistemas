@@ -55,6 +55,11 @@ const CTB_PLANO_PADRAO = [
   ["3.2.1", "DESPESAS FINANCEIRAS", "04", "S", 3, "3.2"],
   ["3.2.1.05", "Despesas financeiras", "04", "S", 4, "3.2.1"],
   ["3.2.1.05.000001", "Taxas de cartao e adquirentes", "04", "A", 5, "3.2.1.05"],
+  // v3 — extrato bancário
+  ["1.1.1.05", "CREDITOS COM LIGADAS", "01", "S", 4, "1.1.1"],
+  ["1.1.1.05.000001", "Conta corrente entre empresas do grupo", "01", "A", 5, "1.1.1.05"],
+  ["3.1.3.99.000002", "Impostos e taxas pagos (DAE/guias)", "04", "A", 5, "3.1.3.99"],
+  ["3.1.3.99.000098", "Despesas a classificar (extrato bancario)", "04", "A", 5, "3.1.3.99"],
 ];
 
 // contas usadas pelos templates (apelidos legiveis)
@@ -71,6 +76,9 @@ const CTB = {
   COMPRAS: "3.1.2.01.000003",
   TAXA_CARTAO: "3.2.1.05.000001",
   DESPESAS_GERAIS: "3.1.3.99.000001",
+  LIGADAS: "1.1.1.05.000001",
+  IMPOSTOS_PAGOS: "3.1.3.99.000002",
+  A_CLASSIFICAR: "3.1.3.99.000098",
 };
 
 // forma de pagamento (tpag da NFC-e) -> conta que recebe o dinheiro.
@@ -222,6 +230,37 @@ function ctbMontarLancamentos(d) {
     });
   });
 
+  // ---- 7. EXTRATO BANCÁRIO (v3): DÉBITOS do extrato Sicoob SEM baixa no
+  //         contas a pagar. Classificação conservadora: transferência p/
+  //         empresa do grupo (FAV.: SN... / mesma titularidade) vira crédito
+  //         com ligadas; DAE/guia vira imposto pago; o resto cai na conta
+  //         TRANSITÓRIA "a classificar" — o balancete fecha e o contador
+  //         reclassifica. CRÉDITOS ficam FORA (as entradas de banco já nascem
+  //         das vendas tpag 17 e das sangrias D Banco/C Caixa — somar o
+  //         extrato de novo contaria em dobro). ----
+  (d.bancoMovs || []).forEach(m => {
+    if (String(m.tipo || "") !== "debito") return;
+    if (m.conta_pagar_id) return;   // baixado no contas a pagar: já contabilizado no evento 5
+    const v = Number(m.valor || 0);
+    if (v <= 0.004) return;
+    const txt = ((m.descricao || "") + " " + (m.info || "")).toUpperCase();
+    let conta = CTB.A_CLASSIFICAR, rot = "Débito bancário a classificar";
+    if (/MESMA TIT/.test(txt) || /FAV\.: SN /.test(txt)) {
+      conta = CTB.LIGADAS; rot = "Transferência p/ empresa do grupo";
+    } else if (/\bDAE\b/.test(txt)) {
+      conta = CTB.IMPOSTOS_PAGOS; rot = "Pagamento de DAE/guia";
+    }
+    L.push({
+      data: String(m.data || "").slice(0, 10), valor: Number(v.toFixed(2)),
+      historico: rot + " — " + String(m.descricao || "").slice(0, 60),
+      origem: "banco-extrato", chave: String(m.id), competencia: comp,
+      partidas: [
+        { conta, dc: "D", valor: Number(v.toFixed(2)), hist: String(m.info || "").slice(0, 80) },
+        { conta: CTB.BANCOS, dc: "C", valor: Number(v.toFixed(2)) },
+      ],
+    });
+  });
+
   // ---- verificação: TODO lançamento fecha D = C (partida dobrada não é opcional) ----
   L.forEach(l => {
     const deb = l.partidas.filter(p => p.dc === "D").reduce((s, p) => s + p.valor, 0);
@@ -349,6 +388,13 @@ async function ctbContabilizar() {
       .gte('recebido_em', dtIni).lte('recebido_em', dtFim + 'T23:59:59')
       .then(r => r.data || []);
 
+    // v3: extrato bancário do mês (Sicoob) — só débitos sem baixa entram
+    // (regra no núcleo puro); tabela pode não existir p/ empresa sem conta
+    const bancoMovs = await sb.from('oct_banco_movimentos')
+      .select('id,data,valor,tipo,descricao,info,conciliado,conta_pagar_id')
+      .eq('empresa_id', eId).gte('data', dtIni).lte('data', dtFim + 'T23:59:59')
+      .then(r => r.data || [], () => []);
+
     // v2: conta analítica por fornecedor (padrão do contador: uma
     // 2.1.1.01.NNNNNN por casa; a genérica .000001 fica de fallback)
     const fornecedorConta = await ctbGarantirContasFornecedor(eId,
@@ -375,7 +421,7 @@ async function ctbContabilizar() {
     });
 
     const r = ctbMontarLancamentos({
-      competencia: comp, nfces, entradas, pagamentos, sangrias, fornecedorConta,
+      competencia: comp, nfces, entradas, pagamentos, sangrias, fornecedorConta, bancoMovs,
       pisCofinsDia: Array.from(basePorDia, ([dia, base]) => ({ dia, base })),
       taxasDia: Array.from(taxasDia, ([dia, taxa]) => ({ dia, taxa })),
     });
