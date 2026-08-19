@@ -56,6 +56,7 @@ const CTB_PLANO_PADRAO = [
   ["3.2.1.05", "Despesas financeiras", "04", "S", 4, "3.2.1"],
   ["3.2.1.05.000001", "Taxas de cartao e adquirentes", "04", "A", 5, "3.2.1.05"],
   // v3 — extrato bancário
+  ["3.2.1.05.000002", "Juros e multas pagos", "04", "A", 5, "3.2.1.05"],
   ["1.1.1.05", "CREDITOS COM LIGADAS", "01", "S", 4, "1.1.1"],
   ["1.1.1.05.000001", "Conta corrente entre empresas do grupo", "01", "A", 5, "1.1.1.05"],
   ["3.1.3.99.000002", "Impostos e taxas pagos (DAE/guias)", "04", "A", 5, "3.1.3.99"],
@@ -76,6 +77,7 @@ const CTB = {
   COMPRAS: "3.1.2.01.000003",
   TAXA_CARTAO: "3.2.1.05.000001",
   DESPESAS_GERAIS: "3.1.3.99.000001",
+  JUROS_PAGOS: "3.2.1.05.000002",
   LIGADAS: "1.1.1.05.000001",
   IMPOSTOS_PAGOS: "3.1.3.99.000002",
   A_CLASSIFICAR: "3.1.3.99.000098",
@@ -195,7 +197,10 @@ function ctbMontarLancamentos(d) {
     const v = Number(p.valor_pago || p.valor || 0);
     if (v <= 0.004) return;
     const ehCompra = !!p.nfe_id;
-    const debito = ehCompra ? contaForn(p.fornecedor_id) : CTB.DESPESAS_GERAIS;
+    // título de JUROS/ENCARGO criado pelo conciliador Sicoob → despesa
+    // financeira própria (regra Ronan: juros acumulam em conta separada)
+    const ehJuros = /juros|encargo|multa/i.test(String(p.descricao || ""));
+    const debito = ehCompra ? contaForn(p.fornecedor_id) : (ehJuros ? CTB.JUROS_PAGOS : CTB.DESPESAS_GERAIS);
     const credito = /dinheiro/i.test(String(p.forma_pagamento || "")) ? CTB.CAIXA : CTB.BANCOS;
     L.push({
       data: String(p.data_pagamento || "").slice(0, 10), valor: Number(v.toFixed(2)),
