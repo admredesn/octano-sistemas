@@ -214,18 +214,19 @@ async function fcCarregarDados() {
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const litros = Number(f.litros || 0);
-    // REGRA (Ronan 14/08): fila só entra no CAIXA se o pagamento foi confirmado
-    // (recebido_em). Abastecido sem pagamento = pendência de pista, não recebimento.
+    // combustível TEM BICO; produto de loja não (o campo litros carrega a QTD
+    // do produto — ex.: 1 óleo Mobil "1.0 L" — e enganava a régua até 18/08)
+    const ehComb = (f.bico !== null && f.bico !== undefined && f.bico !== '') && litros > 0;
+    // VENDA é o que saiu da bomba/estoque (régua TecnoX, Ronan 19/08): soma no
+    // lado Vendas/Saídas mesmo sem pagamento confirmado. RECEBIMENTO continua
+    // exigindo recebido_em (regra 14/08) — sem pgto fica como pendência.
+    t.venda_total += vf;
+    if (ehComb) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
     if (!f.recebido_em) {
       t.fila_sem_pgto += vf; t.fila_sem_pgto_itens.push(f);
       return;
     }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
-    t.venda_total += vf;
-    // combustível TEM BICO; produto de loja não (o campo litros carrega a QTD
-    // do produto — ex.: 1 óleo Mobil "1.0 L" — e enganava a régua até 18/08)
-    const ehComb = (f.bico !== null && f.bico !== undefined && f.bico !== '') && litros > 0;
-    if (ehComb) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
     const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
     t.rec[g] = (t.rec[g] || 0) + vf;
   });
@@ -613,7 +614,7 @@ function fcDetalhe(turnoId) {
           ${vendas.map(r => linhaVal(r[0], r[1], r[2])).join('')}
           <div class="fc-litros">${fcNum(d.litros_comb, 3)} L de combustível &nbsp;·&nbsp; ${d.qtd_vendas} cupons</div>
           ${d.fila_total > 0.009 ? `<div class="fc-litros" style="color:#fbbf24;cursor:pointer" onclick="fcNode('fila')">⏳ ${(d.fila_itens || []).length} abastecimento(s) pagos na fila de transmissão: ${fcMoney(d.fila_total)} (já somados acima — clique p/ detalhar)</div>` : ''}
-          ${d.fila_sem_pgto > 0.009 ? `<div class="fc-litros" style="color:#e06c6c">⚠ ${(d.fila_sem_pgto_itens || []).length} abastecimento(s) SEM pagamento confirmado: ${fcMoney(d.fila_sem_pgto)} (fora do caixa — pendência de pista)</div>` : ''}
+          ${d.fila_sem_pgto > 0.009 ? `<div class="fc-litros" style="color:#e06c6c">⚠ ${(d.fila_sem_pgto_itens || []).length} abastecimento(s) SEM pagamento confirmado: ${fcMoney(d.fila_sem_pgto)} (somado nas VENDAS; fora dos recebimentos até confirmar)</div>` : ''}
           <div class="fc-total"><span>Total Vendas / Saída:</span><span class="fc-box forte azulf">${fcMoney(totalVenda)}</span></div>
           <div class="fc-total" style="border-top:2px solid #f97316;margin-top:6px">
             <span>💰 Total movimentado no caixa</span>
