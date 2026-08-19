@@ -953,7 +953,7 @@ async function fcLancIncluir() {
         <div style="max-height:160px;overflow:auto;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:10px">
         ${livres.map(a => `<label style="display:flex;gap:8px;padding:5px 8px;border-bottom:1px solid #1a1d2e;cursor:pointer;font-size:0.78rem">
           <input type="radio" name="fcm-abast" value="${a.id}"
-            onclick="document.getElementById('fcm-valor').value='${Number(a.valor_total || 0).toFixed(2)}';document.getElementById('fcm-desc').value='${fcEsc(a.combustivel || 'Abastecimento')} bico ${a.bico ?? ''} ${_fcHora(a.data_abast)} (pista ${String(a.id).slice(0, 8)})'">
+            onclick="fcmAbastToggle(this,'${Number(a.valor_total || 0).toFixed(2)}','${fcEsc(a.combustivel || 'Abastecimento')} bico ${a.bico ?? ''} ${_fcHora(a.data_abast)} (pista ${String(a.id).slice(0, 8)})')">
           <span style="width:44px;color:#889">${_fcHora(a.data_abast)}</span>
           <span style="flex:1">${fcEsc(a.combustivel) || '—'} · bico ${a.bico ?? '—'} · ${fcNum(a.litros, 2)} L</span>
           <b>${fcMoney(a.valor_total)}</b></label>`).join('')}
@@ -984,6 +984,22 @@ async function fcLancIncluir() {
       </div>
     </div>`);
   window._fcModalVolta = true;   // fechar sem salvar volta pra conferência
+}
+
+// rádio da pista com DESMARCAR: clicar de novo no selecionado limpa a escolha
+// (rádio puro não desmarca — reclamação do Ronan 19/08)
+function fcmAbastToggle(radio, valor, desc) {
+  if (radio.dataset.on === '1') {
+    radio.checked = false;
+    radio.dataset.on = '';
+    document.getElementById('fcm-valor').value = '';
+    document.getElementById('fcm-desc').value = '';
+    return;
+  }
+  document.querySelectorAll('input[name="fcm-abast"]').forEach(r => r.dataset.on = '');
+  radio.dataset.on = '1';
+  document.getElementById('fcm-valor').value = valor;
+  document.getElementById('fcm-desc').value = desc;
 }
 
 async function fcLancIncluirSalvar(secao) {
