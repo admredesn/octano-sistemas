@@ -117,7 +117,7 @@ async function fcCarregarDados() {
     // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
     // ocorrido_em dentro do período e atribuímos ao turno pela hora de abertura/
     // fechamento — o horário é sempre gravado, o turno_id não.
-    _fcTudo(() => sb.from('oct_fila_transmissao').select('id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em')
+    _fcTudo(() => sb.from('oct_fila_transmissao').select('id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em,vendedor')
       .eq('empresa_id', eid).eq('status', 'fila')
       .gte('ocorrido_em', janIni).lte('ocorrido_em', janFim).order('ocorrido_em')),
     // RECEBIMENTOS (maquininha/cofre/sangria): sem turno_id — casa por horário.
@@ -1312,16 +1312,38 @@ async function fcNodeDetalhe(tipo) {
         const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
         totF += vf;
         window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-        return _fcRow('fila', f.id, `<td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
+        return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+          <td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
           <td class="fc-td">${f.bico ?? '—'}</td>
           <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+          <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(vf)}</td>`);
       });
       listaN += fsFila.length; listaTot += totF;
       secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
-      secoes.push(tab(['', 'Combustível/Produto', 'Bico', 'Litros', 'Forma', 'Valor', ''], linF,
-        `<tr><td class="fc-td" colspan="5"><b>Total na fila</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totF)}</b></td></tr>`));
+      secoes.push(tab(['', 'Hora', 'Combustível/Produto', 'Bico', 'Litros', 'Vendedor', 'Forma', 'Valor', ''], linF,
+        `<tr><td class="fc-td" colspan="7"><b>Total na fila</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totF)}</b></td></tr>`));
+    }
+    // TOTAIS POR FORMA DE PAGTO (modelo TecnoX, 19/08): resumo do nó inteiro,
+    // SEM o filtro de bandeira — o operador vê o todo enquanto filtra a lista.
+    {
+      const todasFila = (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)));
+      const totais = {};
+      todasFila.forEach(f => {
+        const p = _rotParte(f);
+        const rot = p.forma + (p.band ? ' ' + p.band : '');
+        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+        (totais[rot] = totais[rot] || { n: 0, v: 0 }); totais[rot].n++; totais[rot].v += vf;
+      });
+      const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
+      if (chavesT.length) {
+        const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
+        secoes.push(stit('Σ Totais por forma de pagto'));
+        secoes.push(`<table class="fc-grid" style="max-width:420px"><thead><tr><th>Forma</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>
+          ${chavesT.map(k => `<tr><td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${totais[k].n}</td><td class="fc-td fc-r">${fcMoney(totais[k].v)}</td></tr>`).join('')}
+          <tr><td class="fc-td"><b>TODOS</b></td><td class="fc-td fc-r"><b>${todasFila.length}</b></td><td class="fc-td fc-r"><b>${fcMoney(totalGeral)}</b></td></tr></tbody></table>`);
+      }
     }
   }
 
