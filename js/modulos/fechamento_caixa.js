@@ -1344,7 +1344,17 @@ async function fcNodeDetalhe(tipo) {
       // ITENS do cupom na descrição (19/08 — pedido Ronan): "C" indica cupom e
       // o operador vê O QUE foi vendido, não só o número
       const its = v.itens || [];
-      const descItens = its.map(it => it.desc || it.cod).filter(Boolean).join(' + ');
+      // nome fiscal feio ("ONU 3475,MISTURA DE ETANOL... - GASOLINA C") vira o
+      // apelido depois do último " - "; sem hífen, cai fora só o prefixo ONU
+      const amigavel = (s) => {
+        s = String(s || '');
+        if (/^ONU\s*\d/i.test(s)) {
+          const i = s.lastIndexOf(' - ');
+          return i > 0 ? s.slice(i + 3).trim() : s.replace(/^ONU\s*\d+\s*,?\s*/i, '').trim();
+        }
+        return s;
+      };
+      const descItens = its.map(it => amigavel(it.desc || it.cod)).filter(Boolean).join(' + ');
       const litrosCupom = its.filter(it => it.tipo === 'abastecimento')
         .reduce((s, it) => s + Number(it.qtd || 0), 0);
       window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor, forma_nome: rotF };
