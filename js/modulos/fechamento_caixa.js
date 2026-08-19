@@ -632,7 +632,7 @@ function fcDetalhe(turnoId) {
             <span>💰 Total movimentado no caixa</span>
             <span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span>
           </div>
-          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + Transmitidos ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}</div>
+          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + pista/cupons/pendências ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}</div>
         </div>
 
         <div class="fc-painel">
@@ -2032,6 +2032,16 @@ function fcModalItens(vs) {
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Produto', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
     linhas += _fcRow('fila', f.id, `<td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'} <span style="color:#888;font-size:0.7rem">(${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || ''})</span></td>
+      <td class="fc-td fc-r">${fcNum(f.litros || 1, 3)}</td><td class="fc-td fc-r">${fcMoney(vf)}</td>`);
+    n++; tot += vf;
+  });
+  // 2b) produtos SEM pagamento confirmado — contam na venda (regra 19/08), só
+  // não entram nos recebimentos; aqui aparecem marcados p/ fechar com o campo
+  (d0.fila_sem_pgto_itens || []).forEach(f => {
+    if (f.bico !== null && f.bico !== undefined && f.bico !== '') return;
+    const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Produto', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
+    linhas += _fcRow('fila', f.id, `<td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'} <span style="color:#f87171;font-size:0.7rem">(SEM pagamento confirmado)</span></td>
       <td class="fc-td fc-r">${fcNum(f.litros || 1, 3)}</td><td class="fc-td fc-r">${fcMoney(vf)}</td>`);
     n++; tot += vf;
   });
