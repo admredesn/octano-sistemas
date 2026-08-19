@@ -198,9 +198,10 @@ function ctbMontarLancamentos(d) {
     if (v <= 0.004) return;
     const ehCompra = !!p.nfe_id;
     // título de JUROS/ENCARGO criado pelo conciliador Sicoob → despesa
-    // financeira própria (regra Ronan: juros acumulam em conta separada)
+    // financeira própria. Testa ANTES do nfe_id: o título de juros carrega a
+    // referência da NF, mas não é quitação de fornecedor.
     const ehJuros = /juros|encargo|multa/i.test(String(p.descricao || ""));
-    const debito = ehCompra ? contaForn(p.fornecedor_id) : (ehJuros ? CTB.JUROS_PAGOS : CTB.DESPESAS_GERAIS);
+    const debito = ehJuros ? CTB.JUROS_PAGOS : (ehCompra ? contaForn(p.fornecedor_id) : CTB.DESPESAS_GERAIS);
     const credito = /dinheiro/i.test(String(p.forma_pagamento || "")) ? CTB.CAIXA : CTB.BANCOS;
     L.push({
       data: String(p.data_pagamento || "").slice(0, 10), valor: Number(v.toFixed(2)),
