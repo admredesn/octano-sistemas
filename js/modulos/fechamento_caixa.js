@@ -947,6 +947,20 @@ async function fcLancIncluir() {
     const usados = [];
     (d0.fila_itens || []).forEach(f => usados.push({ v: Number(f.valor || 0), h: f.ocorrido_em }));
     (d0.manuais || []).forEach(m => usados.push({ v: Number(m.valor || 0), h: null }));
+    // CUPONS também cobrem abastecimento (19/08 — pedido Ronan): cupom ativo
+    // consome; cupom EXCLUÍDO pelo ✖ deixa de consumir → o abastecimento volta
+    // pra esta lista e dá pra amarrar um lançamento novo no lugar.
+    const { data: vsCup } = await sb.from('oct_pdv_vendas')
+      .select('id,data_venda,itens,status').eq('turno_id', window._fcTurnoAtual);
+    (vsCup || []).forEach(v => {
+      if (String(v.status || '').toLowerCase() === 'cancelada') return;
+      const aX = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
+      if (aX && aX.excluido) return;
+      (Array.isArray(v.itens) ? v.itens : []).filter(it => it.tipo === 'abastecimento').forEach(it => {
+        const val = Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
+        if (val > 0) usados.push({ v: val, h: v.data_venda });
+      });
+    });
     const consumidos = new Set();
     const livres = (pista || []).filter(a => {
       const va = Number(a.valor_total || 0);
