@@ -268,6 +268,38 @@ async function moduloEmpresa() {
         </div>
       </div>
 
+      <!-- BANCO SICOOB (extrato -> conciliação de contas a pagar) -->
+      <div class="modulo-header" style="margin-top:28px"><h2>🏦 Banco Sicoob — extrato e conciliação</h2></div>
+      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
+        O gateway lê o extrato desta conta e o sistema baixa sozinho as contas a pagar
+        (juros/multa e desconto separados nas contas certas). O <strong>client_id</strong> sai do
+        portal <em>developers.sicoob.com.br</em> (aplicativo com a API <em>Conta Corrente</em> assinada).
+        O certificado é o mesmo e-CNPJ A1 da NF-e (fica no Railway, não aqui).
+      </p>
+      <div class="form-grid" style="max-width:760px">
+        <div class="form-group">
+          <label>Nº da conta corrente</label>
+          <input id="sic-conta" type="text" placeholder="101789-6" />
+        </div>
+        <div class="form-group span2">
+          <label>client_id (aplicativo do portal)</label>
+          <input id="sic-client" type="text" placeholder="xxxxxxxx-xxxx-..." />
+        </div>
+        <div class="form-group">
+          <label>Ambiente</label>
+          <select id="sic-amb"><option value="producao">Produção</option><option value="sandbox">Sandbox (teste)</option></select>
+        </div>
+        <div class="form-group">
+          <label>Integração ativa</label>
+          <select id="sic-ativo"><option value="true">Sim</option><option value="false">Não</option></select>
+        </div>
+        <div class="form-group span2" style="align-self:end">
+          <button class="btn-salvar" style="background:#0a6e4f" onclick="salvarSicoob()">💾 Salvar integração Sicoob</button>
+          <span id="sic-msg" class="form-msg"></span>
+        </div>
+      </div>
+      <p id="sic-status" style="color:#667;font-size:0.8rem;margin-top:6px">carregando situação…</p>
+
       <!-- PERFIL -->
       <div class="modulo-header" style="margin-top:28px"><h2>👤 Meu Perfil</h2></div>
       <div class="form-grid">
@@ -309,6 +341,62 @@ async function moduloEmpresa() {
     v = v.replace(/(\d{5})(\d)/, '$1-$2');
     this.value = v;
   });
+  empSicoobCarregar();
+}
+
+// ─── Integração Sicoob (extrato → conciliação) ─────────────────────────────
+// prefixo das envs do certificado no Railway, derivado do nome do posto
+function _sicPrefix(nome) {
+  const n = String(nome || '').toUpperCase();
+  if (n.includes('TIJUCO')) return 'TIJ';
+  if (n.includes('FLORESTAL')) return 'FLO';
+  if (n.includes('ANTONIO CARLOS')) return 'AC';
+  if (n.includes('GLORIA')) return 'GLO';
+  return 'POSTO';
+}
+
+async function empSicoobCarregar() {
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  const st = document.getElementById('sic-status');
+  if (!eid || !document.getElementById('sic-conta')) return;
+  try {
+    const { data, error } = await sb.from('oct_sicoob_contas').select('*').eq('empresa_id', eid).maybeSingle();
+    if (error) { if (st) st.textContent = '⚠ ' + error.message + ' — rode o SQL-SICOOB-EXTRATO.sql.'; return; }
+    if (data) {
+      document.getElementById('sic-conta').value = data.numero_conta || '';
+      document.getElementById('sic-client').value = data.client_id || '';
+      document.getElementById('sic-amb').value = data.ambiente || 'producao';
+      document.getElementById('sic-ativo').value = String(data.ativo !== false);
+    }
+    // situação: último movimento importado do extrato
+    const { data: mov } = await sb.from('oct_banco_movimentos').select('data,criado_em')
+      .eq('empresa_id', eid).order('criado_em', { ascending: false }).limit(1);
+    if (st) st.textContent = (mov && mov.length)
+      ? `✅ Extrato chegando — último movimento importado: ${mov[0].data} (às ${new Date(mov[0].criado_em).toLocaleString('pt-BR')}).`
+      : (data ? '⏳ Cadastro salvo — nenhum movimento importado ainda (worker roda a cada 15 min; confira as variáveis do certificado no Railway).'
+              : 'Sem cadastro ainda — preencha e salve.');
+  } catch (e) { if (st) st.textContent = '⚠ ' + (e.message || e); }
+}
+
+async function salvarSicoob() {
+  const msg = document.getElementById('sic-msg');
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
+  const conta = document.getElementById('sic-conta').value.trim();
+  if (!conta) { msg.textContent = 'Informe o número da conta.'; msg.style.color = '#f44'; return; }
+  msg.textContent = 'Salvando…'; msg.style.color = '#aaa';
+  let nomeEmp = '';
+  try { const { data: e } = await sb.from('oct_empresas').select('nome').eq('id', eid).single(); nomeEmp = e?.nome || ''; } catch (er) {}
+  const { error } = await sb.from('oct_sicoob_contas').upsert({
+    empresa_id: eid, numero_conta: conta,
+    client_id: document.getElementById('sic-client').value.trim() || null,
+    ambiente: document.getElementById('sic-amb').value,
+    ativo: document.getElementById('sic-ativo').value === 'true',
+    env_prefix: _sicPrefix(nomeEmp),
+  }, { onConflict: 'empresa_id' });
+  if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
+  msg.textContent = 'Salvo! O gateway pega no próximo ciclo (15 min).'; msg.style.color = '#4caf50';
+  empSicoobCarregar();
 }
 
 // ─── Ativar / Ocultar empresa (master) ──────────────────────────────────────
