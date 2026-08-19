@@ -938,7 +938,11 @@ async function fcLancIncluir() {
     const cache = window._fcCache || {};
     const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
     const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
-    const ini = t.aberto_em, fim = t.fechado_em || new Date().toISOString();
+    // FUSO (19/08): data_abast é hora LOCAL com +00:00 falso; o turno é UTC real.
+    // Comparar direto cortava as 3 primeiras horas do turno da lista de candidatos.
+    const _naive = (ms) => { const d = new Date(ms); const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+    const ini = _naive(_fcTsUtc(t.aberto_em)), fim = _naive(t.fechado_em ? _fcTsUtc(t.fechado_em) : Date.now());
     const { data: pista } = await sb.from('oct_pdv_abastecimentos')
       .select('id,data_abast,bico,combustivel,litros,valor_total,tipo')
       .eq('empresa_id', window._fcEmpresaId)
@@ -958,7 +962,8 @@ async function fcLancIncluir() {
       if (aX && aX.excluido) return;
       (Array.isArray(v.itens) ? v.itens : []).filter(it => it.tipo === 'abastecimento').forEach(it => {
         const val = Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
-        if (val > 0) usados.push({ v: val, h: v.data_venda });
+        // data_venda é UTC real → converte p/ naive local, mesma régua da pista
+        if (val > 0) usados.push({ v: val, h: _naive(_fcTsUtc(v.data_venda)) });
       });
     });
     const consumidos = new Set();
