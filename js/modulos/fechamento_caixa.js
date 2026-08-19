@@ -1342,7 +1342,9 @@ async function fcNodeDetalhe(tipo) {
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
       if (!pertence) return;
-      const rotF = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
+      // rótulo NORMALIZADO ("Pix", nunca "PIX"): mesma régua da fila, senão o
+      // Σ de totais divide a mesma forma em duas linhas (visto 19/08)
+      const rotF = _fcRotForma((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), p.forma, p.bandeira || '');
       window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: rotF };
       entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
         _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
@@ -1442,7 +1444,7 @@ async function fcNodeDetalhe(tipo) {
           : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
         const pertence = gAj ? gruposNode0.includes(gAj)
           : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
-        if (pertence) soma1((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), Number(p.valor || 0));
+        if (pertence) soma1(_fcRotForma((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), p.forma, p.bandeira || ''), Number(p.valor || 0));
       }));
       mans.forEach(m => soma1(_fcRotForma(m.forma_nome, '', m.bandeira) || 'Manual', Number(m.valor || 0)));
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
