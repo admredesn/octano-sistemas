@@ -524,6 +524,17 @@ function fcDetalhe(turnoId) {
         <button class="fc-btn" onclick="fcListar()">↩ Voltar / Estornar</button>
         <button class="fc-btn" onclick="fcListar()">🔍 F4 - Pesquisar</button>
         <span class="fc-sep"></span>
+        ${(() => {
+          // NAVEGAÇÃO ENTRE CAIXAS (19/08 — modelo TecnoX ⏮◀▶⏭ + "N de M")
+          const ts = (cache.turnos || []).slice().sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+          const i = ts.findIndex(x => x.id === turnoId);
+          return `<button class="fc-btn" ${i <= 0 ? 'disabled' : ''} onclick="fcNavTurno('first')" title="Primeiro caixa">⏮</button>
+            <button class="fc-btn" ${i <= 0 ? 'disabled' : ''} onclick="fcNavTurno(-1)" title="Caixa anterior">◀</button>
+            <button class="fc-btn" ${i >= ts.length - 1 ? 'disabled' : ''} onclick="fcNavTurno(1)" title="Próximo caixa">▶</button>
+            <button class="fc-btn" ${i >= ts.length - 1 ? 'disabled' : ''} onclick="fcNavTurno('last')" title="Último caixa">⏭</button>
+            <span style="color:#9aa;font-size:0.78rem;padding:0 6px">${i + 1} de ${ts.length}</span>`;
+        })()}
+        <span class="fc-sep"></span>
         <button class="fc-btn" onclick="fcListar()">🗒 F6 - Listar</button>
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
@@ -753,12 +764,26 @@ function fcRefKey(ev, tr) {
     ev.preventDefault();
     const k = tr.dataset.fcref; const i = k.indexOf(':');
     fcRefToggle(k.slice(0, i), k.slice(i + 1), tr);
+    // conferiu → pula sozinho pro PRÓXIMO lançamento (pedido Ronan 19/08)
+    let n = tr.nextElementSibling;
+    while (n && !(n.dataset && n.dataset.fcref)) n = n.nextElementSibling;
+    if (n) n.focus();
   } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
     ev.preventDefault();
     let n = ev.key === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
     while (n && !(n.dataset && n.dataset.fcref)) n = ev.key === 'ArrowDown' ? n.nextElementSibling : n.previousElementSibling;
     if (n) n.focus();
   }
+}
+
+// navega entre caixas (⏮◀▶⏭ do topo, modelo TecnoX)
+function fcNavTurno(onde) {
+  const ts = ((window._fcCache || {}).turnos || []).slice()
+    .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+  const i = ts.findIndex(x => x.id === window._fcTurnoAtual);
+  const j = onde === 'first' ? 0 : onde === 'last' ? ts.length - 1 : i + onde;
+  if (j < 0 || j >= ts.length || j === i) return;
+  fcDetalhe(ts[j].id);
 }
 
 function _fcConfPintar(tr, conferido) {
@@ -874,11 +899,18 @@ function fcLancIncluir() {
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
       <select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
-      <input id="fcm-bandeira" class="fc-inp2" style="width:200px" placeholder="Visa, Master, Elo...">
+      <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
+        <option value="">(sem bandeira)</option>
+        ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
+      </select>
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
-      <button class="fc-btn azul" style="width:100%;margin-top:14px" onclick="fcLancIncluirSalvar('${secao}')">💾 Incluir</button>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
+        <button class="fc-btn azul" style="flex:1" onclick="fcLancIncluirSalvar('${secao}')">💾 Incluir</button>
+      </div>
     </div>`);
+  window._fcModalVolta = true;   // fechar sem salvar volta pra conferência
 }
 
 async function fcLancIncluirSalvar(secao) {
@@ -887,7 +919,7 @@ async function fcLancIncluirSalvar(secao) {
   const ajuste = {
     manual: true, secao, valor,
     forma_nome: document.getElementById('fcm-forma').value,
-    bandeira: document.getElementById('fcm-bandeira').value.trim() || null,
+    bandeira: (document.getElementById('fcm-bandeira').value || '').trim() || null,
     descricao: document.getElementById('fcm-desc').value.trim() || null,
   };
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
@@ -1018,6 +1050,9 @@ function fcLancEditar(refTipo, refId) {
   const aj = (window._fcConf[k] || {}).ajuste || {};
   const v = (campo) => aj[campo] != null ? aj[campo] : (base[campo] != null ? base[campo] : '');
   const formas = ['Dinheiro', 'Cartão', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Cartão Frota', 'Nota a prazo', 'Cheque', 'Outro'];
+  const bandAtual = String(v('bandeira') || '');
+  const bandeiras = ['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'];
+  if (bandAtual && !bandeiras.includes(bandAtual)) bandeiras.unshift(bandAtual);
   fcModal('✎ Editar lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
@@ -1029,14 +1064,20 @@ function fcLancEditar(refTipo, refId) {
         ${formas.map(f => `<option value="${f}">${f}</option>`).join('')}
       </select>
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
-      <input id="fcl-bandeira" value="${fcEsc(v('bandeira'))}" class="fc-inp2" style="width:200px" placeholder="Visa, Master, Elo...">
+      <select id="fcl-bandeira" class="fc-inp2" style="width:200px">
+        <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
+        ${bandeiras.filter(b => b !== bandAtual).map(b => `<option value="${b}">${b}</option>`).join('')}
+      </select>
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Observação</label>
       <input id="fcl-obs" value="${fcEsc(aj.obs || '')}" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
         ${(window._fcConf[k] || {}).ajuste ? '<button class="fc-btn" onclick="fcLancSalvar(\'' + refTipo + '\',\'' + refId + '\',true)">↩ Desfazer edição</button>' : ''}
+        <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
         <button class="fc-btn azul" style="flex:1" onclick="fcLancSalvar('${refTipo}','${refId}')">💾 Salvar</button>
       </div>
     </div>`);
+  // fechar SEM salvar (✕/fundo/Cancelar) volta pra tela de conferência do balão
+  window._fcModalVolta = true;
 }
 
 async function fcLancSalvar(refTipo, refId, desfazer) {
@@ -1047,7 +1088,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
     ajuste = {};
     const valor = parseFloat(document.getElementById('fcl-valor').value);
     const forma = document.getElementById('fcl-forma').value;
-    const band = document.getElementById('fcl-bandeira').value.trim();
+    const band = (document.getElementById('fcl-bandeira').value || '').trim();
     const obs = document.getElementById('fcl-obs').value.trim();
     if (!isNaN(valor) && Math.abs(valor - Number(base.valor || 0)) > 0.004) ajuste.valor = valor;
     if (forma) ajuste.forma_nome = forma;
@@ -1282,9 +1323,17 @@ async function fcNodeDetalhe(tipo) {
   // 1) CUPONS pagos na(s) forma(s) — respeitando RECLASSIFICAÇÃO pelo ✎:
   // venda ajustada p/ outro grupo (ex.: frota) some daqui e aparece lá.
   const gruposNode0 = cfg.grupos || [tipo];
+  let manuaisMesclados = false;
   if ((cfg.formas && cfg.formas.length) || (cfg.grupos && cfg.grupos.length)) {
+    // LISTA ÚNICA (19/08 — pedido Ronan): cupom transmitido, item da fila e
+    // lançamento manual entram na MESMA tabela, ordenados juntos. Cada tipo
+    // leva um marcador (🧾 cupom · ⏳ fila · ✍ manual · 🧷 unificado).
+    const d0 = (cache.porTurno || {})[turnoId] || {};
+    const grupos = cfg.grupos || [tipo];
+    const entradas = [];   // {val, hora, rows: [tr...], oficial: 1}
+
+    // 1) cupons transmitidos
     const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
-    const brutas = []; let total = 0;
     vs.forEach(v => (v.pagamentos || []).forEach(p => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
@@ -1293,119 +1342,117 @@ async function fcNodeDetalhe(tipo) {
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
       if (!pertence) return;
-      brutas.push({ v, p, ajV });
+      const rotF = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
+      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: rotF };
+      entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
+        _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
+          <td class="fc-td">🧾 Cupom ${v.numero ?? ''}</td>
+          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
+          <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
+          <td class="fc-td">${fcEsc(rotF) || '—'}</td>
+          <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`)] });
     }));
-    _ordena(brutas, x => Number(x.p.valor || 0), x => x.v.data_venda);
-    const linhas = brutas.map(({ v, p, ajV }) => {
-      total += Number(p.valor || 0);
-      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: (ajV && ajV.forma_nome) || _fcFormaNome(p.forma) };
-      return _fcRow('venda', v.id, `<td class="fc-td">${v.numero ?? ''}</td>
-        <td class="fc-td">${_fcHora(v.data_venda)}</td>
-        <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
-        <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`);
-    });
-    listaN += linhas.length; listaTot += total;
-    secoes.push(stit(`Cupons do caixa (${linhas.length})`));
-    secoes.push(linhas.length
-      ? tab(['', 'Cupom', 'Hora', tipo === 'prazo' ? 'Cliente' : 'Vendedor/Cliente', 'Valor', ''], linhas,
-            `<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
-      : '<p style="padding:6px 8px;color:#777">Nenhum cupom nesta forma neste caixa.</p>');
 
-    // 1b) itens da FILA DE TRANSMISSÃO baixados nesta(s) forma(s) — eles somam
-    // na coluna do fechamento, então o balão TEM que mostrá-los também
-    const d0 = (cache.porTurno || {})[turnoId] || {};
-    // casa pelo GRUPO (via forma_nome), não pelo código — a fila grava forma=99.
-    // cfg.grupos permite unir grupos (cartão+pix no mesmo balão, 15/08).
-    const grupos = cfg.grupos || [tipo];
-    const fsFila = _ordena(
-      (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma))).filter(fBand),
-      f => Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0),
-      f => f.ocorrido_em || f.criado_em);
-    if (fsFila.length) {
-      let totF = 0;
-      // UNIFICADO POR MARCA (19/08 — pedido Ronan): 2 abastecimentos pagos num
-      // cartão só viram UMA linha do valor do recebimento, com ▸ para abrir os
-      // itens vinculados. A transmissão continua item a item (1 NFC-e cada).
-      const porMarca = {};
-      const ordemG = [];
-      fsFila.forEach(f => {
-        const k = (f.marca && String(f.marca)) || 'solo:' + f.id;
-        if (!porMarca[k]) { porMarca[k] = []; ordemG.push(k); }
-        porMarca[k].push(f);
-      });
-      const linhaDe = (f) => {
-        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
-        window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-        return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
-          <td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
-          <td class="fc-td">${f.bico ?? '—'}</td>
-          <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
-          <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
-          <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
-          <td class="fc-td fc-r">${fcMoney(vf)}</td>`);
-      };
-      // membro do grupo: DETALHE puro — sem checkbox/fcref (não entra na
-      // navegação por setinha; conferência/exclusão são do grupo inteiro)
-      const linhaDetalhe = (f, k) => {
-        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
-        return `<tr data-fcgrp="${k}" style="display:none;background:#0d1420;color:#9aa">
-          <td class="fc-td"></td>
-          <td class="fc-td" style="font-size:0.78rem">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
-          <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
-          <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
-          <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
-          <td class="fc-td" style="font-size:0.78rem">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
-          <td class="fc-td" style="font-size:0.78rem">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
-          <td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(vf)}</td>
-          <td class="fc-td" style="width:84px"></td></tr>`;
-      };
-      const linF = [];
-      ordemG.forEach(k => {
-        const g = porMarca[k];
-        g.forEach(f => { totF += Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0); });
-        if (g.length === 1) { linF.push(linhaDe(g[0])); return; }
-        const f0 = g[0];
-        const vG = g.reduce((s, f) => s + Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0), 0);
-        const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
-        // o CABEÇALHO é a linha oficial do grupo: conferível (ESPAÇO), navegável
-        // e com ✖ que exclui TODOS os itens vinculados de uma vez
-        window._fcLancBase['fila:' + f0.id] = { rotulo: `Recebimento unificado (${g.length} itens)`, valor: vG, forma_nome: f0.forma_nome, bandeira: f0.bandeira };
-        let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
-          <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
+    // 2) fila de transmissão (agrupada por marca — recebimento unificado)
+    const fsFila = (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma))).filter(fBand);
+    const porMarca = {}; const ordemG = [];
+    fsFila.forEach(f => {
+      const k = (f.marca && String(f.marca)) || 'solo:' + f.id;
+      if (!porMarca[k]) { porMarca[k] = []; ordemG.push(k); }
+      porMarca[k].push(f);
+    });
+    const vfDe = (f) => Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    const linhaDe = (f) => {
+      window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
+      return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+        <td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'}</td>
+        <td class="fc-td">${f.bico ?? '—'}</td>
+        <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+        <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
+        <td class="fc-td fc-r">${fcMoney(vfDe(f))}</td>`);
+    };
+    const linhaDetalhe = (f, k) => `<tr data-fcgrp="${k}" style="display:none;background:#0d1420;color:#9aa">
+        <td class="fc-td"></td>
+        <td class="fc-td" style="font-size:0.78rem">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+        <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
+        <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
+        <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+        <td class="fc-td" style="font-size:0.78rem">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td" style="font-size:0.78rem">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
+        <td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(vfDe(f))}</td>
+        <td class="fc-td" style="width:84px"></td></tr>`;
+    ordemG.forEach(k => {
+      const g = porMarca[k];
+      if (g.length === 1) {
+        entradas.push({ val: vfDe(g[0]), hora: g[0].ocorrido_em || g[0].criado_em, oficial: 1, rows: [linhaDe(g[0])] });
+        return;
+      }
+      const f0 = g[0];
+      const vG = g.reduce((s, f) => s + vfDe(f), 0);
+      const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
+      window._fcLancBase['fila:' + f0.id] = { rotulo: `Recebimento unificado (${g.length} itens)`, valor: vG, forma_nome: f0.forma_nome, bandeira: f0.bandeira };
+      let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
+        <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
+        <td class="fc-td">—</td>
+        <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
+        <td class="fc-td">${fcEsc((f0.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td">${fcEsc(_fcRotForma(f0.forma_nome, f0.forma, f0.bandeira)) || '—'}</td>
+        <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>`);
+      hdr = hdr.replace(`fcLancExcluirRef('fila','${f0.id}')`,
+                        `fcLancExcluirGrupo('${g.map(x => x.id).join(',')}')`);
+      entradas.push({ val: vG, hora: f0.ocorrido_em || f0.criado_em, oficial: 1,
+                      rows: [hdr].concat(g.map(f => linhaDetalhe(f, k))) });
+    });
+
+    // 3) lançamentos manuais deste grupo — na MESMA sequência
+    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao) ||
+      grupos.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
+    mans.forEach(m => {
+      window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
+      entradas.push({ val: Number(m.valor || 0), hora: '9999', oficial: 1, rows: [
+        _fcRow('manual', m.id, `<td class="fc-td">—</td>
+          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}</td>
+          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
-          <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
-          <td class="fc-td">${fcEsc((f0.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
-          <td class="fc-td">${fcEsc(_fcRotForma(f0.forma_nome, f0.forma, f0.bandeira)) || '—'}</td>
-          <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>`);
-        // (sem background inline: ele venceria a cor laranja do "conferido")
-        hdr = hdr.replace(`fcLancExcluirRef('fila','${f0.id}')`,
-                          `fcLancExcluirGrupo('${g.map(x => x.id).join(',')}')`);
-        linF.push(hdr);
-        g.forEach(f => linF.push(linhaDetalhe(f, k)));
-      });
-      listaN += fsFila.length; listaTot += totF;
-      secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
-      secoes.push(tab(['', 'Hora', 'Combustível/Produto', 'Bico', 'Litros', 'Vendedor', 'Forma', 'Valor', ''], linF,
-        `<tr><td class="fc-td" colspan="7"><b>Total na fila</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totF)}</b></td></tr>`));
-    }
-    // TOTAIS POR FORMA DE PAGTO (modelo TecnoX, 19/08): resumo do nó inteiro,
-    // SEM o filtro de bandeira — o operador vê o todo enquanto filtra a lista.
+          <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
+          <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`)] });
+    });
+    manuaisMesclados = true;
+
+    _ordena(entradas, e => e.val, e => e.hora);
+    const totalLista = entradas.reduce((s, e) => s + e.val, 0);
+    listaN += entradas.length; listaTot += totalLista;
+    secoes.push(stit(`Lançamentos do caixa (${entradas.length}) — 🧾 cupom · ⏳ fila · ✍ manual`));
+    secoes.push(entradas.length
+      ? tab(['', 'Hora', 'Descrição', 'Bico', 'Litros', 'Vendedor/Cliente', 'Forma', 'Valor', ''],
+            entradas.flatMap(e => e.rows),
+            `<tr><td class="fc-td" colspan="7"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totalLista)}</b></td></tr>`)
+      : '<p style="padding:6px 8px;color:#777">Nenhum lançamento nesta forma neste caixa.</p>');
+
+    // Σ TOTAIS POR FORMA — nó inteiro (fila + cupons + manuais), sem o filtro
     {
-      const todasFila = (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)));
       const totais = {};
-      todasFila.forEach(f => {
-        const p = _rotParte(f);
-        const rot = p.forma + (p.band ? ' ' + p.band : '');
-        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
-        (totais[rot] = totais[rot] || { n: 0, v: 0 }); totais[rot].n++; totais[rot].v += vf;
-      });
+      const soma1 = (rot, v) => { (totais[rot] = totais[rot] || { n: 0, v: 0 }); totais[rot].n++; totais[rot].v += v; };
+      (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)))
+        .forEach(f => { const p = _rotParte(f); soma1(p.forma + (p.band ? ' ' + p.band : ''), vfDe(f)); });
+      vs.forEach(v => (v.pagamentos || []).forEach(p => {
+        const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
+        const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
+          : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
+        const pertence = gAj ? gruposNode0.includes(gAj)
+          : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
+        if (pertence) soma1((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), Number(p.valor || 0));
+      }));
+      mans.forEach(m => soma1(_fcRotForma(m.forma_nome, '', m.bandeira) || 'Manual', Number(m.valor || 0)));
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
+        const nGeral = chavesT.reduce((s, k) => s + totais[k].n, 0);
         secoes.push(stit('Σ Totais por forma de pagto'));
         secoes.push(`<table class="fc-grid" style="max-width:420px"><thead><tr><th>Forma</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>
           ${chavesT.map(k => `<tr><td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${totais[k].n}</td><td class="fc-td fc-r">${fcMoney(totais[k].v)}</td></tr>`).join('')}
-          <tr><td class="fc-td"><b>TODOS</b></td><td class="fc-td fc-r"><b>${todasFila.length}</b></td><td class="fc-td fc-r"><b>${fcMoney(totalGeral)}</b></td></tr></tbody></table>`);
+          <tr><td class="fc-td"><b>TODOS</b></td><td class="fc-td fc-r"><b>${nGeral}</b></td><td class="fc-td fc-r"><b>${fcMoney(totalGeral)}</b></td></tr></tbody></table>`);
       }
     }
   }
@@ -1452,8 +1499,9 @@ async function fcNodeDetalhe(tipo) {
       : '<p style="padding:6px 8px;color:#777">Nenhum depósito no período do turno.</p>');
   }
 
-  // LANÇAMENTOS MANUAIS desta seção (botão ➕ Incluir)
-  {
+  // LANÇAMENTOS MANUAIS desta seção (botão ➕ Incluir) — só quando NÃO foram
+  // mesclados na lista única acima (19/08)
+  if (!manuaisMesclados) {
     const gruposNode = cfg.grupos || [tipo];
     const mans = (((cache.porTurno || {})[turnoId] || {}).manuais || [])
       .filter(m => m.secao === tipo || gruposNode.includes(m.secao) ||
@@ -1906,11 +1954,22 @@ function fcModalVendedor(vs) {
   fcModal('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
 }
 function fcModal(titulo, html) {
+  window._fcModalVolta = false;   // editor de lançamento liga isto p/ voltar ao balão
   let m = document.getElementById('fc-modal');
   if (!m) { m = document.createElement('div'); m.id = 'fc-modal'; document.body.appendChild(m); }
-  m.innerHTML = `<div class="fc-modal-bg" onclick="document.getElementById('fc-modal').remove()"></div>
-    <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="document.getElementById('fc-modal').remove()" style="cursor:pointer;float:right">✕</span></div>
+  m.innerHTML = `<div class="fc-modal-bg" onclick="fcModalFechar()"></div>
+    <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
     <div class="fc-modal-corpo">${html}</div></div>`;
+}
+
+// fechar SEM salvar: se veio do editor (✎/➕), volta pra tela de conferência
+// do balão em vez de cair na tela inicial do fechamento (pedido Ronan 19/08)
+function fcModalFechar() {
+  const volta = window._fcModalVolta;
+  window._fcModalVolta = false;
+  const m = document.getElementById('fc-modal');
+  if (m) m.remove();
+  if (volta && window._fcNodeAtual) fcNode(window._fcNodeAtual);
 }
 async function fcSalvarObs() {
   const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
