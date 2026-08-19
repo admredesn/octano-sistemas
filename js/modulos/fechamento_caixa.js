@@ -698,12 +698,25 @@ function fcDetalhe(turnoId) {
             const linhas = Object.entries(por).sort((a, b) => b[1] - a[1])
               .map(([k, v]) => `<div style="display:flex;justify-content:space-between"><span>${fcEsc(k)}</span><b>${fcMoney(v)}</b></div>`).join('');
             const tot = maq.reduce((s, r) => s + Number(r.valor || 0), 0);
+            // 🕵️ DETECTOR DE PIX FANTASMA (19/08): e-mail de venda que passou de
+            // D+1 SEM ganhar o carimbo do EDI (bandeira segue vazia) = sem prova
+            // além do e-mail → conferir no extrato PagBank. (Regra: prova de
+            // Pix/cartão = extrato/EDI, nunca só o e-mail — caso R$180 de 18/08.)
+            const ontem = new Date(Date.now() - 24 * 3600e3);
+            const suspeitos = maq.filter(r =>
+              String(r.origem || '') === 'pagbank_email' && !r.bandeira &&
+              _fcTsLocal(r.recebido_em) < ontem.setHours(23, 59, 59, 999) &&
+              _fcTsLocal(r.recebido_em) >= new Date('2026-08-18T00:00:00').getTime());
+            const alerta = suspeitos.length ? `<div style="color:#e06c6c;font-size:0.75rem;margin-top:6px;border-top:1px dashed #4a2a2a;padding-top:5px">
+              🕵️ ${suspeitos.length} recebimento(s) do e-mail SEM confirmação do EDI após D+1 (${fcMoney(suspeitos.reduce((s, r) => s + Number(r.valor || 0), 0))}) — conferir no extrato PagBank:<br>
+              ${suspeitos.slice(0, 6).map(r => `· ${_fcHora(r.recebido_em)} ${fcEsc(r.forma)} ${fcMoney(r.valor)}`).join('<br>')}${suspeitos.length > 6 ? '<br>…' : ''}</div>` : '';
             return `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px;cursor:pointer" onclick="fcNode('cartao')" title="Clique para ver transação a transação">
               <div style="color:#7ea8d8;font-weight:700;font-size:0.82rem;margin-bottom:6px">🧾 Maquininha do turno (EDI/e-mail) — ${maq.length} transações</div>
               <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
                 ${linhas}
                 <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span style="font-weight:700">Total maquininha</span><b style="color:#7ee2a0">${fcMoney(tot)}</b></div>
               </div>
+              ${alerta}
             </div>`;
           })()}
           <button class="fc-btn2" onclick="fcNode('demonstrativo')">📊 Demonstrativo do Caixa</button>
