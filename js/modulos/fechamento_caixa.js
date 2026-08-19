@@ -1557,7 +1557,7 @@ async function fcNodeDetalhe(tipo) {
     // rótulo COMPLETO no seletor (19/08): "Débito Mastercard", "Pix"... — Pix e
     // Dinheiro não têm bandeira e apareciam num "(sem bandeira)" confuso.
     const bandas = [...new Set(partes.map(p => p.forma + (p.band ? ' ' + p.band : '')).filter(Boolean))].sort();
-    secoes.unshift(`<div class="fc-filtros">
+    window.__fcTopoFiltros = (`<div class="fc-filtros">
       <label>Forma:</label>
       <select class="fc-inp2" style="width:120px" onchange="window._fcNodeForma=this.value;fcNodeDetalhe('${tipo}')">
         <option value="">Todas</option>
@@ -1575,14 +1575,16 @@ async function fcNodeDetalhe(tipo) {
         <option value="hora" ${ordem === 'hora' ? 'selected' : ''}>Hora</option>
       </select>
       <span style="color:#667">☑ marca · ESPAÇO confere · ✎ altera · ✖ exclui</span></div>`);
-  }
+  } else { window.__fcTopoFiltros = ''; }
 
   if (!secoes.length)
     secoes.push('<p style="padding:24px;color:#777">Sem lançamentos deste tipo neste caixa (o octano ainda não movimenta esta categoria).</p>');
   // barra de ações no topo + rodapé com contador/total (modelo TecnoX)
-  secoes.unshift(_fcToolbar());
-  secoes.push(_fcRodape(listaN, listaTot));
-  fcModal(cfg.titulo, secoes.join(''));
+  fcModal(cfg.titulo, secoes.join(''), {
+    topo: _fcToolbar() + (window.__fcTopoFiltros || ''),
+    rodape: _fcRodape(listaN, listaTot),
+  });
+  window.__fcTopoFiltros = '';
 }
 
 // nome amigável do cod_sefaz (p/ o modal de edição)
@@ -1783,7 +1785,7 @@ function _fcCuponsRender() {
       <td class="fc-td">${x.origem}</td>`, `fcCupomVer('${x.ref}','${x.id}')`);
   });
   const total = lista.reduce((s, x) => s + x.valor, 0);
-  fcModal(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, _fcToolbar() + `
+  fcModal(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, `
     <div class="fc-filtros">
       <label>Forma:</label>
       <select class="fc-inp2" onchange="window._fcCuponsFiltro.forma=this.value;_fcCuponsRender()">
@@ -1803,7 +1805,7 @@ function _fcCuponsRender() {
     </div>
     <table class="fc-grid"><thead><tr><th></th><th>Seq.</th><th>Hora</th><th>Cliente/Vendedor</th><th>Forma</th><th>Desc.</th><th>Valor</th><th>Origem</th><th></th></tr></thead>
     <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`
-    + _fcRodape(lista.length, total));
+    , { topo: _fcToolbar(), rodape: _fcRodape(lista.length, total) });
 }
 
 // abre UMA venda/abastecimento com os dados completos
@@ -1875,7 +1877,7 @@ function fcModalItens(vs) {
       <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     n++; tot += Number(m.valor || 0);
   });
-  fcModal('📋 Itens Vendidos (produtos de loja)', _fcToolbar() + `
+  fcModal('📋 Itens Vendidos (produtos de loja)', `
     <div class="fc-filtros">
       <button class="fc-btn" style="color:#4ade80" onclick="fcItemVendidoForm()">➕ Lançar item vendido (esquecido)</button>
       <span style="color:#667">combustível fica na aba ⛽ Combustível Vendido · ☑ marca · ESPAÇO confere · ✎ altera</span>
@@ -1883,7 +1885,7 @@ function fcModalItens(vs) {
     <table class="fc-grid"><thead><tr><th></th><th>Item</th><th>Qtd</th><th>Valor</th><th></th></tr></thead>
     <tbody>${linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nenhum produto vendido neste caixa.</td></tr>'}
     <tr><td class="fc-td" colspan="2"><b>Total</b></td><td class="fc-td"></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td class="fc-td"></td></tr></tbody></table>`
-    + _fcRodape(n, tot));
+    , { topo: _fcToolbar(), rodape: _fcRodape(n, tot) });
 }
 
 // ---- LANÇAR ITEM VENDIDO ESQUECIDO (18/08): entra como venda de produto E
@@ -1968,13 +1970,17 @@ function fcModalVendedor(vs) {
     <td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${fcMoney(val)}</td></tr>`).join('');
   fcModal('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
 }
-function fcModal(titulo, html) {
+function fcModal(titulo, html, opts) {
   window._fcModalVolta = false;   // editor de lançamento liga isto p/ voltar ao balão
+  opts = opts || {};
   let m = document.getElementById('fc-modal');
   if (!m) { m = document.createElement('div'); m.id = 'fc-modal'; document.body.appendChild(m); }
+  // topo (ações/filtros) e pé (somatório) FIXOS; só a lista rola (pedido 19/08)
   m.innerHTML = `<div class="fc-modal-bg" onclick="fcModalFechar()"></div>
     <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
-    <div class="fc-modal-corpo">${html}</div></div>`;
+    ${opts.topo ? `<div class="fc-modal-topo">${opts.topo}</div>` : ''}
+    <div class="fc-modal-corpo">${html}</div>
+    ${opts.rodape ? `<div class="fc-modal-pe">${opts.rodape}</div>` : ''}</div>`;
   // arrastável pela barra do título + redimensionável (canto inferior direito)
   if (typeof octArrastavel === 'function')
     octArrastavel(m.querySelector('.fc-modal-cx'), m.querySelector('.fc-modal-tit'));
@@ -2088,8 +2094,10 @@ function _fcEstilo() {
   tr[data-fcref]:focus{outline:1px solid #f97316;outline-offset:-1px}
   .fc-filtros{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#141824;border-bottom:1px solid #2a2d3e;font-size:11px;color:#9aa}
   #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998}
-  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);max-height:86vh;min-width:340px;min-height:180px;overflow:auto;resize:both;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);height:auto;max-height:86vh;min-width:340px;min-height:180px;overflow:hidden;resize:both;display:flex;flex-direction:column;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
   #fc-modal .fc-modal-tit{background:#1a1d2e;color:#f97316;padding:10px 16px;font-weight:600;border-radius:12px 12px 0 0}
-  #fc-modal .fc-modal-corpo{padding:12px}
+  #fc-modal .fc-modal-corpo{padding:12px;flex:1 1 auto;overflow:auto;min-height:0}
+  #fc-modal .fc-modal-topo{flex:0 0 auto;border-bottom:1px solid #2a2d3e;background:#13151f}
+  #fc-modal .fc-modal-pe{flex:0 0 auto;border-top:1px solid #2a2d3e;background:#13151f}
   </style>`;
 }
