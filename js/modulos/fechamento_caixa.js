@@ -656,6 +656,7 @@ function fcDetalhe(turnoId) {
               <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>Contado (gaveta ${fcMoney(t.valor_fechamento)} + cofre ${fcMoney(d.receb_ext_cofre)})</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
               <div style="display:flex;justify-content:space-between;font-size:0.92rem;margin-top:4px"><span style="font-weight:700">${d.diferenca_caixa == null ? 'Turno em aberto' : (Math.abs(d.diferenca_caixa) < 0.01 ? '✓ Caixa confere' : (d.diferenca_caixa < 0 ? '🔴 FALTA' : '🟢 SOBRA'))}</span><b style="color:${d.diferenca_caixa == null ? '#667' : (Math.abs(d.diferenca_caixa) < 0.01 ? '#7ee2a0' : (d.diferenca_caixa < 0 ? '#e06c6c' : '#7ee2a0'))}">${d.diferenca_caixa == null ? '' : fcMoney(Math.abs(d.diferenca_caixa))}</b></div>
+              ${(() => { const aR = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste; return (aR && aR.responsavel) ? `<div style="display:flex;justify-content:space-between;color:#f0b45c"><span>👤 Responsável (${aR.tipo || 'diferença'})</span><b>${fcEsc(aR.responsavel)}</b></div>` : ''; })()}
             </div>
             ${d.dinheiro_contado != null ? `<button class="fc-btn2" style="margin-top:8px;width:100%;border-color:#2a5a3a;color:#7be0a0" onclick="fcConfirmarCaixa('${turnoId}')">✔ Confirmar conferência</button>` : '<div style="font-size:0.72rem;color:#667;margin-top:6px">Turno ainda aberto — a conferência fecha quando o operador informar o dinheiro contado.</div>'}
           </div>
@@ -2190,12 +2191,74 @@ async function fcConfirmarCaixa(turnoId) {
   const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId];
   if (!d) { alert('Dados do turno ainda carregando — tente de novo.'); return; }
   const dif = d.diferenca_caixa || 0;
-  const resumo = Math.abs(dif) < 0.01 ? 'Caixa confere (sem diferença).'
-    : (dif < 0 ? 'FALTA de R$ ' : 'SOBRA de R$ ') + Math.abs(dif).toFixed(2).replace('.', ',');
+  // FALTA/SOBRA apurada → antes de fechar, IDENTIFICA O RESPONSÁVEL (pedido
+  // Ronan 19/08): a diferença fica em nome do funcionário, registrada no caixa.
+  if (Math.abs(dif) >= 0.01) { _fcModalResponsavel(turnoId, dif); return; }
   if (!confirm('Confirmar a conferência deste caixa?\n\nEsperado: R$ ' + Number(d.dinheiro_esperado || 0).toFixed(2).replace('.', ',')
-    + '\nContado: R$ ' + Number(d.dinheiro_contado || 0).toFixed(2).replace('.', ',') + '\n' + resumo)) return;
+    + '\nContado: R$ ' + Number(d.dinheiro_contado || 0).toFixed(2).replace('.', ',') + '\nCaixa confere (sem diferença).')) return;
+  await _fcConfirmarGravar(turnoId, null);
+}
+
+// modal de identificação do responsável pela falta/sobra
+function _fcModalResponsavel(turnoId, dif) {
+  const cache = window._fcCache || {};
+  const t = (cache.turnos || []).find(x => x.id === turnoId) || {};
+  const d = (cache.porTurno || {})[turnoId] || {};
+  const nomes = new Set();
+  if (t.operador) nomes.add(String(t.operador).trim());
+  (d.fila_itens || []).concat(d.fila_sem_pgto_itens || []).forEach(f => {
+    if (f.vendedor) nomes.add(String(f.vendedor).trim());
+  });
+  const tipo = dif < 0 ? 'FALTA' : 'SOBRA';
+  const cor = dif < 0 ? '#e06c6c' : '#7ee2a0';
+  const lista = [...nomes].sort();
+  fcModal('👤 Responsável pela diferença de caixa', `
+    <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
+      <p style="margin-bottom:12px">Foi apurada <b style="color:${cor}">${tipo} de ${fcMoney(Math.abs(dif))}</b> neste caixa.
+      Identifique o funcionário responsável para fechar a conferência:</p>
+      ${lista.map(n => `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer">
+        <input type="radio" name="fcresp" value="${fcEsc(n)}"><span>${fcEsc(n)}</span></label>`).join('')}
+      <label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;cursor:pointer;align-items:center">
+        <input type="radio" name="fcresp" value=""><span>Outro:</span>
+        <input id="fcresp-outro" class="fc-inp2" style="flex:1" placeholder="nome do funcionário"
+          onfocus="this.closest('label').querySelector('input[type=radio]').checked=true">
+      </label>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
+        <button class="fc-btn azul" style="flex:1" onclick="_fcRespSalvar('${turnoId}', ${dif})">✔ Registrar e fechar caixa</button>
+      </div>
+    </div>`);
+}
+
+async function _fcRespSalvar(turnoId, dif) {
+  const sel = document.querySelector('input[name=fcresp]:checked');
+  let nome = sel ? sel.value : '';
+  if (sel && !nome) nome = (document.getElementById('fcresp-outro') || {}).value || '';
+  nome = String(nome || '').trim();
+  if (!nome) { alert('Informe o funcionário responsável pela diferença.'); return; }
+  fcModalFechar();
+  await _fcConfirmarGravar(turnoId, nome);
+}
+
+async function _fcConfirmarGravar(turnoId, responsavel) {
+  const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId] || {};
+  const dif = d.diferenca_caixa || 0;
+  const resumo = Math.abs(dif) < 0.01 ? 'Caixa confere (sem diferença).'
+    : (dif < 0 ? 'FALTA de R$ ' : 'SOBRA de R$ ') + Math.abs(dif).toFixed(2).replace('.', ',')
+      + (responsavel ? ' — responsável: ' + responsavel : '');
   try {
     const session = await getSession();
+    if (responsavel) {
+      // registro auditável da diferença em nome do funcionário
+      const k = 'diferenca:' + turnoId;
+      const cur = window._fcConf[k] = window._fcConf[k] || {};
+      cur.ajuste = { responsavel, valor: Math.round(Math.abs(dif) * 100) / 100, tipo: dif < 0 ? 'falta' : 'sobra' };
+      cur.conferido = true;
+      await sb.from('oct_fc_lancamentos').upsert({
+        empresa_id: window._fcEmpresaId, turno_id: turnoId,
+        ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
+      }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+    }
     const { error } = await sb.from('oct_pdv_turnos').update({
       dinheiro_esperado: d.dinheiro_esperado,
       diferenca_caixa: dif,
