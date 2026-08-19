@@ -1260,7 +1260,7 @@ async function fcNodeDetalhe(tipo) {
     // tem código próprio — vive de nome/reclassificação). Era só cfg.formas
     // e o cupom reclassificado nunca aparecia no balão (18/08).
     ((cfg.formas && cfg.formas.length) || (cfg.grupos && cfg.grupos.length))
-      ? sb.from('oct_pdv_vendas').select('id,numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,status').eq('turno_id', turnoId).order('data_venda')
+      ? sb.from('oct_pdv_vendas').select('id,numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,itens,status').eq('turno_id', turnoId).order('data_venda')
       : Promise.resolve({ data: [] }),
     (cfg.caixa && cfg.caixa.length)
       ? sb.from('oct_pdv_caixa').select('id,tipo,forma,valor,descricao,operador,criado_em').eq('turno_id', turnoId).order('criado_em')
@@ -1341,11 +1341,18 @@ async function fcNodeDetalhe(tipo) {
       // rótulo NORMALIZADO ("Pix", nunca "PIX"): mesma régua da fila, senão o
       // Σ de totais divide a mesma forma em duas linhas (visto 19/08)
       const rotF = _fcRotForma((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), p.forma, p.bandeira || '');
-      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: rotF };
+      // ITENS do cupom na descrição (19/08 — pedido Ronan): "C" indica cupom e
+      // o operador vê O QUE foi vendido, não só o número
+      const its = v.itens || [];
+      const descItens = its.map(it => it.desc || it.cod).filter(Boolean).join(' + ');
+      const litrosCupom = its.filter(it => it.tipo === 'abastecimento')
+        .reduce((s, it) => s + Number(it.qtd || 0), 0);
+      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor, forma_nome: rotF };
       entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
         _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
-          <td class="fc-td">🧾 Cupom ${v.numero ?? ''}</td>
-          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
+          <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span></td>
+          <td class="fc-td">—</td>
+          <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
           <td class="fc-td">${fcEsc(rotF) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`)] });
