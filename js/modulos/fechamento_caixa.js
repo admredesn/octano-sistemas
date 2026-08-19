@@ -1441,8 +1441,10 @@ async function fcNodeDetalhe(tipo) {
     const grupos = cfg.grupos || [tipo];
     const entradas = [];   // {val, hora, rows: [tr...], oficial: 1}
 
-    // 1) cupons transmitidos
-    const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
+    // 1) cupons transmitidos — cupom EXCLUÍDO pelo ✖ sai da lista também (o
+    // _apl só cobria caixa/receb; a venda ficava visível mesmo fora das somas)
+    const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada')
+      .filter(v => { const a = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste; return !(a && a.excluido); });
     vs.forEach(v => (v.pagamentos || []).forEach(p => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
@@ -1867,12 +1869,17 @@ function fcModalCupons(vs) {
   const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
   // unifica: venda transmitida + item da fila num só formato
   const unifica = [];
-  vs.forEach(v => unifica.push({
-    ref: 'venda', id: v.id, seq: v.numero ?? '', quando: v.data_venda,
-    cliente: v.cliente_nome || v.vendedor || v.operador || '—',
-    forma: (v.pagamentos || []).map(p => _fcFormaNome(p.forma)).join(' + ') || '—',
-    desconto: 0, valor: Number(v.valor_total || 0), origem: '🧾 cupom', obj: v,
-  }));
+  vs.forEach(v => {
+    // cupom excluído do fechamento continua aqui (lista documental), mas marcado
+    const aX = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
+    unifica.push({
+      ref: 'venda', id: v.id, seq: v.numero ?? '', quando: v.data_venda,
+      cliente: v.cliente_nome || v.vendedor || v.operador || '—',
+      forma: (v.pagamentos || []).map(p => _fcFormaNome(p.forma)).join(' + ') || '—',
+      desconto: 0, valor: Number(v.valor_total || 0),
+      origem: (aX && aX.excluido) ? '🧾 cupom ✖ excluído' : '🧾 cupom', obj: v,
+    });
+  });
   (d0.fila_itens || []).forEach(f => unifica.push({
     ref: 'fila', id: f.id, seq: '', quando: f.ocorrido_em,
     cliente: f.vendedor || '—',
