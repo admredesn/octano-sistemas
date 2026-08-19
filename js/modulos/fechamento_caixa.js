@@ -330,6 +330,11 @@ async function fcCarregarDados() {
     else if (a.secao === 'deposito') t.deposito += v;
     else if (a.secao === 'receita') t.receita += v;
     else if (a.secao === 'sangria') t.sangria += v;
+    // manual no balão 💵 Dinheiro/Sangria = DEPÓSITO no cofre lançado à mão
+    // (19/08 — caso LUAN: Brink's registrou 1.850, sangria real 1.930): soma na
+    // linha "Dinheiro (depositado no cofre)" e no CONTADO da conferência —
+    // não é venda em dinheiro, é dinheiro físico que saiu da gaveta pro cofre.
+    else if (a.secao === 'dinheiro') t.receb_ext_cofre += v;
     else {
       const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
       const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
