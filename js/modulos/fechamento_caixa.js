@@ -370,8 +370,8 @@ async function fcListar() {
 
   const linhas = turnos.map(t => {
     const d = porTurno[t.id] || {}; const rec = d.rec || {};
-    const sit = String(t.status || '').toUpperCase();
-    const corSit = sit.startsWith('ABERTO') ? '#c0392b' : '#127a2e';
+    const sit = _fcEstadoCx(t);
+    const corSit = sit === 'ABERTO' ? '#c0392b' : sit === 'A CONFERIR' ? '#f0b45c' : '#127a2e';
     return `<tr onclick="fcDetalhe('${t.id}')" style="cursor:pointer" onmouseover="this.style.background='#1b2233'" onmouseout="this.style.background=''">
       <td class="fc-td">${t.numero ?? ''}</td>
       <td class="fc-td" style="font-weight:600">${ordemDia[t.id] ? ordemDia[t.id] + 'º' : ''}</td>
@@ -407,6 +407,9 @@ async function fcListar() {
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
         <button class="fc-btn" disabled>📄 Importar XML</button>
+        <span class="fc-sep"></span>
+        ${_fcEstadoCx(t) === 'A CONFERIR' ? `<button class="fc-btn" style="border-color:#2a5a3a;color:#7be0a0;font-weight:700" onclick="fcConfirmarCaixa('${t.id}')">✅ Fechar caixa</button>` : ''}
+        ${_fcEstadoCx(t) === 'FECHADO' ? `<button class="fc-btn" style="border-color:#5a4a2a;color:#f0b45c;font-weight:700" onclick="fcReabrirCaixa('${t.id}')">🔓 Reabrir caixa</button>` : ''}
       </div>
       <div class="fc-periodo">
         Período: <input type="date" id="fc-de" value="${window._fcDe}" class="fc-inp"> até
@@ -543,6 +546,9 @@ function fcDetalhe(turnoId) {
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
         <button class="fc-btn" disabled>📄 Importar XML</button>
+        <span class="fc-sep"></span>
+        ${_fcEstadoCx(t) === 'A CONFERIR' ? `<button class="fc-btn" style="border-color:#2a5a3a;color:#7be0a0;font-weight:700" onclick="fcConfirmarCaixa('${t.id}')">✅ Fechar caixa</button>` : ''}
+        ${_fcEstadoCx(t) === 'FECHADO' ? `<button class="fc-btn" style="border-color:#5a4a2a;color:#f0b45c;font-weight:700" onclick="fcReabrirCaixa('${t.id}')">🔓 Reabrir caixa</button>` : ''}
       </div>
 
       <div class="fc-cab">
@@ -557,7 +563,7 @@ function fcDetalhe(turnoId) {
           const nDia = doDia.findIndex(x => x.id === t.id) + 1;
           return `<div><label>Turno do dia:</label><input value="${nDia > 0 ? nDia + 'º turno' : (t.numero ?? '')}" class="fc-inp2 mini" readonly></div>`;
         })()}
-        <div><label>Status:</label><input value="${fcEsc((t.status || '').toUpperCase())}" class="fc-inp2" readonly></div>
+        <div><label>Status:</label><input value="${_fcEstadoCx(t)}" class="fc-inp2" readonly style="color:${_fcEstadoCx(t) === 'A CONFERIR' ? '#f0b45c' : _fcEstadoCx(t) === 'FECHADO' ? '#7ee2a0' : '#e06c6c'};font-weight:700"></div>
         <div><label>Abertura:</label><input value="${_fcData(t.aberto_em)}" class="fc-inp2 data" readonly></div>
         <div><label>Hora Aber.:</label><input value="${_fcHora(t.aberto_em)}" class="fc-inp2 mini" readonly></div>
         <div><label>Fechamento:</label><input value="${_fcData(t.fechado_em)}" class="fc-inp2 data" readonly></div>
@@ -786,12 +792,33 @@ function fcNavTurno(onde) {
   fcDetalhe(ts[j].id);
 }
 
+// CICLO DO CAIXA (19/08 — pedido Ronan): PDV fecha → chega "A CONFERIR";
+// o gerente confere e clica ✅ Fechar caixa → "FECHADO" (edição travada);
+// 🔓 Reabrir destrava para ajustes.
+function _fcEstadoCx(t) {
+  if (String((t && t.status) || '').toLowerCase() !== 'fechado') return 'ABERTO';
+  return t.conferido_em ? 'FECHADO' : 'A CONFERIR';
+}
+function _fcTravado(avisa) {
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === window._fcTurnoAtual);
+  const trav = !!(t && t.conferido_em);
+  if (trav && avisa !== false) alert('Caixa FECHADO (já conferido) — clique em 🔓 Reabrir caixa para editar.');
+  return trav;
+}
+async function fcReabrirCaixa(turnoId) {
+  if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.')) return;
+  const { error } = await sb.from('oct_pdv_turnos').update({ conferido_em: null, conferido_por: null }).eq('id', turnoId);
+  if (error) { alert('Erro: ' + error.message); return; }
+  fcRecarregar();
+}
+
 function _fcConfPintar(tr, conferido) {
   if (!tr) return;
   tr.classList.toggle('fc-confrow', conferido);
 }
 
 async function fcRefToggle(refTipo, refId, tr) {
+  if (_fcTravado()) return;
   const k = refTipo + ':' + refId;
   const cur = window._fcConf[k] = window._fcConf[k] || {};
   cur.conferido = !cur.conferido;
@@ -855,6 +882,7 @@ function fcConfEspaco() {
 
 // F9/F10 — conferir/desconferir TODAS as linhas do modal aberto (upsert em lote)
 async function fcConfTodos(v) {
+  if (_fcTravado()) return;
   const rows = [...document.querySelectorAll('#fc-modal tr[data-fcref]')];
   if (!rows.length) return;
   const payload = rows.map(tr => {
@@ -890,6 +918,7 @@ if (!window._fcTeclasOk) {
 // abastecimentos do turno que ainda não viraram lançamento (fila/cupom) —
 // selecionar um preenche tudo e amarra o lançamento ao abastecimento real.
 async function fcLancIncluir() {
+  if (_fcTravado()) return;
   const secao = window._fcNodeAtual || 'dinheiro';
   // no balão de itens vendidos, incluir = lançar item esquecido (com produto do cadastro)
   if (secao === 'itens') { fcItemVendidoForm(); return; }
@@ -1002,6 +1031,7 @@ async function fcLancExcluirGrupo(idsCsv) {
 }
 
 async function fcLancExcluir(marcados, alvosDiretos) {
+  if (_fcTravado()) return;
   let alvos = alvosDiretos || [];
   if (!alvos.length && marcados) alvos = [...window._fcSel];
   if (!alvos.length) {
@@ -1125,6 +1155,7 @@ function fcLancEditar(refTipo, refId) {
 }
 
 async function fcLancSalvar(refTipo, refId, desfazer) {
+  if (_fcTravado()) return;
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
   let ajuste = null;
@@ -1660,6 +1691,7 @@ function _fcFormaNome(cod) {
 
 // salva troco inicial/final editado direto no turno e recalcula tudo
 async function fcTrocoSalvar(campo) {
+  if (_fcTravado()) return;
   const val = parseFloat(document.getElementById('fc-troco-inp').value);
   if (isNaN(val) || val < 0) { alert('Valor inválido.'); return; }
   const { error } = await sb.from('oct_pdv_turnos').update({ [campo]: val }).eq('id', window._fcTurnoAtual);
@@ -2072,7 +2104,7 @@ async function fcSalvarObs() {
 // quem/quando conferiu). O gerente audita o dinheiro contado × esperado aqui.
 async function fcConfirmarCaixa(turnoId) {
   const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId];
-  if (!d || d.dinheiro_contado == null) { alert('Turno sem dinheiro contado — feche o turno no PDV primeiro.'); return; }
+  if (!d) { alert('Dados do turno ainda carregando — tente de novo.'); return; }
   const dif = d.diferenca_caixa || 0;
   const resumo = Math.abs(dif) < 0.01 ? 'Caixa confere (sem diferença).'
     : (dif < 0 ? 'FALTA de R$ ' : 'SOBRA de R$ ') + Math.abs(dif).toFixed(2).replace('.', ',');
