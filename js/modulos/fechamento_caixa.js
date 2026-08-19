@@ -1557,11 +1557,18 @@ async function fcNodeDetalhe(tipo) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
         const nGeral = chavesT.reduce((s, k) => s + totais[k].n, 0);
         // Σ como PAINEL LATERAL fixo (19/08 — modelo TecnoX "Totais por Forma pagto")
+        // ATALHO (19/08): clicar numa forma FILTRA a lista por ela; TODOS limpa.
         window.__fcLadoTotais = `<div style="font-weight:700;color:#f97316;font-size:0.8rem;margin-bottom:6px;text-align:center">Totais por Forma pagto</div>
           <table class="fc-grid" style="width:100%"><thead><tr><th>Forma</th><th style="text-align:right">Valor</th></tr></thead><tbody>
-          ${chavesT.map(k => `<tr><td class="fc-td" style="font-size:0.78rem">${fcEsc(k)} <span style="color:#667;font-size:0.68rem">(${totais[k].n})</span></td><td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(totais[k].v)}</td></tr>`).join('')}
-          <tr style="background:#132015"><td class="fc-td"><b>TODOS</b> <span style="color:#667;font-size:0.68rem">(${nGeral})</span></td><td class="fc-td fc-r"><b style="color:#7ee2a0">${fcMoney(totalGeral)}</b></td></tr>
-          </tbody></table>`;
+          ${chavesT.map(k => `<tr onclick="window._fcNodeForma='';window._fcNodeBand='${fcEsc(k)}';fcNodeDetalhe('${tipo}')"
+              style="cursor:pointer${selBand === k ? ';background:#26324a' : ''}" title="Filtrar a lista por ${fcEsc(k)}">
+            <td class="fc-td" style="font-size:0.78rem">${selBand === k ? '▶ ' : ''}${fcEsc(k)} <span style="color:#667;font-size:0.68rem">(${totais[k].n})</span></td>
+            <td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(totais[k].v)}</td></tr>`).join('')}
+          <tr onclick="window._fcNodeForma='';window._fcNodeBand='';fcNodeDetalhe('${tipo}')" style="background:#132015;cursor:pointer" title="Mostrar todas as formas">
+            <td class="fc-td"><b>TODOS</b> <span style="color:#667;font-size:0.68rem">(${nGeral})</span></td>
+            <td class="fc-td fc-r"><b style="color:#7ee2a0">${fcMoney(totalGeral)}</b></td></tr>
+          </tbody></table>
+          <p style="color:#556;font-size:0.66rem;margin-top:6px;text-align:center">clique numa forma pra filtrar a lista</p>`;
       } else { window.__fcLadoTotais = ''; }
     }
   }
