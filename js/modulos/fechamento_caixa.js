@@ -117,7 +117,7 @@ async function fcCarregarDados() {
     // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
     // ocorrido_em dentro do período e atribuímos ao turno pela hora de abertura/
     // fechamento — o horário é sempre gravado, o turno_id não.
-    _fcTudo(() => sb.from('oct_fila_transmissao').select('id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em,vendedor')
+    _fcTudo(() => sb.from('oct_fila_transmissao').select('id,bico,descricao,litros,valor,forma,forma_nome,bandeira,desconto,acrescimo,ocorrido_em,recebido_em,vendedor,marca')
       .eq('empresa_id', eid).eq('status', 'fila')
       .gte('ocorrido_em', janIni).lte('ocorrido_em', janFim).order('ocorrido_em')),
     // RECEBIMENTOS (maquininha/cofre/sangria): sem turno_id — casa por horário.
@@ -967,6 +967,16 @@ async function fcRecarregar(reabrirNode) {
 }
 async function _fcRecarregarNode() { await fcRecarregar(window._fcNodeAtual); }
 
+// abre/fecha os itens de um recebimento unificado (grupo por marca)
+function fcGrpToggle(k, btn) {
+  let aberto = false;
+  document.querySelectorAll(`tr[data-fcgrp="${k}"]`).forEach(tr => {
+    aberto = tr.style.display === 'none';
+    tr.style.display = aberto ? '' : 'none';
+  });
+  if (btn) btn.innerHTML = btn.innerHTML.replace(aberto ? '▸' : '▾', aberto ? '▾' : '▸');
+}
+
 // AUTO-ATUALIZAÇÃO (18/08): com a tela do turno aberta, os números se
 // renovam sozinhos a cada 30s — depósito do cofre, venda nova, edição de
 // outro usuário. Pausa quando um modal está aberto (não atrapalha edição).
@@ -1308,17 +1318,48 @@ async function fcNodeDetalhe(tipo) {
       f => f.ocorrido_em || f.criado_em);
     if (fsFila.length) {
       let totF = 0;
-      const linF = fsFila.map(f => {
+      // UNIFICADO POR MARCA (19/08 — pedido Ronan): 2 abastecimentos pagos num
+      // cartão só viram UMA linha do valor do recebimento, com ▸ para abrir os
+      // itens vinculados. A transmissão continua item a item (1 NFC-e cada).
+      const porMarca = {};
+      const ordemG = [];
+      fsFila.forEach(f => {
+        const k = (f.marca && String(f.marca)) || 'solo:' + f.id;
+        if (!porMarca[k]) { porMarca[k] = []; ordemG.push(k); }
+        porMarca[k].push(f);
+      });
+      const linhaDe = (f, extra) => {
         const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
-        totF += vf;
         window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-        return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
-          <td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
+        let tr = _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+          <td class="fc-td">${extra ? '↳ ' : ''}${fcEsc(f.descricao) || '—'}</td>
           <td class="fc-td">${f.bico ?? '—'}</td>
           <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(vf)}</td>`);
+        if (extra) tr = tr.replace('<tr ', `<tr data-fcgrp="${extra}" style="display:none;background:#0d1420" `);
+        return tr;
+      };
+      const linF = [];
+      ordemG.forEach(k => {
+        const g = porMarca[k];
+        g.forEach(f => { totF += Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0); });
+        if (g.length === 1) { linF.push(linhaDe(g[0])); return; }
+        const f0 = g[0];
+        const vG = g.reduce((s, f) => s + Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0), 0);
+        const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
+        linF.push(`<tr style="background:#101a2b">
+          <td class="fc-td" style="width:26px;text-align:center">🧷</td>
+          <td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
+          <td class="fc-td"><b>Recebimento unificado</b> <button class="fc-btn mini" onclick="fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
+          <td class="fc-td">—</td>
+          <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
+          <td class="fc-td">${fcEsc((f0.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(f0.forma_nome, f0.forma, f0.bandeira)) || '—'}</td>
+          <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>
+          <td class="fc-td" style="width:84px"></td></tr>`);
+        g.forEach(f => linF.push(linhaDe(f, k)));
       });
       listaN += fsFila.length; listaTot += totF;
       secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
