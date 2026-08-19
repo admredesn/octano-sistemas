@@ -1065,9 +1065,8 @@ async function fcLancExcluir(marcados, alvosDiretos) {
     const foco = document.activeElement && document.activeElement.closest && document.activeElement.closest('tr[data-fcref]');
     if (foco) alvos = [foco.dataset.fcref];
   }
-  alvos = alvos.filter(k => !k.startsWith('venda:'));   // cupom transmitido não se exclui daqui (é fiscal)
-  if (!alvos.length) { alert('Marque (☑) ou clique num lançamento excluível.\n(Cupom já transmitido não se exclui — é documento fiscal.)'); return; }
-  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez; os demais ficam marcados como excluídos (dá pra desfazer no ✎).`)) return;
+  if (!alvos.length) { alert('Marque (☑) ou clique num lançamento antes de excluir.'); return; }
+  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez; os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.`)) return;
   for (const k of alvos) {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
     try {
