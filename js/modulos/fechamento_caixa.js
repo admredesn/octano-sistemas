@@ -1525,12 +1525,13 @@ async function fcNodeDetalhe(tipo) {
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
         const nGeral = chavesT.reduce((s, k) => s + totais[k].n, 0);
-        // Σ FIXO no rodapé (19/08): compacto, uma linha por forma
-        window.__fcRodapeTotais = `<div style="padding:6px 10px;font-size:0.74rem;color:#cdd6e0;display:flex;flex-wrap:wrap;gap:4px 14px;border-bottom:1px solid #232838">
-          <b style="color:#f97316">Σ</b>
-          ${chavesT.map(k => `<span>${fcEsc(k)}: <b>${fcMoney(totais[k].v)}</b> <span style="color:#667">(${totais[k].n})</span></span>`).join('')}
-          <span style="margin-left:auto">TODOS: <b style="color:#7ee2a0">${fcMoney(totalGeral)}</b> <span style="color:#667">(${nGeral})</span></span></div>`;
-      } else { window.__fcRodapeTotais = ''; }
+        // Σ como PAINEL LATERAL fixo (19/08 — modelo TecnoX "Totais por Forma pagto")
+        window.__fcLadoTotais = `<div style="font-weight:700;color:#f97316;font-size:0.8rem;margin-bottom:6px;text-align:center">Totais por Forma pagto</div>
+          <table class="fc-grid" style="width:100%"><thead><tr><th>Forma</th><th style="text-align:right">Valor</th></tr></thead><tbody>
+          ${chavesT.map(k => `<tr><td class="fc-td" style="font-size:0.78rem">${fcEsc(k)} <span style="color:#667;font-size:0.68rem">(${totais[k].n})</span></td><td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(totais[k].v)}</td></tr>`).join('')}
+          <tr style="background:#132015"><td class="fc-td"><b>TODOS</b> <span style="color:#667;font-size:0.68rem">(${nGeral})</span></td><td class="fc-td fc-r"><b style="color:#7ee2a0">${fcMoney(totalGeral)}</b></td></tr>
+          </tbody></table>`;
+      } else { window.__fcLadoTotais = ''; }
     }
   }
 
@@ -1644,10 +1645,11 @@ async function fcNodeDetalhe(tipo) {
   // barra de ações no topo + rodapé com contador/total (modelo TecnoX)
   fcModal(cfg.titulo, secoes.join(''), {
     topo: _fcToolbar() + (window.__fcTopoFiltros || ''),
-    rodape: (window.__fcRodapeTotais || '') + _fcRodape(listaN, listaTot),
+    rodape: _fcRodape(listaN, listaTot),
+    lado: window.__fcLadoTotais || '',
   });
   window.__fcTopoFiltros = '';
-  window.__fcRodapeTotais = '';
+  window.__fcLadoTotais = '';
 }
 
 // nome amigável do cod_sefaz (p/ o modal de edição)
@@ -2042,7 +2044,9 @@ function fcModal(titulo, html, opts) {
   m.innerHTML = `<div class="fc-modal-bg" onclick="fcModalFechar()"></div>
     <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
     ${opts.topo ? `<div class="fc-modal-topo">${opts.topo}</div>` : ''}
-    <div class="fc-modal-corpo">${html}</div>
+    ${opts.lado
+      ? `<div class="fc-modal-corpo fc-corpo-flex"><div class="fc-corpo-scroll">${html}</div><div class="fc-corpo-lado">${opts.lado}</div></div>`
+      : `<div class="fc-modal-corpo">${html}</div>`}
     ${opts.rodape ? `<div class="fc-modal-pe">${opts.rodape}</div>` : ''}</div>`;
   // arrastável pela barra do título + redimensionável (canto inferior direito)
   if (typeof octArrastavel === 'function')
@@ -2157,9 +2161,12 @@ function _fcEstilo() {
   tr[data-fcref]:focus{outline:1px solid #f97316;outline-offset:-1px}
   .fc-filtros{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#141824;border-bottom:1px solid #2a2d3e;font-size:11px;color:#9aa}
   #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998}
-  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);height:auto;max-height:86vh;min-width:340px;min-height:180px;overflow:hidden;resize:both;display:flex;flex-direction:column;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(1020px,94vw);height:auto;max-height:88vh;min-width:340px;min-height:180px;overflow:hidden;resize:both;display:flex;flex-direction:column;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
   #fc-modal .fc-modal-tit{background:#1a1d2e;color:#f97316;padding:10px 16px;font-weight:600;border-radius:12px 12px 0 0}
   #fc-modal .fc-modal-corpo{padding:12px;flex:1 1 auto;overflow:auto;min-height:0}
+  #fc-modal .fc-corpo-flex{display:flex;padding:0;overflow:hidden}
+  #fc-modal .fc-corpo-scroll{flex:1 1 auto;overflow:auto;padding:12px;min-width:0}
+  #fc-modal .fc-corpo-lado{flex:0 0 250px;border-left:1px solid #2a2d3e;background:#11131c;overflow:auto;padding:10px}
   #fc-modal .fc-modal-topo{flex:0 0 auto;border-bottom:1px solid #2a2d3e;background:#13151f}
   #fc-modal .fc-modal-pe{flex:0 0 auto;border-top:1px solid #2a2d3e;background:#13151f}
   </style>`;
