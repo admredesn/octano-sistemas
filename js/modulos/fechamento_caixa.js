@@ -109,7 +109,7 @@ async function fcCarregarDados() {
   // ao turno é feita no cliente pela régua de época (_fcTsLocal).
   const janIni = new Date(_fcTsUtc(janIni0) - 6 * 3600e3).toISOString();
   const janFim = new Date(_fcTsUtc(janFim0) + 6 * 3600e3).toISOString();
-  const [vRes, cRes, fRes, rRes, vlRes, tRes] = await Promise.all([
+  const [vRes, cRes, fRes, rRes, vlRes, tRes, pRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
@@ -133,6 +133,11 @@ async function fcCarregarDados() {
     sb.from('oct_recebimentos_titulo').select('turno_id,cliente_nome,valor,forma,juros,desconto,data_recebimento')
       .eq('empresa_id', eid).in('turno_id', ids)
       .then(r => r, () => ({ data: [] })),
+    // PISTA — fonte IMUTÁVEL da venda de combustível (regra Ronan 19/08): todo
+    // litro que saiu da bomba é venda; excluir lançamento afeta só o RECEBIMENTO.
+    _fcTudo(() => sb.from('oct_pdv_abastecimentos').select('id,data_abast,litros,valor_total,tipo')
+      .eq('empresa_id', eid).or('tipo.is.null,tipo.neq.afericao')
+      .gte('data_abast', janIni).lte('data_abast', janFim).order('data_abast')),
   ]);
   // CONFERÊNCIA/AJUSTES do gerente (15/08 — modelo TecnoX): overlay por cima
   // dos lançamentos, guardado em oct_fc_lancamentos. O dado original (fila/
@@ -209,6 +214,14 @@ async function fcCarregarDados() {
     if (prox) return prox.id;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
+  // VENDA DE COMBUSTÍVEL = PISTA, imutável (regra Ronan 19/08): todo litro que
+  // saiu da bomba conta como venda, pago ou não, excluído ou não. Exclusão de
+  // lançamento (fila/cupom) tira apenas o RECEBIMENTO.
+  ((pRes && pRes.data) || []).forEach(a => {
+    const tid = _turnoFila(a.data_abast); const t = tid && porTurno[tid]; if (!t) return;
+    const va = Number(a.valor_total || 0);
+    t.venda_comb += va; t.litros_comb += Number(a.litros || 0); t.venda_total += va;
+  });
   ((fRes && fRes.data) || []).forEach(f => {
     if (f._excluido) return;
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
@@ -217,11 +230,9 @@ async function fcCarregarDados() {
     // combustível TEM BICO; produto de loja não (o campo litros carrega a QTD
     // do produto — ex.: 1 óleo Mobil "1.0 L" — e enganava a régua até 18/08)
     const ehComb = (f.bico !== null && f.bico !== undefined && f.bico !== '') && litros > 0;
-    // VENDA é o que saiu da bomba/estoque (régua TecnoX, Ronan 19/08): soma no
-    // lado Vendas/Saídas mesmo sem pagamento confirmado. RECEBIMENTO continua
-    // exigindo recebido_em (regra 14/08) — sem pgto fica como pendência.
-    t.venda_total += vf;
-    if (ehComb) { t.venda_comb += vf; t.litros_comb += litros; } else t.venda_prod += vf;
+    // PRODUTO de loja: a fila é o único registro da venda → soma aqui (pago ou
+    // não). COMBUSTÍVEL não soma venda: já veio da pista (fonte imutável).
+    if (!ehComb) { t.venda_total += vf; t.venda_prod += vf; }
     if (!f.recebido_em) {
       t.fila_sem_pgto += vf; t.fila_sem_pgto_itens.push(f);
       return;
@@ -238,11 +249,12 @@ async function fcCarregarDados() {
     const ajX = _aj('venda', v.id);
     if (ajX && ajX.excluido) { v._excluido = true; return; }
     t.qtd_vendas++;
-    t.venda_total += Number(v.valor_total || 0);
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
+      // combustível NÃO soma venda aqui: já veio da PISTA (fonte imutável);
+      // produto de loja do cupom soma normal.
+      if (it.tipo === 'abastecimento') return;
       const val = Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
-      if (it.tipo === 'abastecimento') { t.venda_comb += val; t.litros_comb += Number(it.qtd || 0); }
-      else t.venda_prod += val;
+      t.venda_prod += val; t.venda_total += val;
     });
     (Array.isArray(v.pagamentos) ? v.pagamentos : []).forEach(p => {
       // RECLASSIFICAÇÃO pelo ✎ (18/08): o ajuste de forma numa venda TRANSMITIDA
