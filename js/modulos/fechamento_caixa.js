@@ -883,7 +883,10 @@ function fcConfEspaco() {
 // F9/F10 — conferir/desconferir TODAS as linhas do modal aberto (upsert em lote)
 async function fcConfTodos(v) {
   if (_fcTravado()) return;
-  const rows = [...document.querySelectorAll('#fc-modal tr[data-fcref]')];
+  // se há linhas MARCADAS (☑), age só nelas; sem marcação, age em todas
+  let rows = [...document.querySelectorAll('#fc-modal tr[data-fcref]')];
+  const marcadas = rows.filter(tr => window._fcSel.has(tr.dataset.fcref));
+  if (marcadas.length) rows = marcadas;
   if (!rows.length) return;
   const payload = rows.map(tr => {
     const k = tr.dataset.fcref; const i = k.indexOf(':');
@@ -895,6 +898,14 @@ async function fcConfTodos(v) {
       ref_tipo: k.slice(0, i), ref_id: k.slice(i + 1), conferido: v,
       conferido_em: new Date().toISOString(), ajuste: cur.ajuste || null,
     };
+  });
+  // DESMARCA a seleção depois do ato (19/08 — pedido Ronan): o azul da marcação
+  // escondia o laranja do "conferido" e não dava pra ver o resultado
+  window._fcSel.clear();
+  document.querySelectorAll('#fc-modal tr[data-fcref]').forEach(tr => {
+    tr.classList.remove('fc-selrow');
+    const cb = tr.querySelector('input[type="checkbox"]');
+    if (cb) cb.checked = false;
   });
   try {
     await sb.from('oct_fc_lancamentos').upsert(payload, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
