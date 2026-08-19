@@ -232,6 +232,10 @@ async function fcCarregarDados() {
   (vRes.data || []).forEach(v => {
     const t = porTurno[v.turno_id]; if (!t) return;
     if (String(v.status || '').toLowerCase() === 'cancelada') return;
+    // cupom EXCLUÍDO no fechamento (✖): sai das somas — o documento fiscal
+    // continua existindo, só não conta neste caixa (pedido Ronan 19/08)
+    const ajX = _aj('venda', v.id);
+    if (ajX && ajX.excluido) { v._excluido = true; return; }
     t.qtd_vendas++;
     t.venda_total += Number(v.valor_total || 0);
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
@@ -746,7 +750,7 @@ function _fcRow(refTipo, refId, tds, btnDetalhe) {
     <td class="fc-td" style="width:26px;text-align:center"><input type="checkbox" ${sel ? 'checked' : ''}
       onclick="event.stopPropagation();fcSelToggle('${k}',this)"></td>
     ${tds}
-    <td class="fc-td" style="width:84px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button>${refTipo !== 'venda' ? `<button class="fc-btn mini" title="Excluir lançamento" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('${refTipo}','${refId}')">✖</button>` : ''}</td></tr>`;
+    <td class="fc-td" style="width:84px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button><button class="fc-btn mini" title="Excluir lançamento" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('${refTipo}','${refId}')">✖</button></td></tr>`;
 }
 
 function fcSelToggle(k, cb) {
@@ -882,14 +886,58 @@ if (!window._fcTeclasOk) {
 }
 
 // INCLUIR lançamento manual na seção aberta (vira ref_tipo='manual' e SOMA no fechamento)
-function fcLancIncluir() {
+// (19/08 — pedido Ronan): antes de digitar valor solto, PROCURA na pista os
+// abastecimentos do turno que ainda não viraram lançamento (fila/cupom) —
+// selecionar um preenche tudo e amarra o lançamento ao abastecimento real.
+async function fcLancIncluir() {
   const secao = window._fcNodeAtual || 'dinheiro';
   // no balão de itens vendidos, incluir = lançar item esquecido (com produto do cadastro)
   if (secao === 'itens') { fcItemVendidoForm(); return; }
   const formas = ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
+
+  // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h)
+  let livresHtml = '';
+  try {
+    const cache = window._fcCache || {};
+    const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
+    const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
+    const ini = t.aberto_em, fim = t.fechado_em || new Date().toISOString();
+    const { data: pista } = await sb.from('oct_pdv_abastecimentos')
+      .select('id,data_abast,bico,combustivel,litros,valor_total,tipo')
+      .eq('empresa_id', window._fcEmpresaId)
+      .gte('data_abast', String(ini).slice(0, 19)).lte('data_abast', String(fim).slice(0, 19))
+      .or('tipo.is.null,tipo.neq.afericao').order('data_abast');
+    const usados = [];
+    (d0.fila_itens || []).forEach(f => usados.push({ v: Number(f.valor || 0), h: f.ocorrido_em }));
+    (d0.manuais || []).forEach(m => usados.push({ v: Number(m.valor || 0), h: null }));
+    const consumidos = new Set();
+    const livres = (pista || []).filter(a => {
+      const va = Number(a.valor_total || 0);
+      const ta = new Date(String(a.data_abast).slice(0, 19)).getTime();
+      const i = usados.findIndex((u, idx) => !consumidos.has(idx) && Math.abs(u.v - va) < 0.005 &&
+        (!u.h || Math.abs(new Date(String(u.h).slice(0, 19)).getTime() - ta) < 2 * 3600e3));
+      if (i >= 0) { consumidos.add(i); return false; }
+      return true;
+    });
+    if (livres.length) {
+      livresHtml = `<p style="color:#fbbf24;font-size:0.75rem;margin-bottom:6px">⚠ ${livres.length} abastecimento(s) da pista deste turno SEM lançamento — selecione pra amarrar:</p>
+        <div style="max-height:160px;overflow:auto;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:10px">
+        ${livres.map(a => `<label style="display:flex;gap:8px;padding:5px 8px;border-bottom:1px solid #1a1d2e;cursor:pointer;font-size:0.78rem">
+          <input type="radio" name="fcm-abast" value="${a.id}"
+            onclick="document.getElementById('fcm-valor').value='${Number(a.valor_total || 0).toFixed(2)}';document.getElementById('fcm-desc').value='${fcEsc(a.combustivel || 'Abastecimento')} bico ${a.bico ?? ''} ${_fcHora(a.data_abast)} (pista ${String(a.id).slice(0, 8)})'">
+          <span style="width:44px;color:#889">${_fcHora(a.data_abast)}</span>
+          <span style="flex:1">${fcEsc(a.combustivel) || '—'} · bico ${a.bico ?? '—'} · ${fcNum(a.litros, 2)} L</span>
+          <b>${fcMoney(a.valor_total)}</b></label>`).join('')}
+        </div>`;
+    } else {
+      livresHtml = '<p style="color:#7ee2a0;font-size:0.75rem;margin-bottom:6px">✓ Todos os abastecimentos da pista deste turno já têm lançamento — este será um lançamento avulso.</p>';
+    }
+  } catch (e) { livresHtml = ''; }
+
   fcModal('➕ Incluir lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">Lançamento manual na seção <b>${fcEsc(secao)}</b> — entra nas somas do fechamento (auditável como manual).</p>
+      ${livresHtml}
       <label style="display:block;color:#9aa;font-size:0.75rem">Valor (R$) *</label>
       <input id="fcm-valor" type="number" step="0.01" class="fc-inp2" style="width:140px">
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
@@ -1081,16 +1129,27 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
   const base = window._fcLancBase[k] || {};
   let ajuste = null;
   if (!desfazer) {
-    ajuste = {};
     const valor = parseFloat(document.getElementById('fcl-valor').value);
     const forma = document.getElementById('fcl-forma').value;
     const band = (document.getElementById('fcl-bandeira').value || '').trim();
     const obs = document.getElementById('fcl-obs').value.trim();
-    if (!isNaN(valor) && Math.abs(valor - Number(base.valor || 0)) > 0.004) ajuste.valor = valor;
-    if (forma) ajuste.forma_nome = forma;
-    if (band && band !== String(base.bandeira || '')) ajuste.bandeira = band;
-    if (obs) ajuste.obs = obs;
-    if (!Object.keys(ajuste).length) ajuste = null;
+    if (refTipo === 'manual') {
+      // MANUAL vive inteiro no ajuste: preservar manual/secao/descricao/qtd —
+      // sobrescrever tudo apagava o lançamento (bug visto 19/08)
+      ajuste = Object.assign({}, (window._fcConf[k] || {}).ajuste || {});
+      if (!isNaN(valor)) ajuste.valor = valor;
+      if (forma) ajuste.forma_nome = forma;
+      if (band) ajuste.bandeira = band;
+      if (obs) ajuste.obs = obs;
+      ajuste.manual = true;
+    } else {
+      ajuste = {};
+      if (!isNaN(valor) && Math.abs(valor - Number(base.valor || 0)) > 0.004) ajuste.valor = valor;
+      if (forma) ajuste.forma_nome = forma;
+      if (band && band !== String(base.bandeira || '')) ajuste.bandeira = band;
+      if (obs) ajuste.obs = obs;
+      if (!Object.keys(ajuste).length) ajuste = null;
+    }
   }
   const cur = window._fcConf[k] = window._fcConf[k] || {};
   cur.ajuste = ajuste;
@@ -1340,7 +1399,9 @@ async function fcNodeDetalhe(tipo) {
       if (!pertence) return;
       // rótulo NORMALIZADO ("Pix", nunca "PIX"): mesma régua da fila, senão o
       // Σ de totais divide a mesma forma em duas linhas (visto 19/08)
-      const rotF = _fcRotForma((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), p.forma, p.bandeira || '');
+      const nomeBase = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
+      if (!fBand({ forma_nome: nomeBase, forma: p.forma, bandeira: p.bandeira || '' })) return;
+      const rotF = _fcRotForma(nomeBase, p.forma, p.bandeira || '');
       // ITENS do cupom na descrição (19/08 — pedido Ronan): "C" indica cupom e
       // o operador vê O QUE foi vendido, não só o número
       const its = v.itens || [];
@@ -1423,7 +1484,7 @@ async function fcNodeDetalhe(tipo) {
     // 3) lançamentos manuais deste grupo — na MESMA sequência
     const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao) ||
       grupos.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
-    mans.forEach(m => {
+    mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: '9999', oficial: 1, rows: [
         _fcRow('manual', m.id, `<td class="fc-td">—</td>
@@ -1464,11 +1525,12 @@ async function fcNodeDetalhe(tipo) {
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
         const nGeral = chavesT.reduce((s, k) => s + totais[k].n, 0);
-        secoes.push(stit('Σ Totais por forma de pagto'));
-        secoes.push(`<table class="fc-grid" style="max-width:420px"><thead><tr><th>Forma</th><th>Qtd</th><th>Valor</th></tr></thead><tbody>
-          ${chavesT.map(k => `<tr><td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${totais[k].n}</td><td class="fc-td fc-r">${fcMoney(totais[k].v)}</td></tr>`).join('')}
-          <tr><td class="fc-td"><b>TODOS</b></td><td class="fc-td fc-r"><b>${nGeral}</b></td><td class="fc-td fc-r"><b>${fcMoney(totalGeral)}</b></td></tr></tbody></table>`);
-      }
+        // Σ FIXO no rodapé (19/08): compacto, uma linha por forma
+        window.__fcRodapeTotais = `<div style="padding:6px 10px;font-size:0.74rem;color:#cdd6e0;display:flex;flex-wrap:wrap;gap:4px 14px;border-bottom:1px solid #232838">
+          <b style="color:#f97316">Σ</b>
+          ${chavesT.map(k => `<span>${fcEsc(k)}: <b>${fcMoney(totais[k].v)}</b> <span style="color:#667">(${totais[k].n})</span></span>`).join('')}
+          <span style="margin-left:auto">TODOS: <b style="color:#7ee2a0">${fcMoney(totalGeral)}</b> <span style="color:#667">(${nGeral})</span></span></div>`;
+      } else { window.__fcRodapeTotais = ''; }
     }
   }
 
@@ -1582,9 +1644,10 @@ async function fcNodeDetalhe(tipo) {
   // barra de ações no topo + rodapé com contador/total (modelo TecnoX)
   fcModal(cfg.titulo, secoes.join(''), {
     topo: _fcToolbar() + (window.__fcTopoFiltros || ''),
-    rodape: _fcRodape(listaN, listaTot),
+    rodape: (window.__fcRodapeTotais || '') + _fcRodape(listaN, listaTot),
   });
   window.__fcTopoFiltros = '';
+  window.__fcRodapeTotais = '';
 }
 
 // nome amigável do cod_sefaz (p/ o modal de edição)
