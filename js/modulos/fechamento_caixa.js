@@ -407,9 +407,6 @@ async function fcListar() {
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
         <button class="fc-btn" disabled>📄 Importar XML</button>
-        <span class="fc-sep"></span>
-        ${_fcEstadoCx(t) === 'A CONFERIR' ? `<button class="fc-btn" style="border-color:#2a5a3a;color:#7be0a0;font-weight:700" onclick="fcConfirmarCaixa('${t.id}')">✅ Fechar caixa</button>` : ''}
-        ${_fcEstadoCx(t) === 'FECHADO' ? `<button class="fc-btn" style="border-color:#5a4a2a;color:#f0b45c;font-weight:700" onclick="fcReabrirCaixa('${t.id}')">🔓 Reabrir caixa</button>` : ''}
       </div>
       <div class="fc-periodo">
         Período: <input type="date" id="fc-de" value="${window._fcDe}" class="fc-inp"> até
