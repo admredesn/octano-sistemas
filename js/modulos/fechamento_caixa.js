@@ -739,7 +739,7 @@ function _fcRow(refTipo, refId, tds, btnDetalhe) {
     <td class="fc-td" style="width:26px;text-align:center"><input type="checkbox" ${sel ? 'checked' : ''}
       onclick="event.stopPropagation();fcSelToggle('${k}',this)"></td>
     ${tds}
-    <td class="fc-td" style="width:60px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button></td></tr>`;
+    <td class="fc-td" style="width:84px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button>${refTipo !== 'venda' ? `<button class="fc-btn mini" title="Excluir lançamento" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('${refTipo}','${refId}')">✖</button>` : ''}</td></tr>`;
 }
 
 function fcSelToggle(k, cb) {
@@ -915,10 +915,15 @@ function fcLancAlterar() {
 
 // EXCLUIR: manual = apaga de vez; original = overlay "excluído" (sai das somas,
 // o dado do núcleo continua intacto e dá pra desfazer no ✎)
-async function fcLancExcluir(marcados) {
-  let alvos = [];
-  if (marcados) alvos = [...window._fcSel];
-  else {
+// ✖ da própria linha (19/08 — pedido Ronan: excluir sem depender de marcar antes)
+async function fcLancExcluirRef(refTipo, refId) {
+  await fcLancExcluir(false, [refTipo + ':' + refId]);
+}
+
+async function fcLancExcluir(marcados, alvosDiretos) {
+  let alvos = alvosDiretos || [];
+  if (!alvos.length && marcados) alvos = [...window._fcSel];
+  if (!alvos.length) {
     const foco = document.activeElement && document.activeElement.closest && document.activeElement.closest('tr[data-fcref]');
     if (foco) alvos = [foco.dataset.fcref];
   }
@@ -1236,16 +1241,35 @@ async function fcNodeDetalhe(tipo) {
     <tbody>${linhas.join('')}${rodape || ''}</tbody></table>`;
   const stit = txt => `<div style="padding:10px 4px 4px;color:#f97316;font-weight:700;font-size:0.82rem">${txt}</div>`;
 
-  // filtro FORMA+BANDEIRA (cartão): "Crédito Mastercard", "Débito Elo", "Pix"...
-  const band = (cfg.filtroBandeira && window._fcNodeBand) || '';
-  const fBand = (x) => !band || _fcRotForma(x.forma_nome, x.forma, x.bandeira) === band;
+  // filtros SEPARADOS de forma e bandeira (19/08 — pedido Ronan) + ordenação
+  const selForma = (cfg.filtroBandeira && window._fcNodeForma) || '';
+  const selBand = (cfg.filtroBandeira && window._fcNodeBand) || '';
+  const ordem = window._fcNodeOrd || 'valor_desc';
+  const _rotParte = (x) => {
+    const rot = _fcRotForma(x.forma_nome, x.forma, x.bandeira) || '';
+    const i = rot.indexOf(' ');
+    return { forma: i > 0 ? rot.slice(0, i) : rot, band: i > 0 ? rot.slice(i + 1) : '' };
+  };
+  const fBand = (x) => {
+    const p = _rotParte(x);
+    if (selForma && p.forma !== selForma) return false;
+    if (selBand === '(sem bandeira)') return !p.band;
+    if (selBand && p.band !== selBand) return false;
+    return true;
+  };
+  const _ordena = (arr, fnValor, fnHora) => {
+    if (ordem === 'valor_desc') arr.sort((a, b) => fnValor(b) - fnValor(a));
+    else if (ordem === 'valor_asc') arr.sort((a, b) => fnValor(a) - fnValor(b));
+    else arr.sort((a, b) => String(fnHora(a) || '').localeCompare(String(fnHora(b) || '')));
+    return arr;
+  };
 
   // 1) CUPONS pagos na(s) forma(s) — respeitando RECLASSIFICAÇÃO pelo ✎:
   // venda ajustada p/ outro grupo (ex.: frota) some daqui e aparece lá.
   const gruposNode0 = cfg.grupos || [tipo];
   if ((cfg.formas && cfg.formas.length) || (cfg.grupos && cfg.grupos.length)) {
     const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
-    const linhas = []; let total = 0;
+    const brutas = []; let total = 0;
     vs.forEach(v => (v.pagamentos || []).forEach(p => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
@@ -1254,13 +1278,17 @@ async function fcNodeDetalhe(tipo) {
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
       if (!pertence) return;
+      brutas.push({ v, p, ajV });
+    }));
+    _ordena(brutas, x => Number(x.p.valor || 0), x => x.v.data_venda);
+    const linhas = brutas.map(({ v, p, ajV }) => {
       total += Number(p.valor || 0);
       window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: p.valor, forma_nome: (ajV && ajV.forma_nome) || _fcFormaNome(p.forma) };
-      linhas.push(_fcRow('venda', v.id, `<td class="fc-td">${v.numero ?? ''}</td>
+      return _fcRow('venda', v.id, `<td class="fc-td">${v.numero ?? ''}</td>
         <td class="fc-td">${_fcHora(v.data_venda)}</td>
         <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
-        <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`));
-    }));
+        <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`);
+    });
     listaN += linhas.length; listaTot += total;
     secoes.push(stit(`Cupons do caixa (${linhas.length})`));
     secoes.push(linhas.length
@@ -1274,7 +1302,10 @@ async function fcNodeDetalhe(tipo) {
     // casa pelo GRUPO (via forma_nome), não pelo código — a fila grava forma=99.
     // cfg.grupos permite unir grupos (cartão+pix no mesmo balão, 15/08).
     const grupos = cfg.grupos || [tipo];
-    const fsFila = (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma))).filter(fBand);
+    const fsFila = _ordena(
+      (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma))).filter(fBand),
+      f => Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0),
+      f => f.ocorrido_em || f.criado_em);
     if (fsFila.length) {
       let totF = 0;
       const linF = fsFila.map(f => {
@@ -1368,24 +1399,32 @@ async function fcNodeDetalhe(tipo) {
     </div>`);
   }
 
-  // filtro FORMA+BANDEIRA (cartão) — nomes completos: "Crédito Mastercard"...
+  // filtros separados FORMA e BANDEIRA + ordenação (19/08 — pedido Ronan)
   if (cfg.filtroBandeira) {
     const d0b = (cache.porTurno || {})[turnoId] || {};
     const gruposNode = cfg.grupos || [tipo];
-    const combos = [...new Set(
-      (d0b.fila_itens || []).filter(f => gruposNode.includes(_fcGrupoNome(f.forma_nome, f.forma)))
-        .map(f => _fcRotForma(f.forma_nome, f.forma, f.bandeira))
-        .concat(((rR && rR.data) || []).map(r => _fcRotForma(null, r.forma, r.bandeira)))
-        .filter(Boolean)
-    )].sort();
-    if (combos.length) {
-      secoes.unshift(`<div class="fc-filtros"><label>Forma/Bandeira:</label>
-        <select class="fc-inp2" style="width:200px" onchange="window._fcNodeBand=this.value;fcNodeDetalhe('${tipo}')">
-          <option value="">Todas</option>
-          ${combos.map(b => `<option value="${fcEsc(b)}" ${band === b ? 'selected' : ''}>${fcEsc(b)}</option>`).join('')}
-        </select>
-        <span style="color:#667">☑ marca · ESPAÇO confere (muda de cor) · ✎ altera</span></div>`);
-    }
+    const partes = (d0b.fila_itens || []).filter(f => gruposNode.includes(_fcGrupoNome(f.forma_nome, f.forma)))
+      .map(f => _rotParte(f));
+    const formas = [...new Set(partes.map(p => p.forma).filter(Boolean))].sort();
+    const bandas = [...new Set(partes.map(p => p.band || '(sem bandeira)'))].sort();
+    secoes.unshift(`<div class="fc-filtros">
+      <label>Forma:</label>
+      <select class="fc-inp2" style="width:120px" onchange="window._fcNodeForma=this.value;fcNodeDetalhe('${tipo}')">
+        <option value="">Todas</option>
+        ${formas.map(b => `<option value="${fcEsc(b)}" ${selForma === b ? 'selected' : ''}>${fcEsc(b)}</option>`).join('')}
+      </select>
+      <label>Bandeira:</label>
+      <select class="fc-inp2" style="width:140px" onchange="window._fcNodeBand=this.value;fcNodeDetalhe('${tipo}')">
+        <option value="">Todas</option>
+        ${bandas.map(b => `<option value="${fcEsc(b)}" ${selBand === b ? 'selected' : ''}>${fcEsc(b)}</option>`).join('')}
+      </select>
+      <label>Ordenar:</label>
+      <select class="fc-inp2" style="width:130px" onchange="window._fcNodeOrd=this.value;fcNodeDetalhe('${tipo}')">
+        <option value="valor_desc" ${ordem === 'valor_desc' ? 'selected' : ''}>Valor ↓ maior</option>
+        <option value="valor_asc" ${ordem === 'valor_asc' ? 'selected' : ''}>Valor ↑ menor</option>
+        <option value="hora" ${ordem === 'hora' ? 'selected' : ''}>Hora</option>
+      </select>
+      <span style="color:#667">☑ marca · ESPAÇO confere · ✎ altera · ✖ exclui</span></div>`);
   }
 
   if (!secoes.length)
