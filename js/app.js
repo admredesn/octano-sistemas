@@ -132,6 +132,31 @@ function octAutoRefresh(fn, ms){
   }, ms || 15000);
 }
 
+
+// ── MODAL ARRASTÁVEL (19/08 — pedido Ronan): vale para TODOS os modais ───────
+// octArrastavel(caixa, barraTitulo): segura na barra e move; a caixa vira
+// position:fixed no primeiro arrasto (pra enxergar o que está atrás).
+function octArrastavel(cx, tit){
+  if(!cx || !tit || tit.dataset.drag) return;
+  tit.dataset.drag = '1';
+  tit.style.cursor = 'move';
+  tit.addEventListener('mousedown', function(e){
+    if(e.target.closest('button,input,select,a') || (e.target.tagName === 'SPAN' && e.target.getAttribute('onclick'))) return;
+    const r = cx.getBoundingClientRect();
+    cx.style.position = 'fixed';
+    cx.style.margin = '0';
+    cx.style.transform = 'none';
+    cx.style.left = r.left + 'px';
+    cx.style.top = r.top + 'px';
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    const mv = function(ev){ cx.style.left = (ev.clientX - dx) + 'px'; cx.style.top = Math.max(0, ev.clientY - dy) + 'px'; };
+    const up = function(){ document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', mv);
+    document.addEventListener('mouseup', up);
+    e.preventDefault();
+  });
+}
+
 function navegarPara(modulo){
   octAutoRefreshParar();   // para o auto-refresh da tela anterior
   _moduloAtual = modulo;

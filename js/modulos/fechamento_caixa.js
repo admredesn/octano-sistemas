@@ -1975,6 +1975,9 @@ function fcModal(titulo, html) {
   m.innerHTML = `<div class="fc-modal-bg" onclick="fcModalFechar()"></div>
     <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
     <div class="fc-modal-corpo">${html}</div></div>`;
+  // arrastável pela barra do título + redimensionável (canto inferior direito)
+  if (typeof octArrastavel === 'function')
+    octArrastavel(m.querySelector('.fc-modal-cx'), m.querySelector('.fc-modal-tit'));
 }
 
 // fechar SEM salvar: se veio do editor (✎/➕), volta pra tela de conferência
@@ -2085,7 +2088,7 @@ function _fcEstilo() {
   tr[data-fcref]:focus{outline:1px solid #f97316;outline-offset:-1px}
   .fc-filtros{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#141824;border-bottom:1px solid #2a2d3e;font-size:11px;color:#9aa}
   #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998}
-  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);max-height:80vh;overflow:auto;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(780px,92vw);max-height:86vh;min-width:340px;min-height:180px;overflow:auto;resize:both;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
   #fc-modal .fc-modal-tit{background:#1a1d2e;color:#f97316;padding:10px 16px;font-weight:600;border-radius:12px 12px 0 0}
   #fc-modal .fc-modal-corpo{padding:12px}
   </style>`;

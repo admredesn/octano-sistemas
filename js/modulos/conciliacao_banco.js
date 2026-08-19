@@ -265,12 +265,14 @@ async function cbVincular(movId) {
   const div = document.createElement('div');
   div.id = 'cb-modal';
   div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
-  div.innerHTML = `<div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;max-width:760px;width:94%;max-height:80vh;overflow:auto;padding:18px">
-    <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+  div.innerHTML = `<div id="cb-modal-cx" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;max-width:760px;width:94%;max-height:80vh;min-width:340px;min-height:160px;overflow:auto;resize:both;padding:18px">
+    <div id="cb-modal-tit" style="display:flex;justify-content:space-between;margin-bottom:10px">
       <b style="color:#f97316">🔗 Vincular débito de ${_cbMoney(mv.valor)} (${_cbDt(mv.data)}) a um título</b>
       <button onclick="document.getElementById('cb-modal').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem">✕</button></div>
     <p style="color:#889;font-size:0.78rem;margin-bottom:10px">${_cbEsc(mv.descricao || '')} ${_cbEsc((mv.info || '').slice(0, 80))}</p>
     <table class="fc-grid"><thead><tr><th>Título aberto</th><th>Venc</th><th>Valor</th><th>Dif</th><th></th></tr></thead>
     <tbody>${linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nenhum título aberto.</td></tr>'}</tbody></table></div>`;
   document.body.appendChild(div);
+  if (typeof octArrastavel === 'function')
+    octArrastavel(document.getElementById('cb-modal-cx'), document.getElementById('cb-modal-tit'));
 }
