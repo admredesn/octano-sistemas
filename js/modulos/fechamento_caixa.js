@@ -1254,8 +1254,7 @@ async function fcNodeDetalhe(tipo) {
     const p = _rotParte(x);
     const rot = p.forma + (p.band ? ' ' + p.band : '');
     if (selForma && p.forma !== selForma) return false;
-    if (selBand === '(sem bandeira)') return !p.band;
-    if (selBand && rot !== selBand) return false;   // combinação completa: "Débito Mastercard"
+    if (selBand && rot !== selBand) return false;   // rótulo completo: "Débito Mastercard", "Pix"
     return true;
   };
   const _ordena = (arr, fnValor, fnHora) => {
@@ -1407,8 +1406,9 @@ async function fcNodeDetalhe(tipo) {
     const partes = (d0b.fila_itens || []).filter(f => gruposNode.includes(_fcGrupoNome(f.forma_nome, f.forma)))
       .map(f => _rotParte(f));
     const formas = [...new Set(partes.map(p => p.forma).filter(Boolean))].sort();
-    // combinação COMPLETA no seletor (19/08): "Débito Mastercard", "Crédito Visa"...
-    const bandas = [...new Set(partes.map(p => p.band ? p.forma + ' ' + p.band : '(sem bandeira)'))].sort();
+    // rótulo COMPLETO no seletor (19/08): "Débito Mastercard", "Pix"... — Pix e
+    // Dinheiro não têm bandeira e apareciam num "(sem bandeira)" confuso.
+    const bandas = [...new Set(partes.map(p => p.forma + (p.band ? ' ' + p.band : '')).filter(Boolean))].sort();
     secoes.unshift(`<div class="fc-filtros">
       <label>Forma:</label>
       <select class="fc-inp2" style="width:120px" onchange="window._fcNodeForma=this.value;fcNodeDetalhe('${tipo}')">
