@@ -920,6 +920,11 @@ async function fcLancExcluirRef(refTipo, refId) {
   await fcLancExcluir(false, [refTipo + ':' + refId]);
 }
 
+// ✖ do recebimento UNIFICADO: exclui todos os itens vinculados de uma vez
+async function fcLancExcluirGrupo(idsCsv) {
+  await fcLancExcluir(false, String(idsCsv).split(',').filter(Boolean).map(id => 'fila:' + id));
+}
+
 async function fcLancExcluir(marcados, alvosDiretos) {
   let alvos = alvosDiretos || [];
   if (!alvos.length && marcados) alvos = [...window._fcSel];
@@ -1328,18 +1333,31 @@ async function fcNodeDetalhe(tipo) {
         if (!porMarca[k]) { porMarca[k] = []; ordemG.push(k); }
         porMarca[k].push(f);
       });
-      const linhaDe = (f, extra) => {
+      const linhaDe = (f) => {
         const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
         window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-        let tr = _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
-          <td class="fc-td">${extra ? '↳ ' : ''}${fcEsc(f.descricao) || '—'}</td>
+        return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+          <td class="fc-td">${fcEsc(f.descricao) || '—'}</td>
           <td class="fc-td">${f.bico ?? '—'}</td>
           <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(vf)}</td>`);
-        if (extra) tr = tr.replace('<tr ', `<tr data-fcgrp="${extra}" style="display:none;background:#0d1420" `);
-        return tr;
+      };
+      // membro do grupo: DETALHE puro — sem checkbox/fcref (não entra na
+      // navegação por setinha; conferência/exclusão são do grupo inteiro)
+      const linhaDetalhe = (f, k) => {
+        const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+        return `<tr data-fcgrp="${k}" style="display:none;background:#0d1420;color:#9aa">
+          <td class="fc-td"></td>
+          <td class="fc-td" style="font-size:0.78rem">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+          <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
+          <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
+          <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
+          <td class="fc-td" style="font-size:0.78rem">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+          <td class="fc-td" style="font-size:0.78rem">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
+          <td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(vf)}</td>
+          <td class="fc-td" style="width:84px"></td></tr>`;
       };
       const linF = [];
       ordemG.forEach(k => {
@@ -1349,17 +1367,21 @@ async function fcNodeDetalhe(tipo) {
         const f0 = g[0];
         const vG = g.reduce((s, f) => s + Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0), 0);
         const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
-        linF.push(`<tr style="background:#101a2b">
-          <td class="fc-td" style="width:26px;text-align:center">🧷</td>
-          <td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
-          <td class="fc-td"><b>Recebimento unificado</b> <button class="fc-btn mini" onclick="fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
+        // o CABEÇALHO é a linha oficial do grupo: conferível (ESPAÇO), navegável
+        // e com ✖ que exclui TODOS os itens vinculados de uma vez
+        window._fcLancBase['fila:' + f0.id] = { rotulo: `Recebimento unificado (${g.length} itens)`, valor: vG, forma_nome: f0.forma_nome, bandeira: f0.bandeira };
+        let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
+          <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
           <td class="fc-td">—</td>
           <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
           <td class="fc-td">${fcEsc((f0.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(f0.forma_nome, f0.forma, f0.bandeira)) || '—'}</td>
-          <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>
-          <td class="fc-td" style="width:84px"></td></tr>`);
-        g.forEach(f => linF.push(linhaDe(f, k)));
+          <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>`);
+        // (sem background inline: ele venceria a cor laranja do "conferido")
+        hdr = hdr.replace(`fcLancExcluirRef('fila','${f0.id}')`,
+                          `fcLancExcluirGrupo('${g.map(x => x.id).join(',')}')`);
+        linF.push(hdr);
+        g.forEach(f => linF.push(linhaDetalhe(f, k)));
       });
       listaN += fsFila.length; listaTot += totF;
       secoes.push(stit(`⏳ Na fila de transmissão (${fsFila.length}) — aguardando NFC-e`));
