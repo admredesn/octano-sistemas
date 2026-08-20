@@ -40,6 +40,9 @@ function fcMoney(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFra
 function fcNum(v, casas) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: casas || 0, maximumFractionDigits: casas || 0 }); }
 function _fcData(v) { return v ? new Date(v).toLocaleDateString('pt-BR') : ''; }
 function _fcHora(v) { return v ? new Date(v).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
+// hora p/ campos do NÚCLEO (fila/receb/pista/vales/cancelamentos): gravados em
+// hora LOCAL com +00:00 falso — exibir direto pelo _fcHora deslocava 3h (20/08).
+function _fcHoraLocal(v) { return v ? new Date(_fcTsLocal(v)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
 
 async function moduloFCaixa() {
   const conteudo = document.getElementById('conteudo');
@@ -716,7 +719,7 @@ function fcDetalhe(turnoId) {
               _fcTsLocal(r.recebido_em) >= new Date('2026-08-18T00:00:00').getTime());
             const alerta = suspeitos.length ? `<div style="color:#e06c6c;font-size:0.75rem;margin-top:6px;border-top:1px dashed #4a2a2a;padding-top:5px">
               🕵️ ${suspeitos.length} recebimento(s) do e-mail SEM confirmação do EDI após D+1 (${fcMoney(suspeitos.reduce((s, r) => s + Number(r.valor || 0), 0))}) — conferir no extrato PagBank:<br>
-              ${suspeitos.slice(0, 6).map(r => `· ${_fcHora(r.recebido_em)} ${fcEsc(r.forma)} ${fcMoney(r.valor)}`).join('<br>')}${suspeitos.length > 6 ? '<br>…' : ''}</div>` : '';
+              ${suspeitos.slice(0, 6).map(r => `· ${_fcHoraLocal(r.recebido_em)} ${fcEsc(r.forma)} ${fcMoney(r.valor)}`).join('<br>')}${suspeitos.length > 6 ? '<br>…' : ''}</div>` : '';
             return `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px;cursor:pointer" onclick="fcNode('cartao')" title="Clique para ver transação a transação">
               <div style="color:#7ea8d8;font-weight:700;font-size:0.82rem;margin-bottom:6px">🧾 Maquininha do turno (EDI/e-mail) — ${maq.length} transações</div>
               <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
@@ -1034,8 +1037,8 @@ async function fcLancIncluir() {
         <div style="max-height:160px;overflow:auto;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:10px">
         ${livres.map(a => `<label style="display:flex;gap:8px;padding:5px 8px;border-bottom:1px solid #1a1d2e;cursor:pointer;font-size:0.78rem">
           <input type="radio" name="fcm-abast" value="${a.id}"
-            onclick="fcmAbastToggle(this,'${Number(a.valor_total || 0).toFixed(2)}','${fcEsc(a.combustivel || 'Abastecimento')} bico ${a.bico ?? ''} ${_fcHora(a.data_abast)} (pista ${String(a.id).slice(0, 8)})')">
-          <span style="width:44px;color:#889">${_fcHora(a.data_abast)}</span>
+            onclick="fcmAbastToggle(this,'${Number(a.valor_total || 0).toFixed(2)}','${fcEsc(a.combustivel || 'Abastecimento')} bico ${a.bico ?? ''} ${_fcHoraLocal(a.data_abast)} (pista ${String(a.id).slice(0, 8)})')">
+          <span style="width:44px;color:#889">${_fcHoraLocal(a.data_abast)}</span>
           <span style="flex:1">${fcEsc(a.combustivel) || '—'} · bico ${a.bico ?? '—'} · ${fcNum(a.litros, 2)} L</span>
           <b>${fcMoney(a.valor_total)}</b></label>`).join('')}
         </div>`;
@@ -1372,7 +1375,7 @@ async function fcNodeDetalhe(tipo) {
       cs = r.data || [];
     } catch (e) { /* tabela pode não existir ainda */ }
     const linhas = cs.map(c => `<tr>
-      <td class="fc-td">${_fcHora(c.ocorrido_em)}</td>
+      <td class="fc-td">${_fcHoraLocal(c.ocorrido_em)}</td>
       <td class="fc-td">${c.bico ?? '—'}</td>
       <td class="fc-td">${fcEsc(c.combustivel) || '—'}</td>
       <td class="fc-td fc-r">${fcNum(c.litros, 3)} L</td>
@@ -1581,7 +1584,7 @@ async function fcNodeDetalhe(tipo) {
     const vfDe = (f) => Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const linhaDe = (f) => {
       window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-      return _fcRow('fila', f.id, `<td class="fc-td">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+      return _fcRow('fila', f.id, `<td class="fc-td">${_fcHoraLocal(f.ocorrido_em || f.criado_em)}</td>
         <td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
@@ -1591,7 +1594,7 @@ async function fcNodeDetalhe(tipo) {
     };
     const linhaDetalhe = (f, k) => `<tr data-fcgrp="${k}" style="display:none;background:#0d1420;color:#9aa">
         <td class="fc-td"></td>
-        <td class="fc-td" style="font-size:0.78rem">${_fcHora(f.ocorrido_em || f.criado_em)}</td>
+        <td class="fc-td" style="font-size:0.78rem">${_fcHoraLocal(f.ocorrido_em || f.criado_em)}</td>
         <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
@@ -1609,7 +1612,7 @@ async function fcNodeDetalhe(tipo) {
       const vG = g.reduce((s, f) => s + vfDe(f), 0);
       const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
       window._fcLancBase['fila:' + f0.id] = { rotulo: `Recebimento unificado (${g.length} itens)`, valor: vG, forma_nome: f0.forma_nome, bandeira: f0.bandeira };
-      let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHora(f0.ocorrido_em || f0.criado_em)}</td>
+      let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHoraLocal(f0.ocorrido_em || f0.criado_em)}</td>
         <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
         <td class="fc-td">—</td>
         <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
@@ -1713,7 +1716,7 @@ async function fcNodeDetalhe(tipo) {
       String(r.forma || '').toLowerCase().includes('dinheiro'));
     const linhas = rs.map(r => {
       window._fcLancBase['receb:' + r.id] = { rotulo: 'Depósito ' + (r.origem || 'cofre'), valor: r.valor, forma_nome: 'Dinheiro' };
-      return _fcRow('receb', r.id, `<td class="fc-td">${_fcHora(r.recebido_em)}</td>
+      return _fcRow('receb', r.id, `<td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
         <td class="fc-td">${fcEsc(r.origem) || 'cofre'}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
     const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
@@ -1891,7 +1894,7 @@ function fcNodeMov(tipo) {
     else if (tipo === 'vale_motorista') vs = vs.filter(v => Number(v.valor || 0) < 0);
     const linhas = vs.map(v => {
       const val = Number(v.valor || 0);
-      return `<tr><td class="fc-td">${_fcHora(v.criado_em)}</td>
+      return `<tr><td class="fc-td">${_fcHoraLocal(v.criado_em)}</td>
         <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
         <td class="fc-td">${_VALE_ROT[v.tipo] || fcEsc(v.tipo) || '—'}</td>
         <td class="fc-td">${fcEsc(v.descricao) || ''}</td>
@@ -1909,7 +1912,7 @@ function fcNodeMov(tipo) {
 
   if (tipo === 'receb_ext') {
     const rs = d.receb_ext || [];
-    const linhas = rs.map(r => `<tr><td class="fc-td">${_fcHora(r.recebido_em)}</td>
+    const linhas = rs.map(r => `<tr><td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
       <td class="fc-td">${fcEsc(r.origem) || '—'}</td>
       <td class="fc-td">${fcEsc(r.forma) || '—'}${r.bandeira ? ' ' + fcEsc(r.bandeira) : ''}</td>
       <td class="fc-td">${r.parcelas ? fcEsc(r.parcelas) + 'x' : ''}</td>
@@ -1960,6 +1963,7 @@ function fcModalCupons(vs) {
     const aX = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
     unifica.push({
       ref: 'venda', id: v.id, seq: v.numero ?? '', quando: v.data_venda,
+      hfmt: _fcHora(v.data_venda),
       cliente: v.cliente_nome || v.vendedor || v.operador || '—',
       forma: (v.pagamentos || []).map(p => _fcFormaNome(p.forma)).join(' + ') || '—',
       desconto: 0, valor: Number(v.valor_total || 0),
@@ -1968,6 +1972,7 @@ function fcModalCupons(vs) {
   });
   (d0.fila_itens || []).forEach(f => unifica.push({
     ref: 'fila', id: f.id, seq: '', quando: f.ocorrido_em,
+    hfmt: _fcHoraLocal(f.ocorrido_em),
     cliente: f.vendedor || '—',
     forma: (f.forma_nome || f.forma || '—') + (f.bandeira ? ' ' + f.bandeira : ''),
     desconto: Number(f.desconto || 0),
@@ -1997,7 +2002,7 @@ function _fcCuponsRender() {
     const desc = (x.obj && (x.obj.descricao || (x.obj.itens || []).map(i => i.desc).join(', '))) || '';
     window._fcLancBase[x.ref + ':' + x.id] = { rotulo: (x.origem + ' ' + (x.seq || desc)).trim(), valor: x.valor, forma_nome: x.forma };
     return _fcRow(x.ref, x.id, `<td class="fc-td">${x.seq || '—'}</td>
-      <td class="fc-td">${_fcHora(x.quando)}</td>
+      <td class="fc-td">${x.hfmt || _fcHora(x.quando)}</td>
       <td class="fc-td">${fcEsc(x.cliente)}</td>
       <td class="fc-td">${fcEsc(x.forma)}</td>
       <td class="fc-td fc-r">${x.desconto > 0.004 ? '<span style="color:#f0b45c">' + fcMoney(x.desconto) + '</span>' : '—'}</td>
