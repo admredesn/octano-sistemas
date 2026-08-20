@@ -197,6 +197,13 @@ async function fcCarregarDados() {
   // parseiam como hora LOCAL do navegador (postos todos em UTC-3, sem DST).
   const janelas = lista.map(t => ({ id: t.id, ini: _fcTsUtc(t.aberto_em), fim: t.fechado_em ? _fcTsUtc(t.fechado_em) : Date.now() }));
   const janOrd = janelas.slice().sort((a, b) => a.ini - b.ini);
+  // TURNO ABERTO ESQUECIDO (20/08): se um turno ficou aberto e outro abriu
+  // depois, a janela dele ia até AGORA e engolia as vendas do turno novo
+  // (caso turno 44×45). Teto: a janela de um turno termina, no máximo, na
+  // abertura do turno seguinte.
+  for (let i = 0; i < janOrd.length - 1; i++) {
+    if (janOrd[i].fim > janOrd[i + 1].ini) janOrd[i].fim = janOrd[i + 1].ini;
+  }   // (janOrd compartilha os objetos de `janelas` — o teto vale nos dois)
   const _turnoDe = (iso) => {
     const ts = _fcTsLocal(iso);
     if (!ts) return null;
