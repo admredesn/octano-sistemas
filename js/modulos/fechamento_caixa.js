@@ -107,11 +107,15 @@ async function fcCarregarDados() {
     const f = t.fechado_em || new Date().toISOString();
     return f > m ? f : m;
   }, de);
-  // ±6h de folga na CONSULTA: fila/receb têm +00:00 falso (hora local gravada
-  // como UTC), então o filtro do servidor cortaria a borda — a atribuição fina
-  // ao turno é feita no cliente pela régua de época (_fcTsLocal).
-  const janIni = new Date(_fcTsUtc(janIni0) - 6 * 3600e3).toISOString();
-  const janFim = new Date(_fcTsUtc(janFim0) + 6 * 3600e3).toISOString();
+  // FOLGA na CONSULTA (20/08 — era ±6h e ficou curta): fila/receb/pista têm
+  // +00:00 FALSO (hora local gravada como UTC) e o turno é UTC real — só o
+  // deslocamento já come 3h. Somando a REGRA DO VÃO (abastecimento de horas
+  // antes da abertura entra no turno seguinte: madrugada → 1º turno), a borda
+  // sumia quando o período filtrado era curto. Sintoma real: filtrando só
+  // 19/08, o turno 43 perdia o abastecimento das 05:58 (−59,80) e a venda de
+  // combustível não batia com o TecnoX. Folga de 36h cobre madrugada + fuso.
+  const janIni = new Date(_fcTsUtc(janIni0) - 36 * 3600e3).toISOString();
+  const janFim = new Date(_fcTsUtc(janFim0) + 12 * 3600e3).toISOString();
   const [vRes, cRes, fRes, rRes, vlRes, tRes, pRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
