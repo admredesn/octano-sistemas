@@ -300,6 +300,27 @@ async function moduloEmpresa() {
       </div>
       <p id="sic-status" style="color:#667;font-size:0.8rem;margin-top:6px">carregando situação…</p>
 
+      <!-- CASHBACK (chave geral por posto) -->
+      <div class="modulo-header" style="margin-top:28px"><h2>💸 Cashback — chave geral do posto</h2></div>
+      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
+        <strong>Desligado</strong> (padrão): o portal do cliente não aceita cadastro nem acionamento
+        deste posto e o pagador <strong>não paga nenhum Pix</strong> de cashback dele — posto que não
+        oferece a função fica 100% protegido. Ligue apenas nos postos que oferecem o benefício.
+      </p>
+      <div class="form-grid" style="max-width:760px">
+        <div class="form-group">
+          <label>Cashback neste posto</label>
+          <select id="cb-ativo">
+            <option value="false" ${emp.cashback_ativo ? '' : 'selected'}>🔴 Desligado</option>
+            <option value="true" ${emp.cashback_ativo ? 'selected' : ''}>🟢 Ligado (R$0,05/litro)</option>
+          </select>
+        </div>
+        <div class="form-group span2" style="align-self:end">
+          <button class="btn-salvar" style="background:#7a4a0a" onclick="salvarCashbackChave()">💾 Salvar chave do cashback</button>
+          <span id="cb-chave-msg" class="form-msg"></span>
+        </div>
+      </div>
+
       <!-- PERFIL -->
       <div class="modulo-header" style="margin-top:28px"><h2>👤 Meu Perfil</h2></div>
       <div class="form-grid">
@@ -397,6 +418,25 @@ async function salvarSicoob() {
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
   msg.textContent = 'Salvo! O gateway pega no próximo ciclo (15 min).'; msg.style.color = '#4caf50';
   empSicoobCarregar();
+}
+
+// ─── Chave geral do CASHBACK por posto (pedido Ronan 20/08) ─────────────────
+async function salvarCashbackChave() {
+  const msg = document.getElementById('cb-chave-msg');
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
+  const ligado = document.getElementById('cb-ativo').value === 'true';
+  msg.textContent = 'Salvando…'; msg.style.color = '#aaa';
+  const { error } = await sb.from('oct_empresas').update({ cashback_ativo: ligado }).eq('id', eid);
+  if (error) {
+    msg.style.color = '#f44';
+    msg.textContent = /cashback_ativo/.test(String(error.message))
+      ? 'Falta a coluna: rode no SQL editor → alter table oct_empresas add column if not exists cashback_ativo boolean default false;'
+      : 'Erro: ' + error.message;
+    return;
+  }
+  msg.textContent = ligado ? '🟢 Cashback LIGADO neste posto.' : '🔴 Cashback DESLIGADO neste posto.';
+  msg.style.color = ligado ? '#4caf50' : '#f0b45c';
 }
 
 // ─── Ativar / Ocultar empresa (master) ──────────────────────────────────────
