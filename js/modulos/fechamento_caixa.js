@@ -104,13 +104,20 @@ async function fcCarregarDados() {
   // (fora da lista) define até onde o passado pertence a ele. Sem esse piso, a
   // regra do vão fazia o 1º turno da lista engolir tudo que a consulta trouxesse
   // de antes — filtrando 1 dia, o turno 43 saltava de 5.150 para 13.090.
-  let pisoVao = 0;
+  let pisoVao = 0, tetoVao = 0;
   try {
     const { data: ant } = await sb.from('oct_pdv_turnos')
       .select('aberto_em,fechado_em').eq('empresa_id', eid)
       .lt('aberto_em', de).order('aberto_em', { ascending: false }).limit(1);
     if (ant && ant.length) pisoVao = _fcTsUtc(ant[0].fechado_em || ant[0].aberto_em);
-  } catch (e) { /* sem turno anterior: piso 0 (pega tudo, como antes) */ }
+    // TETO simétrico: o turno seguinte ao período (fora da lista) reivindica o
+    // que vier depois da abertura dele — senão o ÚLTIMO turno da lista engolia
+    // o futuro pela regra "sem próximo → último" (44 saltava p/ 7.245).
+    const { data: dep } = await sb.from('oct_pdv_turnos')
+      .select('aberto_em').eq('empresa_id', eid)
+      .gt('aberto_em', ate).order('aberto_em', { ascending: true }).limit(1);
+    if (dep && dep.length) tetoVao = _fcTsUtc(dep[0].aberto_em);
+  } catch (e) { /* sem vizinhos: piso/teto 0 (pega tudo, como antes) */ }
   const ids = lista.map(t => t.id);
   // janela total do período p/ o que NÃO tem turno_id (recebimentos por horário)
   const janIni0 = lista.reduce((m, t) => t.aberto_em && t.aberto_em < m ? t.aberto_em : m, ate);
@@ -240,6 +247,8 @@ async function fcCarregarDados() {
     if (pisoVao && ts < pisoVao) return null;
     const prox = janOrd.find(x => x.ini && x.ini > ts);
     if (prox) return prox.id;
+    // depois da abertura do turno seguinte ao período: é dele, não do último
+    if (tetoVao && ts >= tetoVao) return null;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
   // VENDA DE COMBUSTÍVEL = PISTA, imutável (regra Ronan 19/08): todo litro que
