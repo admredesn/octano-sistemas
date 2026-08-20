@@ -247,8 +247,11 @@ async function fcCarregarDados() {
     if (pisoVao && ts < pisoVao) return null;
     const prox = janOrd.find(x => x.ini && x.ini > ts);
     if (prox) return prox.id;
-    // depois da abertura do turno seguinte ao período: é dele, não do último
-    if (tetoVao && ts >= tetoVao) return null;
+    // não coube em nenhuma janela e não há próximo NA LISTA: se existe turno
+    // posterior ao período (fora do filtro), o movimento é DELE — o fallback
+    // "sem próximo → último" só vale quando não há turno seguinte nenhum
+    // (senão, filtrando 18/08 o turno 42 engolia a madrugada do dia 19).
+    if (tetoVao) return null;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
   // VENDA DE COMBUSTÍVEL = PISTA, imutável (regra Ronan 19/08): todo litro que
