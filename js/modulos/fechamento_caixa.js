@@ -100,6 +100,17 @@ async function fcCarregarDados() {
     .order('aberto_em', { ascending: false });
   const lista = turnos || [];
   if (!lista.length) return { turnos: [], porTurno: {} };
+  // PISO DO VÃO (20/08): o turno imediatamente ANTERIOR ao período filtrado
+  // (fora da lista) define até onde o passado pertence a ele. Sem esse piso, a
+  // regra do vão fazia o 1º turno da lista engolir tudo que a consulta trouxesse
+  // de antes — filtrando 1 dia, o turno 43 saltava de 5.150 para 13.090.
+  let pisoVao = 0;
+  try {
+    const { data: ant } = await sb.from('oct_pdv_turnos')
+      .select('aberto_em,fechado_em').eq('empresa_id', eid)
+      .lt('aberto_em', de).order('aberto_em', { ascending: false }).limit(1);
+    if (ant && ant.length) pisoVao = _fcTsUtc(ant[0].fechado_em || ant[0].aberto_em);
+  } catch (e) { /* sem turno anterior: piso 0 (pega tudo, como antes) */ }
   const ids = lista.map(t => t.id);
   // janela total do período p/ o que NÃO tem turno_id (recebimentos por horário)
   const janIni0 = lista.reduce((m, t) => t.aberto_em && t.aberto_em < m ? t.aberto_em : m, ate);
@@ -224,6 +235,9 @@ async function fcCarregarDados() {
     if (!ts) return janOrd.length ? janOrd[janOrd.length - 1].id : null;
     const dentro = janOrd.find(x => x.ini && ts >= x.ini && ts <= x.fim);
     if (dentro) return dentro.id;
+    // antes do fechamento do turno ANTERIOR ao período: pertence a ele, que
+    // está fora da lista filtrada — não pode cair no 1º turno do período.
+    if (pisoVao && ts < pisoVao) return null;
     const prox = janOrd.find(x => x.ini && x.ini > ts);
     if (prox) return prox.id;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
