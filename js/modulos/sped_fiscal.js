@@ -359,6 +359,13 @@ function spedFiscalMontar(d) {
   });
   if (combys.length && !bombas.length)
     A.push("Bombas/lacres (1350-1370) não cadastrados no sped_config — o gabarito do posto os informa; confirme com o contador se são exigidos.");
+  // Crédito de ICMS-ST na ENTRADA de combustível (registros 0400/0450/0460/0500 +
+  // C110/C113/C195/C197): o gabarito do TecnoX os traz, mas dependem do ICMS-ST
+  // destacado e dos documentos referenciados de CADA nota de compra — dado que
+  // o Octano ainda não coleta do XML de entrada. Ficam para o contador
+  // complementar no PVA (não afetam a apuração de saída, que é ST/monofásica).
+  if ((d.entradas || []).length)
+    A.push("Crédito de ICMS-ST das entradas (0400/0450/0460/0500, C110/C113/C195/C197) NÃO gerado — depende do ST destacado por nota; o contador complementa no PVA.");
   L.push(`|1990|${L.length - b1 + 1}|`);
 
   // ---------- BLOCO 9 ----------
