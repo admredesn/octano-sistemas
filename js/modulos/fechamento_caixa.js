@@ -831,6 +831,21 @@ function fcNavTurno(onde) {
 // CICLO DO CAIXA (19/08 — pedido Ronan): PDV fecha → chega "A CONFERIR";
 // o gerente confere e clica ✅ Fechar caixa → "FECHADO" (edição travada);
 // 🔓 Reabrir destrava para ajustes.
+// toast de confirmação (pedido Ronan 20/08): toda alteração salva dá retorno visual
+function _fcToast(msg) {
+  let t = document.getElementById('fc-toast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'fc-toast';
+    t.style.cssText = 'position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99999;'
+      + 'background:#0f2a18;border:1px solid #2a5a3a;color:#7be0a0;padding:10px 22px;border-radius:8px;'
+      + 'font-weight:700;font-size:0.9rem;box-shadow:0 4px 18px rgba(0,0,0,0.5);transition:opacity .3s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg; t.style.display = 'block'; t.style.opacity = '1';
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => { t.style.opacity = '0'; setTimeout(() => { t.style.display = 'none'; }, 350); }, 2200);
+}
+
 function _fcEstadoCx(t) {
   if (String((t && t.status) || '').toLowerCase() !== 'fechado') return 'ABERTO';
   return t.conferido_em ? 'FECHADO' : 'A CONFERIR';
@@ -1083,6 +1098,7 @@ async function fcLancIncluirSalvar(secao) {
     ref_tipo: 'manual', ref_id: refId, conferido: false, ajuste,
   });
   if (error) { alert('Erro: ' + error.message); return; }
+  _fcToast('✔ Lançamento incluído');
   await _fcRecarregarNode();
 }
 
@@ -1141,6 +1157,7 @@ async function fcLancExcluir(marcados, alvosDiretos) {
     } catch (e) { alert('Erro ao excluir: ' + (e.message || e)); return; }
   }
   window._fcSel.clear();
+  _fcToast('✔ Lançamento(s) excluído(s)');
   await _fcRecarregarNode();
 }
 
@@ -1223,6 +1240,9 @@ function fcLancEditar(refTipo, refId) {
         <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
         ${bandeiras.filter(b => b !== bandAtual).map(b => `<option value="${b}">${b}</option>`).join('')}
       </select>
+      ${refTipo === 'manual' ? `
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
+      <input id="fcl-desc" value="${fcEsc(aj.descricao || '')}" class="fc-inp2 lg" style="width:100%">` : ''}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Observação</label>
       <input id="fcl-obs" value="${fcEsc(aj.obs || '')}" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
@@ -1245,6 +1265,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
     const forma = document.getElementById('fcl-forma').value;
     const band = (document.getElementById('fcl-bandeira').value || '').trim();
     const obs = document.getElementById('fcl-obs').value.trim();
+    const descEl = document.getElementById('fcl-desc');
     if (refTipo === 'manual') {
       // MANUAL vive inteiro no ajuste: preservar manual/secao/descricao/qtd —
       // sobrescrever tudo apagava o lançamento (bug visto 19/08)
@@ -1253,6 +1274,9 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       if (forma) ajuste.forma_nome = forma;
       if (band) ajuste.bandeira = band;
       if (obs) ajuste.obs = obs;
+      // DESCRIÇÃO editável do manual (20/08 — antes só existia Observação e a
+      // edição parecia não salvar: ia parar em obs)
+      if (descEl && descEl.value.trim()) ajuste.descricao = descEl.value.trim();
       ajuste.manual = true;
     } else {
       ajuste = {};
@@ -1275,6 +1299,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
     alert('Não salvou: ' + (e.message || e) + '\n\n→ Rode o SQL-FC-LANCAMENTOS.sql no Supabase.');
     return;
   }
+  _fcToast(desfazer ? '↩ Edição desfeita' : '✔ Alteração salva');
   // recarrega os dados (o ajuste entra nas somas) e reabre onde estava
   await fcRecarregar(window._fcNodeAtual);
 }
@@ -1394,8 +1419,10 @@ async function fcNodeDetalhe(tipo) {
     let ms = [];
     if (tipo === 'suprimento') {
       try {
-        const r = await sb.from('oct_pdv_caixa').select('id,tipo,valor,descricao,criado_em')
-          .eq('turno_id', turnoId).order('criado_em');
+        // a tabela usa data_mov/created_at (criado_em NÃO existe — a query
+        // quebrava em silêncio e o balão mostrava 0 lançamentos; bug 20/08)
+        const r = await sb.from('oct_pdv_caixa').select('id,tipo,valor,descricao,criado_em:data_mov')
+          .eq('turno_id', turnoId).order('data_mov');
         ms = (r.data || []).filter(m => String(m.tipo || '').toLowerCase().includes('suprim'));
       } catch (e) {}
     }
@@ -1434,7 +1461,7 @@ async function fcNodeDetalhe(tipo) {
       ? sb.from('oct_pdv_vendas').select('id,numero,data_venda,vendedor,operador,cliente_nome,valor_total,pagamentos,itens,status').eq('turno_id', turnoId).order('data_venda')
       : Promise.resolve({ data: [] }),
     (cfg.caixa && cfg.caixa.length)
-      ? sb.from('oct_pdv_caixa').select('id,tipo,forma,valor,descricao,operador,criado_em').eq('turno_id', turnoId).order('criado_em')
+      ? sb.from('oct_pdv_caixa').select('id,tipo,forma,valor,descricao,operador,criado_em:data_mov').eq('turno_id', turnoId).order('data_mov')
       : Promise.resolve({ data: [] }),
     (cfg.maq || cfg.cofre)
       ? sb.from('oct_recebimentos').select('id,recebido_em,forma,bandeira,valor,origem,parcelas').eq('empresa_id', eid)
@@ -1786,6 +1813,7 @@ async function fcTrocoSalvar(campo) {
   if (isNaN(val) || val < 0) { alert('Valor inválido.'); return; }
   const { error } = await sb.from('oct_pdv_turnos').update({ [campo]: val }).eq('id', window._fcTurnoAtual);
   if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  _fcToast('✔ Alteração salva');
   await fcRecarregar(window._fcNodeAtual);
 }
 
@@ -2150,6 +2178,7 @@ async function fcItemVendidoSalvar() {
               forma_nome: forma, descricao: nome, produto_id: sel.value },
   });
   if (error) { msg.textContent = 'Erro: ' + error.message; return; }
+  _fcToast('✔ Item vendido lançado');
   await fcRecarregar('itens');
 }
 function fcModalCombustivel(vs) {
@@ -2201,7 +2230,7 @@ function fcModalFechar() {
 }
 async function fcSalvarObs() {
   const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
-  try { await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId); alert('Observação salva.'); }
+  try { await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId); _fcToast('✔ Observação salva'); }
   catch (e) { alert('Não foi possível salvar (campo observacao pode não existir ainda).'); }
 }
 
