@@ -105,3 +105,20 @@ body { background: #0f1117; color: #e0e0e0; }
 .nfe-aba:hover { color: #e0e0e0; }
 .nfe-aba.ativo { color: #f97316; border-bottom-color: #f97316; background: #0f1117; }
 .nfe-aba-conteudo { min-height: 180px; }
+
+/* Campos de DATA (20/08): o ícone do calendário e o texto nasciam pretos sobre
+   fundo escuro (invisíveis). color-scheme:dark pinta os controles nativos no
+   tema escuro; o filter deixa o ícone do date-picker branco em qualquer navegador. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="time"] { color-scheme: dark; }
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.6);
+  cursor: pointer;
+  opacity: 0.9;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
