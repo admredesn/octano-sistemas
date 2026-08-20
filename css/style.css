@@ -117,8 +117,10 @@ input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="month"]::-webkit-calendar-picker-indicator,
 input[type="time"]::-webkit-calendar-picker-indicator {
-  filter: invert(1) brightness(1.6);
+  /* com color-scheme:dark o Chrome JÁ desenha o ícone branco — inverter aqui
+     o pintava de PRETO de novo (bug 20/08). Só realce e cursor. */
   cursor: pointer;
-  opacity: 0.9;
+  opacity: 1;
+  filter: brightness(1.8);
 }
 input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
