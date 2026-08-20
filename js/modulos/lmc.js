@@ -34,24 +34,26 @@ async function moduloLmc() {
 
 // busca todas as vendas do período (paginado) e agrega saída por tanque/dia
 async function _lmcSaidaPorTanqueDia(eid, de, ate) {
+  // SAÍDA = tudo que saiu da bomba (regra imutável, Ronan 19/08): fonte é a
+  // PISTA (oct_pdv_abastecimentos), não oct_pdv_vendas.itens.dados — esse
+  // só existia p/ vendas nativas do PDV e via 26 L onde a pista tinha 1.714
+  // (bug 20/08, batido contra o TecnoX). Aferição (tipo=afericao) fica de fora.
+  // FUSO: data_abast é hora local com +00:00 falso → o dia sai direto do
+  // prefixo (slice 0-10), sem reconverter.
   const saida = {}; // { tanqueId: { 'YYYY-MM-DD': litros } }
   let from = 0; const page = 1000;
   for (;;) {
-    const { data, error } = await sb.from("oct_pdv_vendas")
-      .select("data_venda,itens,status")
-      .eq("empresa_id", eid).gte("data_venda", de + "T00:00:00").lte("data_venda", ate + "T23:59:59")
-      .order("data_venda").range(from, from + page - 1);
+    const { data, error } = await sb.from("oct_pdv_abastecimentos")
+      .select("tanque_id,litros,tipo,data_abast")
+      .eq("empresa_id", eid).or("tipo.is.null,tipo.neq.afericao")
+      .gte("data_abast", de + "T00:00:00").lte("data_abast", ate + "T23:59:59")
+      .order("data_abast").range(from, from + page - 1);
     if (error || !data || !data.length) break;
-    data.forEach(v => {
-      if (String(v.status || "").toLowerCase() === "cancelada") return;
-      const dia = (v.data_venda || "").slice(0, 10);
-      (v.itens || []).forEach(it => {
-        if (it.tipo !== "abastecimento") return;
-        const dd = it.dados || {};
-        const tid = dd.tanque_id; if (!tid) return;
-        const lit = Number(dd.litros || it.qtd || 0);
-        (saida[tid] = saida[tid] || {})[dia] = (saida[tid][dia] || 0) + lit;
-      });
+    data.forEach(a => {
+      const tid = a.tanque_id; if (!tid) return;
+      const dia = (a.data_abast || "").slice(0, 10);
+      const lit = Number(a.litros || 0);
+      (saida[tid] = saida[tid] || {})[dia] = (saida[tid][dia] || 0) + lit;
     });
     if (data.length < page) break;
     from += page;
