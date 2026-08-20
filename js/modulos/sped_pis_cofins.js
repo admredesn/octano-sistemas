@@ -61,17 +61,21 @@ async function gerarSpedPisCofinsV2() {
 
   // ---- busca as vendas do período ----
   // NFC-e: data_emissao é timestamp; filtra pelo range do mês e status autorizada
-  const [nfceRes, saidaRes, prodRes] = await Promise.all([
-    sb.from('oct_nfce').select('numero,serie,modelo,status,valor_total,data_emissao,chave_nfe,itens,cpf_consumidor')
+  // NFC-e PAGINADO (20/08): a consulta simples cortava em 1000 cupons — o AC de
+  // julho tem 4.887 e o SPED saía com só 1.000 (receita subdimensionada).
+  // _spedTudo (contabilidade.js) pagina de 1000 em 1000 até acabar.
+  const [nfces, saidaRes, prodRes] = await Promise.all([
+    _spedTudo(p => sb.from('oct_nfce')
+      .select('numero,serie,modelo,status,valor_total,data_emissao,chave_nfe,itens,cpf_consumidor')
       .eq('empresa_id', empresaId).eq('status', 'autorizada')
-      .gte('data_emissao', dtIni + 'T00:00:00').lte('data_emissao', dtFim + 'T23:59:59'),
+      .gte('data_emissao', dtIni + 'T00:00:00').lte('data_emissao', dtFim + 'T23:59:59')
+      .order('data_emissao').range(p * 1000, p * 1000 + 999)),
     sb.from('oct_nfe_saida').select('*, oct_nfe_saida_itens(*)')
       .eq('empresa_id', empresaId).in('status', ['autorizada', 'transmitida'])
       .gte('emissao', dtIni).lte('emissao', dtFim),
     sb.from('oct_produtos').select('id,codigo,descricao,ncm,unidade,cod_anp').eq('empresa_id', empresaId),
   ]);
 
-  const nfces = nfceRes.data || [];
   const saidas = saidaRes.data || [];
   const prods = prodRes.data || [];
 
