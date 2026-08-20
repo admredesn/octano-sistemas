@@ -372,9 +372,31 @@ async function fcCarregarDados() {
     d.dinheiro_contado = (t.valor_fechamento != null)
       ? Math.round((Number(t.valor_fechamento) + Number(d.receb_ext_cofre || 0)) * 100) / 100
       : null; // null = ainda não contado
-    d.diferenca_caixa = (d.dinheiro_contado == null) ? null : Math.round((d.dinheiro_contado - d.dinheiro_esperado) * 100) / 100;
-    d.falta_caixa = (d.diferenca_caixa != null && d.diferenca_caixa < 0) ? -d.diferenca_caixa : 0;
-    d.sobra_caixa = (d.diferenca_caixa != null && d.diferenca_caixa > 0) ? d.diferenca_caixa : 0;
+    // DIFERENÇA NO DINHEIRO (régua física da gaveta/cofre) — nome próprio p/ não
+    // se confundir com a SOBRA/FALTA DE CAIXA (regra Ronan 20/08: essa é o
+    // RESULTADO do caixa, recebido × vendido, calculado logo abaixo).
+    d.dif_dinheiro = (d.dinheiro_contado == null) ? null : Math.round((d.dinheiro_contado - d.dinheiro_esperado) * 100) / 100;
+    d.falta_dinheiro = (d.dif_dinheiro != null && d.dif_dinheiro < 0) ? -d.dif_dinheiro : 0;
+    d.sobra_dinheiro = (d.dif_dinheiro != null && d.dif_dinheiro > 0) ? d.dif_dinheiro : 0;
+
+    // ---- RESULTADO DO CAIXA = prestação de contas − origem (a MESMA fórmula
+    // das colunas do detalhe; aqui p/ a lista e os balões usarem o mesmo número).
+    //   recebido: cofre + cartão + pix + frota + prazo + cheque + despesas
+    //             + depósito em conta + troco final na gaveta
+    //   vendido : produtos + combustíveis + títulos + remessas (fundo+suprimento)
+    const recebido = Number(d.receb_ext_cofre || 0) + Number(d.rec.cartao || 0)
+      + Number(d.rec.pix || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
+      + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
+      + Number(t.valor_fechamento || 0);
+    const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
+      + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0);
+    d.recebido_caixa = Math.round(recebido * 100) / 100;
+    d.vendido_caixa = Math.round(vendido * 100) / 100;
+    d.resultado_caixa = Math.round((recebido - vendido) * 100) / 100;
+    // SOBRA/FALTA DE CAIXA (termo único do sistema) = resultado do caixa
+    d.diferenca_caixa = d.resultado_caixa;
+    d.falta_caixa = d.resultado_caixa < 0 ? -d.resultado_caixa : 0;
+    d.sobra_caixa = d.resultado_caixa > 0 ? d.resultado_caixa : 0;
   });
   return { turnos: lista, porTurno };
 }
@@ -526,6 +548,8 @@ function fcDetalhe(turnoId) {
   const totalReceb = somaReceb;   // prestação de contas: cofre+maquininha+frota+despesas+gaveta
   const totalVenda = somaVenda;   // origem: vendas + troco inicial (Remessas)
   // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA.
+  // (mesma fórmula de d.resultado_caixa em fcCarregarDados — a lista, os balões
+  //  e este quadro precisam mostrar SEMPRE o mesmo número.)
   const resultado = Number((totalReceb - totalVenda).toFixed(2));
   // FALTA/SOBRA DE CAIXA destas colunas = O RESULTADO DO CAIXA (regra Ronan
   // 20/08): a linha apura o desequilíbrio ENTRE AS DUAS COLUNAS (recebi × vendi),
@@ -667,7 +691,8 @@ function fcDetalhe(turnoId) {
               ${d.deposito > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Depósitos</span><b>${fcMoney(d.deposito)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>Contado (gaveta ${fcMoney(t.valor_fechamento)} + cofre ${fcMoney(d.receb_ext_cofre)})</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
-              <div style="display:flex;justify-content:space-between;font-size:0.92rem;margin-top:4px"><span style="font-weight:700">${d.diferenca_caixa == null ? 'Turno em aberto' : (Math.abs(d.diferenca_caixa) < 0.01 ? '✓ Caixa confere' : (d.diferenca_caixa < 0 ? '🔴 FALTA' : '🟢 SOBRA'))}</span><b style="color:${d.diferenca_caixa == null ? '#667' : (Math.abs(d.diferenca_caixa) < 0.01 ? '#7ee2a0' : (d.diferenca_caixa < 0 ? '#e06c6c' : '#7ee2a0'))}">${d.diferenca_caixa == null ? '' : fcMoney(Math.abs(d.diferenca_caixa))}</b></div>
+              <div style="display:flex;justify-content:space-between;font-size:0.92rem;margin-top:4px"><span style="font-weight:700">${d.dif_dinheiro == null ? 'Turno em aberto' : (Math.abs(d.dif_dinheiro) < 0.01 ? '✓ Dinheiro confere' : (d.dif_dinheiro < 0 ? '🔴 FALTA no dinheiro' : '🟢 SOBRA no dinheiro'))}</span><b style="color:${d.dif_dinheiro == null ? '#667' : (Math.abs(d.dif_dinheiro) < 0.01 ? '#7ee2a0' : (d.dif_dinheiro < 0 ? '#e06c6c' : '#7ee2a0'))}">${d.dif_dinheiro == null ? '' : fcMoney(Math.abs(d.dif_dinheiro))}</b></div>
+              <div style="font-size:0.7rem;color:#667;margin-top:3px">Régua do DINHEIRO físico (gaveta+cofre). A Sobra/Falta de Caixa do quadro é o RESULTADO (recebido × vendido) = ${fcMoney(d.resultado_caixa)}.</div>
               ${(() => { const aR = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste; return (aR && aR.responsavel) ? `<div style="display:flex;justify-content:space-between;color:#f0b45c"><span>👤 Responsável (${aR.tipo || 'diferença'})</span><b>${fcEsc(aR.responsavel)}</b></div>` : ''; })()}
             </div>
             ${d.dinheiro_contado != null ? `<button class="fc-btn2" style="margin-top:8px;width:100%;border-color:#2a5a3a;color:#7be0a0" onclick="fcConfirmarCaixa('${turnoId}')">✔ Confirmar conferência</button>` : '<div style="font-size:0.72rem;color:#667;margin-top:6px">Turno ainda aberto — a conferência fecha quando o operador informar o dinheiro contado.</div>'}
@@ -1398,11 +1423,17 @@ async function fcNodeDetalhe(tipo) {
   // e permite LANÇAR A FALTA/SOBRA PARA O RESPONSÁVEL (vira vale/haver da pessoa).
   if (cfg.especial === 'diferenca') {
     const d = (cache.porTurno || {})[turnoId] || {};
-    const dif = d.diferenca_caixa;
+    // SOBRA/FALTA DE CAIXA = RESULTADO do caixa (recebido × vendido) — a régua
+    // do quadro (Ronan 20/08). A diferença do DINHEIRO físico vem logo abaixo,
+    // como segunda leitura (é outra régua e pode divergir; ex.: despesa paga
+    // por fora não sai do depósito e vira "sobra" só no dinheiro).
+    const dif = d.resultado_caixa == null ? null : d.resultado_caixa;
+    const dinDif = d.dif_dinheiro;
     fcModal(cfg.titulo, `
       <div style="padding:16px;font-size:0.9rem;color:#cdd6e0">
-        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Esperado na gaveta (sistema)</span><b>${fcMoney(d.dinheiro_esperado)}</b></div>
-        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Contado pelo operador</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
+        <div style="color:#f97316;font-weight:700;font-size:0.8rem;margin-bottom:6px">RESULTADO DO CAIXA (recebido × vendido)</div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Total recebido (prestação de contas)</span><b>${fcMoney(d.recebido_caixa)}</b></div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Total vendido (origem)</span><b>${fcMoney(d.vendido_caixa)}</b></div>
         <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid #2a2d3e;margin-top:6px">
           <span>${dif == null ? 'Turno em aberto' : dif < -0.009 ? '🔴 FALTA de caixa' : dif > 0.009 ? '🟢 SOBRA de caixa' : '✓ Caixa confere'}</span>
           <b style="color:${dif == null ? '#667' : dif < -0.009 ? '#f87171' : dif > 0.009 ? '#4ade80' : '#cdd6e0'}">${dif == null ? '' : fcMoney(Math.abs(dif))}</b>
@@ -1412,6 +1443,14 @@ async function fcNodeDetalhe(tipo) {
           👷 Lançar ${dif < 0 ? 'a FALTA' : 'a SOBRA'} para o responsável (vira vale/haver da pessoa)
         </button>
         <p style="color:#667;font-size:0.72rem;margin-top:6px">Falta → vale (a pessoa deve ao posto). Sobra → haver (o posto deve à pessoa). Aparece em Vales/Haver e desconta na conta corrente.</p>` : ''}
+        <div style="margin-top:16px;padding-top:10px;border-top:1px dashed #2a3a4a">
+          <div style="color:#7ea8d8;font-weight:700;font-size:0.78rem;margin-bottom:4px">Conferência do DINHEIRO físico (outra régua)</div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span>Esperado na gaveta (sistema)</span><b>${fcMoney(d.dinheiro_esperado)}</b></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span>Contado (gaveta + cofre)</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span style="font-weight:700">${dinDif == null ? 'Turno em aberto' : Math.abs(dinDif) < 0.01 ? '✓ Dinheiro confere' : dinDif < 0 ? 'Falta no dinheiro' : 'Sobra no dinheiro'}</span>
+            <b style="color:${dinDif == null ? '#667' : Math.abs(dinDif) < 0.01 ? '#7ee2a0' : dinDif < 0 ? '#e06c6c' : '#f0b45c'}">${dinDif == null ? '' : fcMoney(Math.abs(dinDif))}</b></div>
+          ${dinDif != null && Math.abs(dinDif - (dif || 0)) > 0.01 ? `<p style="color:#667;font-size:0.72rem;margin-top:5px">As duas réguas divergem em ${fcMoney(Math.abs(dinDif - (dif || 0)))}: normalmente é despesa/troco pago por fora (o dinheiro não saiu do depósito) ou venda sem forma de pagamento identificada.</p>` : ''}
+        </div>
       </div>`);
     return;
   }
