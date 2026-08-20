@@ -523,21 +523,23 @@ function fcDetalhe(turnoId) {
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
   const somaVenda = soma(vendasBase);
-  // FALTA/SOBRA DE CAIXA = conferência de DINHEIRO FÍSICO (contado × esperado),
-  // calculada em fcCarregarDados. NÃO é mais o plug venda×forma.
-  const faltaCaixa = d.falta_caixa || 0;
-  const sobraCaixa = d.sobra_caixa || 0;
-  // Falta/Sobra aparecem nas colunas (layout TecnoX) mas NÃO somam nos totais:
-  // desde 14/08 a falta vem da CONFERÊNCIA FÍSICA da gaveta, e o dinheiro dos
-  // Recebimentos já vem completo do sistema (fila paga) — somar a falta contava
-  // o mesmo dinheiro em dobro (ex.: 8.184,27 = 6.453,50 + 1.730,77 no turno 31).
-  const receb = recebBase.concat([['Falta de Caixa (conf. gaveta)', faltaCaixa]]);
-  const vendas = vendasBase.concat([['Sobra de Caixa (conf. gaveta)', sobraCaixa]]);
   const totalReceb = somaReceb;   // prestação de contas: cofre+maquininha+frota+despesas+gaveta
   const totalVenda = somaVenda;   // origem: vendas + troco inicial (Remessas)
-  // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA
-  // (deve bater com a conferência de gaveta — dois caminhos, mesmo número)
-  const resultado = totalReceb - totalVenda;
+  // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA.
+  const resultado = Number((totalReceb - totalVenda).toFixed(2));
+  // FALTA/SOBRA DE CAIXA destas colunas = O RESULTADO DO CAIXA (regra Ronan
+  // 20/08): a linha apura o desequilíbrio ENTRE AS DUAS COLUNAS (recebi × vendi),
+  // que é a régua desta tabela. A conferência do DINHEIRO FÍSICO (gaveta+cofre ×
+  // esperado) é outra régua e vive no painel "Conferência de Caixa (dinheiro)" —
+  // os dois números divergem quando o dinheiro da despesa/troco não sai do
+  // depósito, e cada um precisa dizer a sua verdade.
+  const faltaCaixa = resultado < 0 ? -resultado : 0;
+  const sobraCaixa = resultado > 0 ? resultado : 0;
+  // Falta/Sobra aparecem nas colunas (layout TecnoX) mas NÃO somam nos totais —
+  // são o retrato da diferença, não uma nova origem/destino de dinheiro (somar
+  // contava o mesmo dinheiro em dobro: 8.184,27 = 6.453,50 + 1.730,77, turno 31).
+  const receb = recebBase.concat([['Falta de Caixa (resultado)', faltaCaixa]]);
+  const vendas = vendasBase.concat([['Sobra de Caixa (resultado)', sobraCaixa]]);
 
   // TOTAL MOVIMENTADO no caixa = tudo que passou (vendas/saídas: fila+transmitidos
   // + títulos recebidos).
