@@ -196,8 +196,22 @@ async function _lmcGerarLivro() {
       // ENTRADA: lançamento manual do livro OU a NF-e de entrada daquele dia
       // (20/08 — antes só entrava o que alguém digitasse, e a descarga com nota
       // ficava fora do livro).
+      // ENTRADA sem contar a MESMA descarga duas vezes (21/08): a descarga
+      // costuma existir como lançamento manual no livro E como NF-e de entrada,
+      // em dias vizinhos (nota lançada no dia seguinte). Sem isso o livro somava
+      // 10.000 L onde entraram 5.000 e a diferença ia para −5.000 todo dia.
+      // Régua: a data da NF-e manda (bate com o salto da sonda); o manual de
+      // mesmo valor em D±2 é considerado a mesma descarga e não soma de novo.
       const entNf = Number(((entNfe[t.id] || {})[dia]) || 0);
-      const ent = Number(pr.entrada || 0) || entNf;
+      const entMan = Number(pr.entrada || 0);
+      let ent = entNf;
+      if (entMan > 0) {
+        const dupDaNota = Object.entries(entNfe[t.id] || {}).some(([d2, v2]) => {
+          const diffDias = Math.abs((new Date(d2 + "T12:00:00") - new Date(dia + "T12:00:00")) / 86400e3);
+          return diffDias <= 2 && Math.abs(Number(v2) - entMan) < 0.5;
+        });
+        if (!dupDaNota) ent = entNf + entMan;      // manual sem nota: soma
+      }
       const sai = Number((saida[t.id] || {})[dia] || 0);
       saldo = saldo + ent - sai;
       // MEDIÇÃO: manual do livro > última leitura da SONDA daquele dia > sonda
