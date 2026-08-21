@@ -16,6 +16,7 @@ const PRT_FONTES = [
   { id: "turnos", nome: "Turnos do dia", peso: 1, desc: "quantidade e janelas de cada caixa" },
   { id: "formas", nome: "Formas de pagamento", peso: 1, desc: "dinheiro/cartão/pix/prazo/frota — só vale onde o PDV Octano é a fonte" },
   { id: "produtos", nome: "Produtos de loja", peso: 0, desc: "venda de itens que não são combustível" },
+  { id: "cobertura", nome: "Cobertura", peso: 1, desc: "o TecnoX gerou algum tipo de informação que o Octano ainda não sabe registrar? (ex.: cheque com dados bancários, cartão frota)" },
   { id: "edi_sem_par", nome: "Cobranças × EDI", peso: 0, desc: "cartão/Pix do caixa sem confirmação da PagBank" },
 ];
 
@@ -116,6 +117,7 @@ async function moduloProntidao() {
     + [7, 14, 30, 60].map(n => '<option value="' + n + '"' + (n === dias ? " selected" : "") + ">últimos " + n + " dias</option>").join("")
     + "</select></div>"
     + '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">' + cards + "</div>"
+    + prtGapsHtml(rows, nomeEmp)
     + tabelas
     + '<div class="prod-card" style="margin-top:20px">'
     + '<h4 style="color:#38bdf8;margin-bottom:8px">O que ainda NÃO é comparável automaticamente</h4>'
@@ -149,4 +151,48 @@ function prtDetalhe(empresaId, dia, fonte) {
     + '<pre style="background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;padding:10px;font-size:0.74rem;color:#8a8;overflow:auto;max-height:42vh">'
     + escHtml(JSON.stringify(r.detalhes, null, 2)) + "</pre></div></div>";
   document.body.appendChild(cx);
+}
+
+
+// Consolida os GAPS DE COBERTURA do período: tipos de informação que o TecnoX
+// registra e o Octano ainda não — a lista do que falta IMPLANTAR antes da virada.
+function prtGapsHtml(rows, nomeEmp) {
+  const porPosto = {};
+  rows.filter(r => r.fonte === "cobertura").forEach(r => {
+    ((r.detalhes || {}).gaps || []).forEach(g => {
+      const p = porPosto[r.empresa_id] = porPosto[r.empresa_id] || {};
+      const c = p[g.nome] = p[g.nome] || { dias: 0, valor: 0, qtd: 0, cob: g.cobertura, detalhe: g.detalhe || "" };
+      c.dias++; c.valor += Number(g.valor || 0); c.qtd += Number(g.qtd || 0);
+    });
+  });
+  const postos = Object.keys(porPosto);
+  if (!postos.length) {
+    return '<div class="prod-card" style="margin-top:16px;border-color:#2a5a3a">'
+      + '<h4 style="color:#22c55e">✓ Nenhum gap de cobertura no período</h4>'
+      + '<p style="color:#888;font-size:0.8rem">Tudo que o TecnoX registrou, o Octano sabe registrar.</p></div>';
+  }
+  const blocos = postos.map(p => {
+    const itens = Object.entries(porPosto[p]).sort((a, b) => b[1].valor - a[1].valor).map(([nome, c]) => {
+      const cor = c.cob === "parcial" ? "#f59e0b" : "#ef4444";
+      return '<tr style="border-bottom:1px solid #1a1d2e">'
+        + '<td style="padding:5px 8px;color:#ddd">' + escHtml(nome)
+        + (c.detalhe ? '<div style="color:#667;font-size:0.72rem">' + escHtml(c.detalhe) + "</div>" : "")
+        + "</td>"
+        + '<td style="padding:5px 8px;color:' + cor + ';font-weight:700">' + (c.cob === "parcial" ? "PARCIAL" : "NÃO COBRE") + "</td>"
+        + '<td style="padding:5px 8px;text-align:right;color:#9aa">' + c.dias + " dia(s)</td>"
+        + '<td style="padding:5px 8px;text-align:right;color:#9aa">' + c.qtd + "x</td>"
+        + '<td style="padding:5px 8px;text-align:right;color:#f0b45c">R$ ' + c.valor.toFixed(2) + "</td></tr>";
+    }).join("");
+    return '<div style="margin-top:10px"><b style="color:#f97316">' + escHtml(nomeEmp[p] || p.slice(0, 8)) + "</b>"
+      + '<table style="width:100%;border-collapse:collapse;font-size:0.8rem;margin-top:4px">'
+      + '<tr style="color:#888;text-align:left;border-bottom:1px solid #2a2d3e">'
+      + '<th style="padding:4px 8px">Informação do TecnoX</th><th style="padding:4px 8px">Octano</th>'
+      + '<th style="padding:4px 8px;text-align:right">Frequência</th><th style="padding:4px 8px;text-align:right">Qtd</th>'
+      + '<th style="padding:4px 8px;text-align:right">Valor no período</th></tr>' + itens + "</table></div>";
+  }).join("");
+  return '<div class="prod-card" style="margin-top:18px;border-color:#5a2a2a">'
+    + '<h4 style="color:#ef4444;margin-bottom:4px">⚠ Falta implantar no Octano (gaps de cobertura)</h4>'
+    + '<p style="color:#888;font-size:0.8rem">O vigia varre o TecnoX todo dia procurando informação que o Octano '
+    + "ainda não sabe registrar. Cada linha aqui é algo que precisa existir no Octano antes de desligar o TecnoX.</p>"
+    + blocos + "</div>";
 }
