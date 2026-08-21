@@ -61,6 +61,51 @@ async function _lmcSaidaPorTanqueDia(eid, de, ate) {
   return saida;
 }
 
+// MEDIÇÃO FÍSICA por tanque/dia = ÚLTIMA leitura da sonda do dia (oct_medicoes).
+// É a mesma régua do TecnoX ("Medição"), só que automática — lá alguém digita
+// a régua, e foi assim que o tanque 1 do Tijuco passou dias com ~7.000 L
+// fantasma no livro (20/08: sonda 1.400 × TecnoX 8.376, corrigido só na
+// descarga seguinte). Aqui a leitura vem da sonda, sem digitação.
+async function _lmcMedicaoPorTanqueDia(eid, de, ate) {
+  const out = {};   // { tanqueNumero: { dia: litros } }
+  let from = 0; const page = 1000;
+  for (;;) {
+    const { data, error } = await sb.from("oct_medicoes")
+      .select("tanque_numero,volume,medido_em").eq("empresa_id", eid)
+      .gte("medido_em", de + "T00:00:00").lte("medido_em", ate + "T23:59:59")
+      .order("medido_em").range(from, from + page - 1);
+    if (error || !data || !data.length) break;
+    data.forEach(m => {
+      const dia = (m.medido_em || "").slice(0, 10);
+      const t = m.tanque_numero;
+      if (t == null || !dia) return;
+      (out[t] = out[t] || {})[dia] = Number(m.volume || 0);   // ordenado: fica a ÚLTIMA
+    });
+    if (data.length < page) break;
+    from += page;
+  }
+  return out;
+}
+
+// ENTRADA por tanque/dia a partir das NF-e de entrada já importadas.
+async function _lmcEntradaNfePorTanqueDia(eid, de, ate) {
+  const out = {};   // { tanqueId: { dia: litros } }
+  try {
+    const { data } = await sb.from("oct_nfe_entrada")
+      .select("entrada,emissao,oct_nfe_entrada_itens(quantidade,tanque_id)")
+      .eq("empresa_id", eid).gte("emissao", de).lte("emissao", ate);
+    (data || []).forEach(n => {
+      const dia = String(n.entrada || n.emissao || "").slice(0, 10);
+      (n.oct_nfe_entrada_itens || []).forEach(it => {
+        if (!it.tanque_id || !dia) return;
+        (out[it.tanque_id] = out[it.tanque_id] || {})[dia] =
+          (out[it.tanque_id][dia] || 0) + Number(it.quantidade || 0);
+      });
+    });
+  } catch (e) { /* sem itens vinculados a tanque: livro segue com entrada manual */ }
+  return out;
+}
+
 // gera as linhas do livro (por tanque/dia) para o período
 async function _lmcGerarLivro() {
   const eid = window._lmcEid, de = window._lmcDe, ate = window._lmcAte;
@@ -71,6 +116,8 @@ async function _lmcGerarLivro() {
   const tanques = tqRes.data || [];
   const lmcRows = lmcRes.data || [];
   const saida = await _lmcSaidaPorTanqueDia(eid, de, ate);
+  const medSonda = await _lmcMedicaoPorTanqueDia(eid, de, ate);   // histórico da sonda
+  const entNfe = await _lmcEntradaNfePorTanqueDia(eid, de, ate);  // descargas com NF-e
   window._lmcTanques = tanques;
 
   // indexa lançamentos persistidos por tanque+dia (entrada manual e medição salva)
@@ -95,12 +142,20 @@ async function _lmcGerarLivro() {
     let saldo = abertura[t.id];
     dias.forEach(dia => {
       const pr = (persist[t.id] || {})[dia] || {};
-      const ent = Number(pr.entrada || 0);
+      // ENTRADA: lançamento manual do livro OU a NF-e de entrada daquele dia
+      // (20/08 — antes só entrava o que alguém digitasse, e a descarga com nota
+      // ficava fora do livro).
+      const entNf = Number(((entNfe[t.id] || {})[dia]) || 0);
+      const ent = Number(pr.entrada || 0) || entNf;
       const sai = Number((saida[t.id] || {})[dia] || 0);
       saldo = saldo + ent - sai;
-      // medição: salva no lmc; senão, se hoje e sonda ativa, usa a sonda
+      // MEDIÇÃO: manual do livro > última leitura da SONDA daquele dia > sonda
+      // de agora (só p/ hoje). Antes a sonda só valia p/ HOJE — nos dias
+      // anteriores a coluna ficava vazia mesmo com o histórico todo gravado
+      // em oct_medicoes, e o livro não conseguia acusar diferença nenhuma.
       let med = (pr.medicao != null && Number(pr.medicao) > 0) ? Number(pr.medicao)
-        : (dia === hoje && t.medicao_ativa && t.volume_sonda != null ? Number(t.volume_sonda) : null);
+        : (((medSonda[t.numero] || {})[dia] != null) ? Number(medSonda[t.numero][dia])
+        : (dia === hoje && t.medicao_ativa && t.volume_sonda != null ? Number(t.volume_sonda) : null));
       const dif = (med != null) ? (med - saldo) : null;
       if (ent === 0 && sai === 0 && med == null) return; // pula dia sem movimento
       linhas.push({ tanque: t, dia, saldo, medicao: med, diferenca: dif, entrada: ent, saida: sai, obs: pr.observacoes || "", persistId: pr.id || null });
