@@ -88,21 +88,35 @@ async function _lmcMedicaoPorTanqueDia(eid, de, ate) {
 }
 
 // ENTRADA por tanque/dia a partir das NF-e de entrada já importadas.
+// GOTCHA (21/08): oct_nfe_entrada_itens NÃO tem tanque_id — o vínculo é
+// item.produto_id → oct_produtos.tanque_id. E a data usada é a EMISSÃO, não
+// o campo `entrada`: a nota é lançada no dia seguinte (entrada = emissão+1),
+// enquanto a descarga física (o salto da sonda) acontece no dia da emissão —
+// era assim que a entrada caía um dia depois da medição que a comprova.
 async function _lmcEntradaNfePorTanqueDia(eid, de, ate) {
   const out = {};   // { tanqueId: { dia: litros } }
   try {
-    const { data } = await sb.from("oct_nfe_entrada")
-      .select("entrada,emissao,oct_nfe_entrada_itens(quantidade,tanque_id)")
-      .eq("empresa_id", eid).gte("emissao", de).lte("emissao", ate);
-    (data || []).forEach(n => {
-      const dia = String(n.entrada || n.emissao || "").slice(0, 10);
-      (n.oct_nfe_entrada_itens || []).forEach(it => {
-        if (!it.tanque_id || !dia) return;
-        (out[it.tanque_id] = out[it.tanque_id] || {})[dia] =
-          (out[it.tanque_id][dia] || 0) + Number(it.quantidade || 0);
-      });
+    const [rProd, rNf] = await Promise.all([
+      sb.from("oct_produtos").select("id,tanque_id").eq("empresa_id", eid),
+      sb.from("oct_nfe_entrada").select("id,emissao,entrada").eq("empresa_id", eid)
+        .gte("emissao", de).lte("emissao", ate),
+    ]);
+    const tqDoProduto = {};
+    (rProd.data || []).forEach(p => { if (p.tanque_id) tqDoProduto[p.id] = p.tanque_id; });
+    const notas = rNf.data || [];
+    if (!notas.length) return out;
+    const { data: itens } = await sb.from("oct_nfe_entrada_itens")
+      .select("nfe_id,produto_id,quantidade")
+      .in("nfe_id", notas.map(n => n.id));
+    const diaDaNota = {};
+    notas.forEach(n => { diaDaNota[n.id] = String(n.emissao || n.entrada || "").slice(0, 10); });
+    (itens || []).forEach(it => {
+      const tid = tqDoProduto[it.produto_id];
+      const dia = diaDaNota[it.nfe_id];
+      if (!tid || !dia) return;
+      (out[tid] = out[tid] || {})[dia] = (out[tid][dia] || 0) + Number(it.quantidade || 0);
     });
-  } catch (e) { /* sem itens vinculados a tanque: livro segue com entrada manual */ }
+  } catch (e) { /* sem vínculo produto→tanque: livro segue com entrada manual */ }
   return out;
 }
 
