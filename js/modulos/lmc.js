@@ -124,12 +124,29 @@ async function _lmcGerarLivro() {
   const persist = {}; // tid -> dia -> row
   lmcRows.forEach(r => { (persist[r.tanque_id] = persist[r.tanque_id] || {})[r.data] = r; });
 
-  // saldo de abertura por tanque = último saldo_final persistido ANTES de 'de' (senão 0)
+  // SALDO DE ABERTURA por tanque:
+  //   1º) último saldo_final persistido no livro ANTES do período (o correto
+  //       quando o livro já vem sendo fechado dia a dia);
+  //   2º) senão, a PRIMEIRA MEDIÇÃO DA SONDA do período — o estoque físico real
+  //       no início (é o "estoque inicial" do TecnoX).
+  // Antes caía em ZERO e o saldo escritural nascia NEGATIVO (−977, −2.608...),
+  // com a coluna Diferença carregando o saldo que faltava (bug visto 21/08).
   const abertura = {};
   tanques.forEach(t => {
     let melhor = null;
     lmcRows.filter(r => r.tanque_id === t.id && r.data < de).forEach(r => { if (!melhor || r.data > melhor.data) melhor = r; });
-    abertura[t.id] = melhor ? Number(melhor.saldo_final || 0) : 0;
+    if (melhor) { abertura[t.id] = Number(melhor.saldo_final || 0); return; }
+    const porDia = medSonda[t.numero] || {};
+    const primeiroDia = Object.keys(porDia).sort()[0];
+    // a abertura é o estoque ANTES do movimento do 1º dia: medição do dia
+    // + o que saiu nele − o que entrou nele
+    if (primeiroDia != null) {
+      const saiDia = Number(((saida[t.id] || {})[primeiroDia]) || 0);
+      const entDia = Number(((entNfe[t.id] || {})[primeiroDia]) || 0);
+      abertura[t.id] = Number(porDia[primeiroDia] || 0) + saiDia - entDia;
+    } else {
+      abertura[t.id] = 0;
+    }
   });
 
   // dias do período
