@@ -135,8 +135,25 @@ async function _lmcGerarLivro() {
   window._lmcTanques = tanques;
 
   // indexa lançamentos persistidos por tanque+dia (entrada manual e medição salva)
-  const persist = {}; // tid -> dia -> row
-  lmcRows.forEach(r => { (persist[r.tanque_id] = persist[r.tanque_id] || {})[r.data] = r; });
+  // CONSOLIDA DUPLICATAS (21/08): oct_lmc não tem chave única por tanque+dia e
+  // dois processos gravam o mesmo dia (um a medição, outro a entrada da
+  // descarga) — 11 dias duplicados só no Tijuco. Sem consolidar, a última
+  // linha lida vencia e a ENTRADA da descarga sumia do livro (ou aparecia
+  // sozinha, sem medição). Régua: soma as entradas, mantém a medição informada.
+  const persist = {}; // tid -> dia -> {entrada, medicao, observacoes, id}
+  lmcRows.forEach(r => {
+    const porTanque = (persist[r.tanque_id] = persist[r.tanque_id] || {});
+    const atual = porTanque[r.data];
+    if (!atual) {
+      porTanque[r.data] = { entrada: Number(r.entrada || 0), medicao: r.medicao,
+                            observacoes: r.observacoes, id: r.id, saldo_final: r.saldo_final };
+      return;
+    }
+    atual.entrada = Number(atual.entrada || 0) + Number(r.entrada || 0);
+    if (atual.medicao == null || Number(atual.medicao) <= 0) atual.medicao = r.medicao;
+    if (!atual.observacoes) atual.observacoes = r.observacoes;
+    atual._duplicado = true;
+  });
 
   // SALDO DE ABERTURA por tanque:
   //   1º) último saldo_final persistido no livro ANTES do período (o correto
@@ -149,7 +166,10 @@ async function _lmcGerarLivro() {
   tanques.forEach(t => {
     let melhor = null;
     lmcRows.filter(r => r.tanque_id === t.id && r.data < de).forEach(r => { if (!melhor || r.data > melhor.data) melhor = r; });
-    if (melhor) { abertura[t.id] = Number(melhor.saldo_final || 0); return; }
+    // saldo_final persistido só serve se for POSITIVO: há linhas antigas
+    // gravadas com 0 (o mesmo defeito da duplicata), e aceitar zero fazia o
+    // livro nascer sem estoque e ir para o negativo.
+    if (melhor && Number(melhor.saldo_final || 0) > 0) { abertura[t.id] = Number(melhor.saldo_final); return; }
     const porDia = medSonda[t.numero] || {};
     const primeiroDia = Object.keys(porDia).sort()[0];
     // a abertura é o estoque ANTES do movimento do 1º dia: medição do dia
