@@ -116,6 +116,7 @@ async function moduloProntidao() {
     + 'style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
     + [7, 14, 30, 60].map(n => '<option value="' + n + '"' + (n === dias ? " selected" : "") + ">últimos " + n + " dias</option>").join("")
     + "</select></div>"
+    + '<div id="push-botao" style="margin-top:12px"></div>'
     + '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">' + cards + "</div>"
     + prtGapsHtml(rows, nomeEmp)
     + tabelas
@@ -127,6 +128,9 @@ async function moduloProntidao() {
     + "<li><b>Cartão frota</b> (TicketLog/FitCard/Prime) — vendas que hoje só existem no TecnoX.</li>"
     + "<li><b>Data de corte por posto</b> — enquanto os dois rodam, a dupla digitação gera divergência.</li>"
     + "</ul></div></div>";
+
+  // alerta no celular (sonda travada, medição parada): desenha o botão de ativar
+  if (typeof pushRenderBotao === "function") pushRenderBotao();
 }
 
 function prtDetalhe(empresaId, dia, fonte) {
