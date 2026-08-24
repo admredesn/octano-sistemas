@@ -216,22 +216,21 @@ async function cbAprovar(movId, contaId, dif) {
   if (!mv || !c || c.status !== 'aberto') { alert('Título/movimento mudou — recarregando.'); _cbRender(); return; }
   const rot = dif > 0 ? ` + juros R$${dif.toFixed(2)}` : dif < 0 ? ` − desconto R$${(-dif).toFixed(2)}` : '';
   if (!confirm(`Baixar "${c.descricao}" (${_cbMoney(c.valor)}) com o pagamento de ${_cbMoney(mv.valor)} de ${_cbDt(mv.data)}${rot}?`)) return;
+  // A BAIXA VALE O QUE SAIU DA CONTA (extrato manda) e o encargo fica no próprio
+  // título, em juros/desconto. Antes gravava valor_pago = valor de face e criava
+  // um título separado para a diferença — a conciliação bancária não fechava e
+  // o encargo virava "título novo" solto na lista.
   const { error } = await sb.from('oct_contas_pagar').update({
-    status: 'pago', data_pagamento: mv.data, valor_pago: Number(c.valor), forma_pagamento: 'Sicoob',
+    status: 'pago', data_pagamento: mv.data, valor_pago: Number(mv.valor),
+    juros: dif > 0 ? Number(dif.toFixed(2)) : 0,
+    desconto: dif < 0 ? Number((-dif).toFixed(2)) : 0,
+    forma_pagamento: 'Sicoob',
     observacoes: `conciliação aprovada na tela — pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id}) ref. ${c.descricao}${rot}`,
   }).eq('id', contaId).eq('status', 'aberto');
   if (error) { alert('Erro: ' + error.message); return; }
   await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: contaId, dif_encargos: dif || null }).eq('id', movId);
-  if (dif > 0 && window._cbPlanoJuros) {
-    await sb.from('oct_contas_pagar').insert({
-      empresa_id: mv.empresa_id, descricao: `Juros/multa s/ ${c.descricao}`,
-      fornecedor_id: c.fornecedor_id, nfe_id: c.nfe_id,
-      valor: dif, valor_pago: dif, vencimento: mv.data, data_pagamento: mv.data,
-      status: 'pago', forma_pagamento: 'Sicoob', competencia: mv.data,
-      categoria: 'juros-multa', plano_conta_id: window._cbPlanoJuros,
-      observacoes: `encargo do pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id})`,
-    });
-  }
+  // (não cria mais título separado para o encargo — ele vive no campo 'juros'
+  //  do próprio título e a contabilidade lança em D Juros Passivos 5.1.02.01.0002)
   _cbRender();
 }
 

@@ -194,23 +194,39 @@ function ctbMontarLancamentos(d) {
   //         aluguel) = vira DESPESA. Sai do Caixa se pagou em dinheiro,
   //         senão do banco. ----
   (d.pagamentos || []).forEach(p => {
+    // v = o que SAIU DA CONTA (é o que o banco mostra e o que o crédito tem de valer)
     const v = Number(p.valor_pago || p.valor || 0);
     if (v <= 0.004) return;
     const ehCompra = !!p.nfe_id;
-    // título de JUROS/ENCARGO criado pelo conciliador Sicoob → despesa
-    // financeira própria. Testa ANTES do nfe_id: o título de juros carrega a
-    // referência da NF, mas não é quitação de fornecedor.
+    // título de JUROS/ENCARGO criado pelo conciliador ANTIGO (antes de 24/08) →
+    // despesa financeira própria. Testa ANTES do nfe_id: o título de juros carrega
+    // a referência da NF, mas não é quitação de fornecedor. Os novos não existem
+    // mais — o encargo vem no campo 'juros' do próprio título, logo abaixo.
     const ehJuros = /juros|encargo|multa/i.test(String(p.descricao || ""));
     const debito = ehJuros ? CTB.JUROS_PAGOS : (ehCompra ? contaForn(p.fornecedor_id) : CTB.DESPESAS_GERAIS);
     const credito = /dinheiro/i.test(String(p.forma_pagamento || "")) ? CTB.CAIXA : CTB.BANCOS;
+
+    // PAGAMENTO COM ENCARGO (pedido Ronan 24/08): o que saiu da conta é o crédito,
+    // mas a dívida baixa só pelo valor de face — a diferença é despesa financeira.
+    //    D Fornecedor      384,40   (some a obrigação)
+    //    D Juros Passivos    8,96   (custo do atraso, entra no DRE)
+    //    C Banco           393,36   (o que o extrato mostra)
+    // Desconto obtido faz o caminho inverso (receita financeira).
+    const juros = ehJuros ? 0 : Number(p.juros || 0);
+    const desc = ehJuros ? 0 : Number(p.desconto || 0);
+    const face = Number((v - juros + desc).toFixed(2));
+    const partidas = [{ conta: debito, dc: "D", valor: face, hist: p.fornecedor_nome }];
+    if (juros > 0.004) partidas.push({ conta: CTB.JUROS_PAGOS, dc: "D", valor: Number(juros.toFixed(2)), hist: "juros/multa" });
+    if (desc > 0.004) partidas.push({ conta: CTB.JUROS_RECEBIDOS || CTB.RECEITAS_FIN || "3.1.05.01.0003", dc: "C", valor: Number(desc.toFixed(2)), hist: "desconto obtido" });
+    partidas.push({ conta: credito, dc: "C", valor: Number(v.toFixed(2)) });
+
     L.push({
       data: String(p.data_pagamento || "").slice(0, 10), valor: Number(v.toFixed(2)),
-      historico: "Pagamento " + (p.descricao || "conta") + (p.fornecedor_nome ? " - " + p.fornecedor_nome : ""),
+      historico: "Pagamento " + (p.descricao || "conta") + (p.fornecedor_nome ? " - " + p.fornecedor_nome : "")
+        + (juros > 0.004 ? " (inclui juros/multa " + juros.toFixed(2) + ")" : "")
+        + (desc > 0.004 ? " (desconto " + desc.toFixed(2) + ")" : ""),
       origem: "cta-pagar", chave: String(p.id), competencia: comp,
-      partidas: [
-        { conta: debito, dc: "D", valor: Number(v.toFixed(2)), hist: p.fornecedor_nome },
-        { conta: credito, dc: "C", valor: Number(v.toFixed(2)) },
-      ],
+      partidas,
     });
   });
 
@@ -383,7 +399,7 @@ async function ctbContabilizar() {
 
     // v2: pagamentos do mês (pago = tem data_pagamento) e sangrias do PDV
     const pagamentos = await sb.from('oct_contas_pagar')
-      .select('id,descricao,valor,valor_pago,data_pagamento,forma_pagamento,nfe_id,fornecedor_id,oct_pessoas(nome)')
+      .select('id,descricao,valor,valor_pago,juros,desconto,data_pagamento,forma_pagamento,nfe_id,fornecedor_id,oct_pessoas(nome)')
       .eq('empresa_id', eId).not('data_pagamento', 'is', null)
       .gte('data_pagamento', dtIni).lte('data_pagamento', dtFim)
       .then(r => (r.data || []).map(p => Object.assign({}, p, { fornecedor_nome: (p.oct_pessoas || {}).nome })));
