@@ -57,6 +57,9 @@ const CTB_PLANO_PADRAO = [
   ["3.2.1.05.000001", "Taxas de cartao e adquirentes", "04", "A", 5, "3.2.1.05"],
   // v3 — extrato bancário
   ["3.2.1.05.000002", "Juros e multas pagos", "04", "A", 5, "3.2.1.05"],
+  // v103 — tarifa de boleto: valor fixo cobrado pelo banco na liquidacao.
+  // Nao e juros (aparece ate em pagamento feito no vencimento).
+  ["3.2.1.05.000003", "Tarifas bancarias", "04", "A", 5, "3.2.1.05"],
   ["1.1.1.05", "CREDITOS COM LIGADAS", "01", "S", 4, "1.1.1"],
   ["1.1.1.05.000001", "Conta corrente entre empresas do grupo", "01", "A", 5, "1.1.1.05"],
   ["3.1.3.99.000002", "Impostos e taxas pagos (DAE/guias)", "04", "A", 5, "3.1.3.99"],
@@ -78,6 +81,7 @@ const CTB = {
   TAXA_CARTAO: "3.2.1.05.000001",
   DESPESAS_GERAIS: "3.1.3.99.000001",
   JUROS_PAGOS: "3.2.1.05.000002",
+  TARIFA_BANCARIA: "3.2.1.05.000003",
   LIGADAS: "1.1.1.05.000001",
   IMPOSTOS_PAGOS: "3.1.3.99.000002",
   A_CLASSIFICAR: "3.1.3.99.000098",
@@ -213,10 +217,15 @@ function ctbMontarLancamentos(d) {
     //    C Banco           393,36   (o que o extrato mostra)
     // Desconto obtido faz o caminho inverso (receita financeira).
     const juros = ehJuros ? 0 : Number(p.juros || 0);
+    // TARIFA nao e juros: e o que o banco cobra por liquidar o boleto, valor fixo,
+    // indiferente ao atraso (aparece ate em titulo pago no vencimento). Somada aos
+    // juros, inflava a despesa com atraso que nao houve. Vai para conta propria.
+    const tarifa = ehJuros ? 0 : Number(p.tarifa || 0);
     const desc = ehJuros ? 0 : Number(p.desconto || 0);
-    const face = Number((v - juros + desc).toFixed(2));
+    const face = Number((v - juros - tarifa + desc).toFixed(2));
     const partidas = [{ conta: debito, dc: "D", valor: face, hist: p.fornecedor_nome }];
     if (juros > 0.004) partidas.push({ conta: CTB.JUROS_PAGOS, dc: "D", valor: Number(juros.toFixed(2)), hist: "juros/multa" });
+    if (tarifa > 0.004) partidas.push({ conta: CTB.TARIFA_BANCARIA, dc: "D", valor: Number(tarifa.toFixed(2)), hist: "tarifa bancaria" });
     if (desc > 0.004) partidas.push({ conta: CTB.JUROS_RECEBIDOS || CTB.RECEITAS_FIN || "3.1.05.01.0003", dc: "C", valor: Number(desc.toFixed(2)), hist: "desconto obtido" });
     partidas.push({ conta: credito, dc: "C", valor: Number(v.toFixed(2)) });
 
@@ -224,6 +233,7 @@ function ctbMontarLancamentos(d) {
       data: String(p.data_pagamento || "").slice(0, 10), valor: Number(v.toFixed(2)),
       historico: "Pagamento " + (p.descricao || "conta") + (p.fornecedor_nome ? " - " + p.fornecedor_nome : "")
         + (juros > 0.004 ? " (inclui juros/multa " + juros.toFixed(2) + ")" : "")
+        + (tarifa > 0.004 ? " (tarifa " + tarifa.toFixed(2) + ")" : "")
         + (desc > 0.004 ? " (desconto " + desc.toFixed(2) + ")" : ""),
       origem: "cta-pagar", chave: String(p.id), competencia: comp,
       partidas,
@@ -398,11 +408,19 @@ async function ctbContabilizar() {
       .then(r => (r.data || []).map(n => Object.assign({}, n, { fornecedor_nome: (n.oct_pessoas || {}).nome })));
 
     // v2: pagamentos do mês (pago = tem data_pagamento) e sangrias do PDV
-    const pagamentos = await sb.from('oct_contas_pagar')
-      .select('id,descricao,valor,valor_pago,juros,desconto,data_pagamento,forma_pagamento,nfe_id,fornecedor_id,oct_pessoas(nome)')
+    // `tarifa` e coluna nova (SQL-TARIFA-BANCARIA.sql). Se o banco ainda nao a
+    // tiver, o PostgREST recusa o select INTEIRO e a contabilidade do mes viria
+    // vazia — sem erro visivel. Por isso tenta com, e cai para sem.
+    const _pgCampos = (comTarifa) => 'id,descricao,valor,valor_pago,juros,'
+      + (comTarifa ? 'tarifa,' : '') + 'desconto,data_pagamento,forma_pagamento,'
+      + 'nfe_id,fornecedor_id,oct_pessoas(nome)';
+    const _pgBusca = (comTarifa) => sb.from('oct_contas_pagar')
+      .select(_pgCampos(comTarifa))
       .eq('empresa_id', eId).not('data_pagamento', 'is', null)
-      .gte('data_pagamento', dtIni).lte('data_pagamento', dtFim)
-      .then(r => (r.data || []).map(p => Object.assign({}, p, { fornecedor_nome: (p.oct_pessoas || {}).nome })));
+      .gte('data_pagamento', dtIni).lte('data_pagamento', dtFim);
+    let _pgR = await _pgBusca(true);
+    if (_pgR.error) _pgR = await _pgBusca(false);
+    const pagamentos = (_pgR.data || []).map(p => Object.assign({}, p, { fornecedor_nome: (p.oct_pessoas || {}).nome }));
     // filtra por recebido_em (ISO): o campo `dia` da sangria vem no formato
     // de exibição do PDV ("10/08") e não serve para comparar datas
     const sangrias = await sb.from('oct_recebimentos')

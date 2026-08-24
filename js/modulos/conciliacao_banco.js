@@ -153,7 +153,8 @@ async function _cbRender() {
       acao = `<button class="fc-btn mini" title="Desfazer" style="color:#f08080" onclick="cbDesfazer('${m.id}')">↩</button>`;
     } else if (sug) {
       bg = 'background:#1a1500';
-      rodape = `？ sugestão: ${_cbEsc(sug.c.descricao.slice(0, 40))} (${sug.dif > 0 ? '+' + _cbMoney(sug.dif) + ' juros' : sug.dif < 0 ? _cbMoney(sug.dif) + ' desc.' : 'exato'})`;
+      const _se = _cbClassificaEncargo(sug.dif, sug.c.vencimento, m.data);
+      rodape = `？ sugestão: ${_cbEsc(sug.c.descricao.slice(0, 40))} (${_se.tarifa > 0 ? '+' + _cbMoney(_se.tarifa) + ' tarifa' : _se.juros > 0 ? '+' + _cbMoney(_se.juros) + ' juros' : sug.dif < 0 ? _cbMoney(sug.dif) + ' desc.' : 'exato'})`;
       acao = `<button class="fc-btn mini" style="color:#7ee2a0" title="Aprovar" onclick="cbAprovar('${m.id}','${sug.c.id}',${sug.dif})">✓</button>`;
     } else if (_cbInterno(m)) {
       rodape = '<span style="color:#c084fc">transferência interna do grupo</span>';
@@ -208,25 +209,71 @@ async function _cbRender() {
     </div></div>`;
 }
 
-// executa a baixa aprovada: título fecha pelo valor da NF; juros vira título
-// pago na conta 5.1.02.01.0002; o movimento guarda a referência completa
+// TARIFA x JUROS — quando o pagamento sai maior que o boleto, a diferença não é
+// toda juros. O banco cobra uma tarifa fixa por boleto liquidado, que independe
+// de atraso. Medido no Tijuco: R$ 3,72 em 7 títulos, com 0, 1 e 2 dias de atraso,
+// em faces de 11 mil a 27 mil — dois deles pagos NO PRÓPRIO VENCIMENTO. Já os
+// juros de verdade variam de 0,22% a 8,27% da face conforme os dias.
+// Somadas, a tarifa inflava a despesa de atraso que não houve.
+const CB_TARIFA_BOLETO = 3.72;   // tarifa do Sicoob por boleto liquidado
+
+// A coluna `tarifa` só existe depois do SQL-TARIFA-BANCARIA.sql. Enquanto não
+// rodar, o PostgREST recusa o update inteiro e a baixa não acontece — a tela
+// diria "erro" sem o usuário entender por quê. Tenta com, cai para sem.
+async function _cbUpdConta(id, patch, extraFiltro) {
+  const exec = (p) => {
+    let q = sb.from('oct_contas_pagar').update(p).eq('id', id);
+    if (extraFiltro) q = q.eq(extraFiltro[0], extraFiltro[1]);
+    return q;
+  };
+  let r = await exec(patch);
+  if (r.error && 'tarifa' in patch) {
+    const semTarifa = Object.assign({}, patch);
+    delete semTarifa.tarifa;
+    // sem a coluna, o encargo volta a ser tudo juros — melhor que perder a baixa
+    if (semTarifa.juros === 0 && patch.tarifa > 0) semTarifa.juros = patch.tarifa;
+    r = await exec(semTarifa);
+  }
+  return r;
+}
+
+// Classifica a diferença positiva. Conservador de propósito: só chama de tarifa
+// quando tem certeza — bate com o valor conhecido, ou não houve atraso nenhum
+// (sem atraso não existe juros). Fora disso, mantém juros e não inventa rateio.
+function _cbClassificaEncargo(dif, vencimento, dataPgto) {
+  if (!(dif > 0.004)) return { juros: 0, tarifa: 0 };
+  const d = Math.round(dif * 100) / 100;
+  if (Math.abs(d - CB_TARIFA_BOLETO) < 0.015) return { juros: 0, tarifa: d };
+  const v = Date.parse(String(vencimento || '').slice(0, 10));
+  const p = Date.parse(String(dataPgto || '').slice(0, 10));
+  if (v && p && p <= v) return { juros: 0, tarifa: d };   // pago em dia: não é juros
+  return { juros: d, tarifa: 0 };
+}
+
+// executa a baixa aprovada: o título fecha pelo que SAIU DA CONTA; o encargo fica
+// dentro do próprio título, separado em juros (5.1.02.01.0002) e tarifa
+// bancária (5.1.02.01.0001); o movimento guarda a referência completa
 async function cbAprovar(movId, contaId, dif) {
   const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
   const { data: c } = await sb.from('oct_contas_pagar').select('*').eq('id', contaId).single();
   if (!mv || !c || c.status !== 'aberto') { alert('Título/movimento mudou — recarregando.'); _cbRender(); return; }
-  const rot = dif > 0 ? ` + juros R$${dif.toFixed(2)}` : dif < 0 ? ` − desconto R$${(-dif).toFixed(2)}` : '';
+  const enc = _cbClassificaEncargo(dif, c.vencimento, mv.data);
+  const rot = enc.tarifa > 0 ? ` + tarifa bancária R$${enc.tarifa.toFixed(2)}`
+    : enc.juros > 0 ? ` + juros R$${enc.juros.toFixed(2)}`
+    : dif < 0 ? ` − desconto R$${(-dif).toFixed(2)}` : '';
   if (!confirm(`Baixar "${c.descricao}" (${_cbMoney(c.valor)}) com o pagamento de ${_cbMoney(mv.valor)} de ${_cbDt(mv.data)}${rot}?`)) return;
   // A BAIXA VALE O QUE SAIU DA CONTA (extrato manda) e o encargo fica no próprio
   // título, em juros/desconto. Antes gravava valor_pago = valor de face e criava
   // um título separado para a diferença — a conciliação bancária não fechava e
   // o encargo virava "título novo" solto na lista.
-  const { error } = await sb.from('oct_contas_pagar').update({
+  const { error } = await _cbUpdConta(contaId, {
     status: 'pago', data_pagamento: mv.data, valor_pago: Number(mv.valor),
-    juros: dif > 0 ? Number(dif.toFixed(2)) : 0,
+    juros: Number(enc.juros.toFixed(2)),
+    tarifa: Number(enc.tarifa.toFixed(2)),
     desconto: dif < 0 ? Number((-dif).toFixed(2)) : 0,
     forma_pagamento: 'Sicoob',
     observacoes: `conciliação aprovada na tela — pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id}) ref. ${c.descricao}${rot}`,
-  }).eq('id', contaId).eq('status', 'aberto');
+  }, ['status', 'aberto']);
   if (error) { alert('Erro: ' + error.message); return; }
   await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: contaId, dif_encargos: dif || null }).eq('id', movId);
   // (não cria mais título separado para o encargo — ele vive no campo 'juros'
@@ -238,10 +285,11 @@ async function cbDesfazer(movId) {
   const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
   if (!mv || !mv.conta_pagar_id) return;
   if (!confirm('Desfazer esta baixa? O título volta a ABERTO e o eventual título de juros é removido.')) return;
-  await sb.from('oct_contas_pagar').update({
+  await _cbUpdConta(mv.conta_pagar_id, {
     status: 'aberto', data_pagamento: null, valor_pago: null, forma_pagamento: null,
+    juros: 0, tarifa: 0, desconto: 0,
     observacoes: 'baixa desfeita na tela de conciliação',
-  }).eq('id', mv.conta_pagar_id);
+  });
   await sb.from('oct_contas_pagar').delete().eq('categoria', 'juros-multa').like('observacoes', `%${movId}%`);
   await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null, dif_encargos: null }).eq('id', movId);
   _cbRender();
