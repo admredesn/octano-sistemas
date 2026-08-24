@@ -357,7 +357,7 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null });
     // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
     // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
     if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
@@ -1708,8 +1708,8 @@ async function fcNodeDetalhe(tipo) {
       grupos.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
-      entradas.push({ val: Number(m.valor || 0), hora: '9999', oficial: 1, rows: [
-        _fcRow('manual', m.id, `<td class="fc-td">—</td>
+      entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
+        _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '—'}</td>
           <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
@@ -1818,7 +1818,7 @@ async function fcNodeDetalhe(tipo) {
       const linM = mans.map(m => {
         totM += Number(m.valor || 0);
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
-        return _fcRow('manual', m.id, `<td class="fc-td">✍ manual</td>
+        return _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '✍ manual'}</td>
           <td class="fc-td">${fcEsc(m.descricao) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
@@ -2589,6 +2589,9 @@ async function fcExtratoSubstituir() {
         forma_nome: _fcRotForma(null, r.forma, r.bandeira),
         bandeira: r.bandeira || null,
         descricao: '🏦 extrato ' + (r.origem || 'maquininha') + (Number(r.parcelas || 1) > 1 ? ' · ' + r.parcelas + 'x' : ''),
+        // a hora da transação vem junto: sem ela a linha do extrato ficava com
+        // "—" na coluna Hora e ia para o fim da ordenação por horário
+        recebido_em: r.recebido_em || null,
         extrato_lote: lote, turno_ref: turnoId,
       },
     });
