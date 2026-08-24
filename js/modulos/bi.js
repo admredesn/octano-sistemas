@@ -180,6 +180,14 @@ async function _biRender() {
   // dias decorridos do período (p/ média/dia do período)
   const perFimReal = per.fim > hoje ? hoje : per.fim;
   const perDias = Math.max(1, Math.round((new Date(perFimReal + 'T12:00') - new Date(per.ini + 'T12:00')) / 864e5) + 1);
+  // contexto que a barra de meta usa para acompanhar o filtro escolhido
+  const _tipoPer = (window._biPer || { tipo: 'mes' }).tipo;
+  window._biPerCtx = {
+    dias: perDias,
+    rotulo: per.ini === per.fim ? 'do dia'
+      : _tipoPer === 'semana' ? 'da semana'
+      : _tipoPer === 'mes' ? 'do mês' : 'do período',
+  };
 
   const dadosPosto = empresas.map(emp => {
     const e = emp.id;
@@ -276,19 +284,29 @@ async function _biRender() {
       '</div></div>';
 }
 
-function _biBarraMeta(vendido, metaDia, fixoDia, boletosDia) {
-  if (!metaDia || metaDia <= 0) return '<div style="color:#667;font-size:0.75rem">Sem custo fixo nem boleto aberto — sem meta do dia.</div>';
-  const pct = Math.round(vendido / metaDia * 100);
+// A barra acompanha o FILTRO: em "Mês" ela compara a venda do mês com a meta
+// acumulada dos dias já decorridos (metaDia x dias) — não adianta comparar o mês
+// inteiro com a meta de um dia só. 100% = está no ritmo necessário até aqui.
+function _biBarraMeta(vendidoDia, metaDia, fixoDia, boletosDia, vendidoPer) {
+  const ctx = window._biPerCtx || { dias: 1, rotulo: 'do dia' };
+  const dias = Math.max(1, ctx.dias || 1);
+  const umDia = dias <= 1;
+  const vendido = umDia ? vendidoDia : (vendidoPer != null ? vendidoPer : vendidoDia);
+  const meta = (metaDia || 0) * dias;
+  if (!meta || meta <= 0) return '<div style="color:#667;font-size:0.75rem">Sem custo fixo nem boleto aberto — sem meta.</div>';
+  const pct = Math.round(vendido / meta * 100);
   const cor = pct >= 100 ? '#4caf50' : pct >= 60 ? '#fbbf24' : '#f97316';
   const quebra = (fixoDia || boletosDia)
-    ? 'fixo ' + _biK(fixoDia || 0) + ' + boletos ' + _biK(boletosDia || 0) + ' = '
+    ? 'fixo ' + _biK((fixoDia || 0) * dias) + ' + boletos ' + _biK((boletosDia || 0) * dias) + ' = '
     : '';
+  const alvo = umDia ? 'meta/dia ' + _biK(meta)
+                     : 'meta ' + dias + ' dia(s) ' + _biK(meta);
   return '<div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#9aa;margin-bottom:3px">' +
-      '<span>Evolução do dia</span><span style="color:' + cor + ';font-weight:700">' + pct + '%</span></div>' +
+      '<span>Evolução ' + ctx.rotulo + '</span><span style="color:' + cor + ';font-weight:700">' + pct + '%</span></div>' +
     '<div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;height:14px;overflow:hidden">' +
       '<div style="width:' + Math.min(100, pct) + '%;height:100%;background:' + cor + ';transition:width .6s"></div></div>' +
     '<div style="display:flex;justify-content:space-between;font-size:0.72rem;color:#778;margin-top:3px">' +
-      '<span>vendido ' + _biK(vendido) + '</span><span>' + quebra + 'meta/dia ' + _biK(metaDia) + '</span></div>';
+      '<span>vendido ' + _biK(vendido) + '</span><span>' + quebra + alvo + '</span></div>';
 }
 
 function _biCardGrupo(g) {
@@ -308,7 +326,7 @@ function _biCardGrupo(g) {
       ind('💵 Venda no período', g.vendaPer, '#e0e0e0', 'média/dia ' + _biK(g.mediaPer)) +
       ind('🔮 Projeção do mês', g.projMes, '#c084fc', 'realizado ' + _biK(g.realizadoMes)) +
     '</div>' +
-    '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia, g.fixoDia, g.boletosDia) + '</div></div>';
+    '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia, g.fixoDia, g.boletosDia, g.vendaPer) + '</div></div>';
 }
 
 function _biCardPosto(p) {
@@ -335,7 +353,7 @@ function _biCardPosto(p) {
     linha('📈 Venda hoje', p.vendaHoje) +
     linha('🔮 Projeção do mês', p.projMes, '#c084fc') +
     venc +
-    '<div style="margin-top:8px">' + _biBarraMeta(p.vendaHoje, p.meta ? p.meta.porDia : 0, p.meta ? p.meta.fixoDia : 0, p.meta ? p.meta.boletosDia : 0) + '</div>' +
+    '<div style="margin-top:8px">' + _biBarraMeta(p.vendaHoje, p.meta ? p.meta.porDia : 0, p.meta ? p.meta.fixoDia : 0, p.meta ? p.meta.boletosDia : 0, p.vendaPer) + '</div>' +
     (p.semCusto && p.semCusto.length ? '<div style="font-size:0.7rem;color:#a63;margin-top:6px">⚠ sem custo cadastrado: ' + p.semCusto.join(', ') + ' (estoque desses fora da conta)</div>' : '') +
   '</div>';
 }
