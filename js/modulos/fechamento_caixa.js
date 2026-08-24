@@ -2337,7 +2337,25 @@ async function fcConfirmarCaixa(turnoId) {
 }
 
 // modal de identificação do responsável pela falta/sobra
-function _fcModalResponsavel(turnoId, dif) {
+// nome "solto" (operador/vendedor) -> pessoa cadastrada. O turno guarda
+// "marlon"/"LUAN" e o cadastro "Marlon de Souza Maia": compara sem acento,
+// em minúsculas, e aceita quando um contém o primeiro nome do outro.
+function _fcNorm(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function _fcCasaPessoa(nome, pessoas) {
+  const n = _fcNorm(nome);
+  if (!n) return null;
+  let p = pessoas.find(x => _fcNorm(x.nome) === n);
+  if (p) return p;
+  const p1 = n.split(' ')[0];
+  p = pessoas.find(x => _fcNorm(x.nome).split(' ')[0] === p1);
+  if (p) return p;
+  return pessoas.find(x => _fcNorm(x.nome).indexOf(n) === 0 || n.indexOf(_fcNorm(x.nome).split(' ')[0]) === 0) || null;
+}
+
+async function _fcModalResponsavel(turnoId, dif) {
   const cache = window._fcCache || {};
   const t = (cache.turnos || []).find(x => x.id === turnoId) || {};
   const d = (cache.porTurno || {})[turnoId] || {};
@@ -2346,20 +2364,56 @@ function _fcModalResponsavel(turnoId, dif) {
   (d.fila_itens || []).concat(d.fila_sem_pgto_itens || []).forEach(f => {
     if (f.vendedor) nomes.add(String(f.vendedor).trim());
   });
+  // funcionários cadastrados: é a eles que o vale pode ser lançado
+  let pessoas = [];
+  try {
+    const r = await sb.from('oct_pessoas').select('id,nome')
+      .eq('empresa_id', window._fcEmpresaId).eq('tipo', 'funcionario').eq('ativo', true);
+    pessoas = r.data || [];
+  } catch (e) { /* segue sem cadastro: dá para registrar o nome mesmo assim */ }
+  window._fcRespPessoas = pessoas;
+
   const tipo = dif < 0 ? 'FALTA' : 'SOBRA';
   const cor = dif < 0 ? '#e06c6c' : '#7ee2a0';
-  const lista = [...nomes].sort();
+  // FALTA: o funcionário deve ao posto -> vale já vem marcado.
+  // SOBRA: dinheiro a mais no caixa não é crédito dele por padrão.
+  const marcado = dif < 0 ? 'checked' : '';
+  const opcao = (n) => {
+    const p = _fcCasaPessoa(n, pessoas);
+    const tag = p ? '<span style="color:#7ee2a0;font-size:0.72rem"> · cadastrado</span>'
+      : '<span style="color:#f0b45c;font-size:0.72rem"> · sem cadastro (não gera vale)</span>';
+    return `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer;align-items:center">
+      <input type="radio" name="fcresp" value="${fcEsc(n)}" data-pid="${p ? p.id : ''}">
+      <span>${fcEsc(n)}${tag}</span></label>`;
+  };
+  const doTurno = [...nomes].sort();
+  const outros = pessoas.filter(p => !doTurno.some(n => _fcCasaPessoa(n, [p])));
+
   fcModal('👤 Responsável pela diferença de caixa', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="margin-bottom:12px">Foi apurada <b style="color:${cor}">${tipo} de ${fcMoney(Math.abs(dif))}</b> neste caixa.
       Identifique o funcionário responsável para fechar a conferência:</p>
-      ${lista.map(n => `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer">
-        <input type="radio" name="fcresp" value="${fcEsc(n)}"><span>${fcEsc(n)}</span></label>`).join('')}
+      ${doTurno.map(opcao).join('')}
+      ${outros.length ? `<div style="color:#8892a0;font-size:0.75rem;margin:8px 0 4px">outros funcionários</div>`
+        + outros.map(p => `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer">
+            <input type="radio" name="fcresp" value="${fcEsc(p.nome)}" data-pid="${p.id}"><span>${fcEsc(p.nome)}</span></label>`).join('') : ''}
       <label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;cursor:pointer;align-items:center">
-        <input type="radio" name="fcresp" value=""><span>Outro:</span>
+        <input type="radio" name="fcresp" value="" data-pid="">
+        <span>Outro:</span>
         <input id="fcresp-outro" class="fc-inp2" style="flex:1" placeholder="nome do funcionário"
           onfocus="this.closest('label').querySelector('input[type=radio]').checked=true">
       </label>
+
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;padding:10px;border:1px solid #3a4a2a;border-radius:6px;background:#131a12;cursor:pointer">
+        <input type="checkbox" id="fcresp-vale" ${marcado} style="margin-top:2px">
+        <span>Lançar na <b>conta do funcionário</b> (Vale / Haver)
+          <div style="color:#8892a0;font-size:0.75rem;margin-top:3px">
+            ${dif < 0
+              ? 'Vira dívida de ' + fcMoney(Math.abs(dif)) + ' para descontar do colaborador. Aparece no extrato dele no PDV (F7 › Vale / Haver).'
+              : 'Vira crédito de ' + fcMoney(Math.abs(dif)) + ' a favor do colaborador. Só marque se a sobra for dinheiro dele.'}
+          </div></span>
+      </label>
+
       <div style="display:flex;gap:8px;margin-top:14px">
         <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
         <button class="fc-btn azul" style="flex:1" onclick="_fcRespSalvar('${turnoId}', ${dif})">✔ Registrar e fechar caixa</button>
@@ -2370,14 +2424,47 @@ function _fcModalResponsavel(turnoId, dif) {
 async function _fcRespSalvar(turnoId, dif) {
   const sel = document.querySelector('input[name=fcresp]:checked');
   let nome = sel ? sel.value : '';
-  if (sel && !nome) nome = (document.getElementById('fcresp-outro') || {}).value || '';
+  let pid = sel ? (sel.dataset.pid || '') : '';
+  if (sel && !nome) {
+    nome = (document.getElementById('fcresp-outro') || {}).value || '';
+    const p = _fcCasaPessoa(nome, window._fcRespPessoas || []);
+    pid = p ? p.id : '';
+  }
   nome = String(nome || '').trim();
   if (!nome) { alert('Informe o funcionário responsável pela diferença.'); return; }
+  const querVale = !!(document.getElementById('fcresp-vale') || {}).checked;
+  if (querVale && !pid) {
+    if (!confirm('"' + nome + '" não está cadastrado como funcionário.' + N2
+      + 'A diferença fica registrada no caixa, mas NÃO vai para a conta dele.' + N2
+      + 'Cadastre em Pessoas (tipo funcionário) para poder descontar. Continuar assim?')) return;
+  }
   fcModalFechar();
-  await _fcConfirmarGravar(turnoId, nome);
+  await _fcConfirmarGravar(turnoId, nome, querVale ? pid : '');
 }
 
-async function _fcConfirmarGravar(turnoId, responsavel) {
+// Lança a diferença na conta corrente do funcionário (oct_vales).
+// SINAL: negativo = a pessoa DEVE ao posto (falta) · positivo = o posto deve a ela.
+async function _fcValeDaDiferenca(turnoId, pessoaId, pessoaNome, dif) {
+  if (!pessoaId) return false;
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
+  const quando = _fcData(t.aberto_em) || '';
+  const tipoTxt = dif < 0 ? 'Falta' : 'Sobra';
+  const { error } = await sb.from('oct_vales').insert({
+    empresa_id: window._fcEmpresaId,
+    pessoa_id: pessoaId,
+    pessoa_nome: pessoaNome,
+    valor: Math.round(dif * 100) / 100,   // dif já vem com o sinal certo
+    tipo: 'vale_funcionario',
+    descricao: tipoTxt + ' de caixa — turno de ' + quando + ' (fechamento)',
+    origem: 'fechamento_caixa',
+    turno_id: turnoId,
+    operador: t.operador || null,
+  });
+  if (error) { alert('Diferença registrada, mas o vale falhou: ' + error.message); return false; }
+  return true;
+}
+
+async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
   const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId] || {};
   const dif = d.diferenca_caixa || 0;
   const resumo = Math.abs(dif) < 0.01 ? 'Caixa confere (sem diferença).'
@@ -2395,6 +2482,14 @@ async function _fcConfirmarGravar(turnoId, responsavel) {
         empresa_id: window._fcEmpresaId, turno_id: turnoId,
         ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
       }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+      // e vira dívida/crédito na conta corrente do funcionário, para descontar
+      if (pessoaIdVale && await _fcValeDaDiferenca(turnoId, pessoaIdVale, responsavel, dif)) {
+        cur.ajuste.vale_lancado = true;
+        await sb.from('oct_fc_lancamentos').upsert({
+          empresa_id: window._fcEmpresaId, turno_id: turnoId,
+          ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
+        }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+      }
     }
     const { error } = await sb.from('oct_pdv_turnos').update({
       dinheiro_esperado: d.dinheiro_esperado,
@@ -2403,7 +2498,10 @@ async function _fcConfirmarGravar(turnoId, responsavel) {
       conferido_por: (session && session.user && session.user.email) || 'gerente',
     }).eq('id', turnoId);
     if (error) throw error;
-    alert('✔ Conferência confirmada. ' + resumo);
+    alert('✔ Conferência confirmada. ' + resumo
+      + (pessoaIdVale ? String.fromCharCode(10, 10) + (dif < 0
+          ? '💳 Lançado na conta de ' + responsavel + ' para desconto.'
+          : '💳 Lançado como crédito de ' + responsavel + '.') : ''));
     fcRecarregar();
   } catch (e) {
     const m = String(e.message || e);
