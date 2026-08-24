@@ -1475,11 +1475,25 @@ async function fcNodeDetalhe(tipo) {
           <span>${dif == null ? 'Turno em aberto' : dif < -0.009 ? '🔴 FALTA de caixa' : dif > 0.009 ? '🟢 SOBRA de caixa' : '✓ Caixa confere'}</span>
           <b style="color:${dif == null ? '#667' : dif < -0.009 ? '#f87171' : dif > 0.009 ? '#4ade80' : '#cdd6e0'}">${dif == null ? '' : fcMoney(Math.abs(dif))}</b>
         </div>
+        ${(() => {
+          // quem já ficou como responsável por esta quebra (e se virou título)
+          const aR = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
+          if (!aR || !aR.responsavel) return '';
+          return `<div style="margin-top:10px;padding:10px 12px;border:1px solid #5a4a20;border-radius:8px;background:#1a1710">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:#f0b45c">👤 Responsável pela ${fcEsc(aR.tipo || 'diferença')}</span>
+              <b style="color:#f0b45c">${fcEsc(aR.responsavel)}</b></div>
+            <div style="color:#8892a0;font-size:0.74rem;margin-top:4px">
+              ${aR.titulo_gerado
+                ? '📄 Título de ' + fcMoney(aR.valor || 0) + ' gerado no nome dele — cobre em Faturar › Notas/Títulos em Aberto.'
+                : 'Registrado como responsável. Nenhum título foi gerado.'}
+            </div></div>`;
+        })()}
         ${dif != null && Math.abs(dif) > 0.009 ? `
         <button class="fc-btn2" style="margin-top:12px;border-color:#7a5a20;color:#f0b45c" onclick="fcDifResponsavel(${dif})">
-          👷 Lançar ${dif < 0 ? 'a FALTA' : 'a SOBRA'} para o responsável (vira vale/haver da pessoa)
+          👷 Lançar ${dif < 0 ? 'a FALTA' : 'a SOBRA'} para o responsável${dif < 0 ? ' (gera título a faturar)' : ''}
         </button>
-        <p style="color:#667;font-size:0.72rem;margin-top:6px">Falta → vale (a pessoa deve ao posto). Sobra → haver (o posto deve à pessoa). Aparece em Vales/Haver e desconta na conta corrente.</p>` : ''}
+        <p style="color:#667;font-size:0.72rem;margin-top:6px">A FALTA vira <b>título a faturar</b> no nome do funcionário (Faturar › Notas/Títulos em Aberto), para descontar dele. A SOBRA só registra o responsável.</p>` : ''}
         <div style="margin-top:16px;padding-top:10px;border-top:1px dashed #2a3a4a">
           <div style="color:#7ea8d8;font-weight:700;font-size:0.78rem;margin-bottom:4px">Conferência do DINHEIRO físico (outra régua)</div>
           <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span>Esperado na gaveta (sistema)</span><b>${fcMoney(d.dinheiro_esperado)}</b></div>
@@ -1919,7 +1933,7 @@ async function fcDifResponsavel(dif) {
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.78rem;margin-bottom:10px">
         ${dif < 0 ? 'FALTA' : 'SOBRA'} de <b style="color:${dif < 0 ? '#f87171' : '#4ade80'}">${fcMoney(Math.abs(dif))}</b>
-        do turno ${t.numero ?? ''} (${fcEsc(t.operador) || '—'}). ${dif < 0 ? 'Vira VALE: a pessoa fica devendo ao posto.' : 'Vira HAVER: o posto fica devendo à pessoa.'}
+        do turno ${t.numero ?? ''} (${fcEsc(t.operador) || '—'}). ${dif < 0 ? 'Vira TÍTULO A FATURAR no nome dele — entra no Faturar para ser descontado.' : 'Só registra o responsável (sobra não vira título a receber).'}
       </p>
       <label style="display:block;color:#9aa;font-size:0.75rem">Responsável</label>
       <select id="fc-dif-pessoa" class="fc-inp2" style="width:100%;margin:4px 0 12px">
@@ -1931,20 +1945,52 @@ async function fcDifResponsavel(dif) {
 
 async function fcDifLancar(dif) {
   const sel = document.getElementById('fc-dif-pessoa').value || '';
-  const [pid, pnome] = [sel.split('|')[0], sel.split('|').slice(1).join('|')];
+  const pid = sel.split('|')[0];
+  const pnome = sel.split('|').slice(1).join('|');
   const cache = window._fcCache || {};
-  const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
-  const { error } = await sb.from('oct_vales').insert({
-    empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
-    pessoa_id: pid || null, pessoa_nome: pnome,
-    tipo: dif < 0 ? 'vale_funcionario' : 'troco_pendente',
-    valor: dif,   // negativo = pessoa deve (falta); positivo = posto deve (sobra)
-    descricao: `${dif < 0 ? 'Falta' : 'Sobra'} de caixa — turno ${t.numero ?? ''} (${_fcData(t.aberto_em)})`,
-    operador: 'retaguarda',
+  const turnoId = window._fcTurnoAtual;
+  const t = (cache.turnos || []).find(x => x.id === turnoId) || {};
+  const rot = dif < 0 ? 'Falta' : 'Sobra';
+  const quando = _fcData(t.aberto_em) || '';
+  const obs = rot + ' de caixa — turno ' + (t.numero != null ? t.numero : '') + ' (' + quando + ')';
+
+  // TÍTULO A FATURAR: a falta vira nota a prazo no nome do funcionário e é
+  // cobrada/descontada pelo Faturar, junto com os demais títulos em aberto.
+  // (Sobra não vira título a receber — ali o posto é que deve à pessoa.)
+  if (dif < 0) {
+    const { error } = await sb.from('oct_pdv_notas_prazo').insert({
+      empresa_id: window._fcEmpresaId,
+      cliente_id: pid || null,
+      cliente_nome: pnome,
+      valor: Math.round(Math.abs(dif) * 100) / 100,
+      valor_original: Math.round(Math.abs(dif) * 100) / 100,
+      forma_nome: 'Diferença de caixa',
+      status: 'aberto',
+      registrado_em: t.aberto_em || new Date().toISOString(),
+      criado_em: new Date().toISOString(),
+      observacao: obs + ' — responsável: ' + pnome,
+    });
+    if (error) { alert('Erro ao gerar o título: ' + error.message); return; }
+  }
+
+  // carimba o responsável no fechamento (aparece no quadro e no balão)
+  const k = 'diferenca:' + turnoId;
+  const cur = window._fcConf[k] = window._fcConf[k] || {};
+  cur.ajuste = Object.assign({}, cur.ajuste, {
+    responsavel: pnome, pessoa_id: pid || null,
+    valor: Math.round(Math.abs(dif) * 100) / 100,
+    tipo: dif < 0 ? 'falta' : 'sobra',
+    titulo_gerado: dif < 0,
   });
-  if (error) { alert('Erro ao lançar: ' + error.message); return; }
+  await sb.from('oct_fc_lancamentos').upsert({
+    empresa_id: window._fcEmpresaId, turno_id: turnoId,
+    ref_tipo: 'diferenca', ref_id: turnoId, conferido: !!cur.conferido, ajuste: cur.ajuste,
+  }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+
   await fcRecarregar();
-  alert(`${dif < 0 ? 'Falta' : 'Sobra'} de ${fcMoney(Math.abs(dif))} lançada para ${pnome}.`);
+  alert(rot + ' de ' + fcMoney(Math.abs(dif)) + ' lançada para ' + pnome + '.'
+    + (dif < 0 ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
+               : String.fromCharCode(10, 10) + 'Sobra: registrada como responsabilidade, sem título a receber.'));
 }
 // ---------- Nós de MOVIMENTAÇÃO (vales, recebimentos externos, ledger) ----------
 const _VALE_ROT = {
@@ -2378,6 +2424,7 @@ async function _fcModalResponsavel(turnoId, dif) {
   // FALTA: o funcionário deve ao posto -> vale já vem marcado.
   // SOBRA: dinheiro a mais no caixa não é crédito dele por padrão.
   const marcado = dif < 0 ? 'checked' : '';
+  const podeTitulo = dif < 0;   // só a falta gera título a receber
   const opcao = (n) => {
     const p = _fcCasaPessoa(n, pessoas);
     const tag = p ? '<span style="color:#7ee2a0;font-size:0.72rem"> · cadastrado</span>'
@@ -2404,15 +2451,15 @@ async function _fcModalResponsavel(turnoId, dif) {
           onfocus="this.closest('label').querySelector('input[type=radio]').checked=true">
       </label>
 
-      <label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;padding:10px;border:1px solid #3a4a2a;border-radius:6px;background:#131a12;cursor:pointer">
+      ${podeTitulo ? `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;padding:10px;border:1px solid #3a4a2a;border-radius:6px;background:#131a12;cursor:pointer">
         <input type="checkbox" id="fcresp-vale" ${marcado} style="margin-top:2px">
-        <span>Lançar na <b>conta do funcionário</b> (Vale / Haver)
+        <span>Gerar <b>título a faturar</b> no nome dele
           <div style="color:#8892a0;font-size:0.75rem;margin-top:3px">
             ${dif < 0
-              ? 'Vira dívida de ' + fcMoney(Math.abs(dif)) + ' para descontar do colaborador. Aparece no extrato dele no PDV (F7 › Vale / Haver).'
-              : 'Vira crédito de ' + fcMoney(Math.abs(dif)) + ' a favor do colaborador. Só marque se a sobra for dinheiro dele.'}
+              ? 'Entra no Faturar (Notas/Títulos em Aberto) como título de ' + fcMoney(Math.abs(dif)) + ' para descontar do colaborador.'
+              : 'Sobra não vira título a receber — aqui o posto é que deve à pessoa. Só o responsável fica registrado.'}
           </div></span>
-      </label>
+      </label>` : ''}
 
       <div style="display:flex;gap:8px;margin-top:14px">
         <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
@@ -2442,25 +2489,29 @@ async function _fcRespSalvar(turnoId, dif) {
   await _fcConfirmarGravar(turnoId, nome, querVale ? pid : '');
 }
 
-// Lança a diferença na conta corrente do funcionário (oct_vales).
-// SINAL: negativo = a pessoa DEVE ao posto (falta) · positivo = o posto deve a ela.
-async function _fcValeDaDiferenca(turnoId, pessoaId, pessoaNome, dif) {
-  if (!pessoaId) return false;
+// Gera o TÍTULO A FATURAR da diferença, no nome do funcionário responsável.
+// Vai para oct_pdv_notas_prazo — a mesma tabela das notas a prazo de cliente —
+// e aparece no Faturar › Notas/Títulos em Aberto para ser descontado dele.
+// Só a FALTA vira título: na sobra é o posto que deve à pessoa.
+async function _fcTituloDaDiferenca(turnoId, pessoaId, pessoaNome, dif) {
+  if (!pessoaId || dif >= 0) return false;
   const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
   const quando = _fcData(t.aberto_em) || '';
-  const tipoTxt = dif < 0 ? 'Falta' : 'Sobra';
-  const { error } = await sb.from('oct_vales').insert({
+  const obs = 'Falta de caixa — turno ' + (t.numero != null ? t.numero : '') + ' (' + quando + ')'
+    + ' — responsável: ' + pessoaNome;
+  const { error } = await sb.from('oct_pdv_notas_prazo').insert({
     empresa_id: window._fcEmpresaId,
-    pessoa_id: pessoaId,
-    pessoa_nome: pessoaNome,
-    valor: Math.round(dif * 100) / 100,   // dif já vem com o sinal certo
-    tipo: 'vale_funcionario',
-    descricao: tipoTxt + ' de caixa — turno de ' + quando + ' (fechamento)',
-    origem: 'fechamento_caixa',
-    turno_id: turnoId,
-    operador: t.operador || null,
+    cliente_id: pessoaId,
+    cliente_nome: pessoaNome,
+    valor: Math.round(Math.abs(dif) * 100) / 100,
+    valor_original: Math.round(Math.abs(dif) * 100) / 100,
+    forma_nome: 'Diferença de caixa',
+    status: 'aberto',
+    registrado_em: t.aberto_em || new Date().toISOString(),
+    criado_em: new Date().toISOString(),
+    observacao: obs,
   });
-  if (error) { alert('Diferença registrada, mas o vale falhou: ' + error.message); return false; }
+  if (error) { alert('Diferença registrada, mas o título falhou: ' + error.message); return false; }
   return true;
 }
 
@@ -2483,8 +2534,9 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
         ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
       }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
       // e vira dívida/crédito na conta corrente do funcionário, para descontar
-      if (pessoaIdVale && await _fcValeDaDiferenca(turnoId, pessoaIdVale, responsavel, dif)) {
-        cur.ajuste.vale_lancado = true;
+      if (pessoaIdVale && await _fcTituloDaDiferenca(turnoId, pessoaIdVale, responsavel, dif)) {
+        cur.ajuste.titulo_gerado = true;
+        cur.ajuste.pessoa_id = pessoaIdVale;
         await sb.from('oct_fc_lancamentos').upsert({
           empresa_id: window._fcEmpresaId, turno_id: turnoId,
           ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
@@ -2499,9 +2551,9 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
     }).eq('id', turnoId);
     if (error) throw error;
     alert('✔ Conferência confirmada. ' + resumo
-      + (pessoaIdVale ? String.fromCharCode(10, 10) + (dif < 0
-          ? '💳 Lançado na conta de ' + responsavel + ' para desconto.'
-          : '💳 Lançado como crédito de ' + responsavel + '.') : ''));
+      + (pessoaIdVale && dif < 0
+          ? String.fromCharCode(10, 10) + '📄 Título gerado no nome de ' + responsavel + ' (Faturar › Notas/Títulos em Aberto).'
+          : ''));
     fcRecarregar();
   } catch (e) {
     const m = String(e.message || e);
