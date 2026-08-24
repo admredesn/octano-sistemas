@@ -1272,7 +1272,13 @@ function _fcRotForma(formaNome, forma, bandeira) {
   else if (!f || f === 'Cartão') f = 'Cartão';
   const b = String(bandeira || '').trim();
   const bCap = b ? b.charAt(0).toUpperCase() + b.slice(1).toLowerCase() : '';
-  return (f + (bCap ? ' ' + bCap : '')).trim();
+  // O PagBank repete o nome da forma no campo bandeira ("Pix"/"Pix"), o que
+  // gerava a linha "Pix Pix" separada de "Pix" no fechamento — mesma forma
+  // contada em dois lugares. Bandeira redundante não entra no rótulo.
+  // Bandeira DIVERGENTE (ex.: "Pix Mastercard") continua aparecendo de
+  // propósito: ali é dado errado na origem e precisa ficar visível.
+  const redundante = bCap && bCap.toLowerCase() === f.toLowerCase();
+  return (f + (bCap && !redundante ? ' ' + bCap : '')).trim();
 }
 
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
