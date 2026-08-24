@@ -2506,32 +2506,69 @@ function _fcTemLoteExtrato() {
 }
 
 // lançamentos de cartão/Pix do turno que serão substituídos
+// LÊ DO BANCO, não da memória: o _fcConf do navegador fica velho entre a
+// inclusão de um lançamento e a substituição, e foi assim que 5 lançamentos
+// manuais de cartão sobreviveram e o caixa ficou com o valor DOBRADO (24/08).
+// Devolve { alvos, overlay } — o overlay já lido serve para não reconsultar.
 async function _fcExtratoAlvos(turnoId, d0) {
   const grupos = ['cartao', 'pix'];
   const alvos = [];
-  (d0.fila_itens || []).forEach(f => {
-    if (f._excluido) return;
-    if (grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)))
-      alvos.push({ tipo: 'fila', id: f.id, valor: Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0) });
+  const eid = window._fcEmpresaId;
+
+  // 1) overlay atual do turno, direto da fonte
+  const { data: ov } = await sb.from('oct_fc_lancamentos')
+    .select('ref_tipo,ref_id,ajuste').eq('empresa_id', eid).eq('turno_id', turnoId);
+  const aj = {};
+  (ov || []).forEach(o => { aj[o.ref_tipo + ':' + o.ref_id] = o.ajuste || {}; });
+  const vivo = (tipo, id) => {
+    const a = aj[tipo + ':' + id];
+    return !(a && (a.excluido || a.extrato_lote));
+  };
+
+  // 2) fila do turno (do banco, com o overlay aplicado)
+  const { data: fs } = await sb.from('oct_fila_transmissao')
+    .select('id,valor,desconto,acrescimo,forma,forma_nome').eq('turno_id', turnoId);
+  (fs || []).forEach(f => {
+    if (!vivo('fila', f.id)) return;
+    const a = aj['fila:' + f.id] || {};
+    const forma = a.forma_nome || f.forma_nome;
+    if (!grupos.includes(_fcGrupoNome(forma, f.forma))) return;
+    const v = a.valor != null ? Number(a.valor)
+      : Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
+    alvos.push({ tipo: 'fila', id: f.id, valor: v, base: a });
   });
+
+  // 3) cupons do turno
   const { data: vs } = await sb.from('oct_pdv_vendas')
     .select('id,pagamentos,status').eq('turno_id', turnoId);
   (vs || []).forEach(v => {
+    if (!vivo('venda', v.id)) return;
     if (String(v.status || '').toLowerCase() === 'cancelada') return;
     let pgs = v.pagamentos;
     if (typeof pgs === 'string') { try { pgs = JSON.parse(pgs); } catch (e) { pgs = []; } }
     const soma = (pgs || []).filter(p => grupos.includes(_fcGrupoNome(p.forma_nome || p.forma, p.forma)))
       .reduce((s, p) => s + Number(p.valor || 0), 0);
-    if (soma > 0) alvos.push({ tipo: 'venda', id: v.id, valor: soma });
+    if (soma > 0) alvos.push({ tipo: 'venda', id: v.id, valor: soma, base: aj['venda:' + v.id] || {} });
   });
-  // manuais que o gerente lançou nesta seção
-  Object.entries(window._fcConf || {}).forEach(([k, c]) => {
-    if (k.indexOf('manual:') !== 0) return;
-    const a = c && c.ajuste;
-    if (!a || a.excluido || a.extrato_lote) return;
+
+  // 4) manuais desta seção (inclusive os lançados a partir da pista)
+  (ov || []).forEach(o => {
+    if (o.ref_tipo !== 'manual') return;
+    const a = o.ajuste || {};
+    if (a.excluido || a.extrato_lote) return;
     if (a.secao === 'cartao' || a.secao === 'pix')
-      alvos.push({ tipo: 'manual', id: k.slice(7), valor: Number(a.valor || 0) });
+      alvos.push({ tipo: 'manual', id: o.ref_id, valor: Number(a.valor || 0), base: a });
   });
+
+  // 5) recebimentos avulsos de cartão/Pix já lançados na seção
+  (ov || []).forEach(o => {
+    if (o.ref_tipo !== 'receb') return;
+    const a = o.ajuste || {};
+    if (a.excluido || a.extrato_lote || a.valor == null) return;
+    if (grupos.includes(_fcGrupoNome(a.forma_nome || a.forma, '')))
+      alvos.push({ tipo: 'receb', id: o.ref_id, valor: Number(a.valor || 0), base: a });
+  });
+
   return alvos.filter(a => a.valor > 0);
 }
 
@@ -2540,12 +2577,14 @@ async function fcExtratoSubstituir() {
   const turnoId = window._fcTurnoAtual;
   const cache = window._fcCache || {};
   const d0 = (cache.porTurno || {})[turnoId] || {};
-  if (_fcTemLoteExtrato()) {
+  const N2 = String.fromCharCode(10, 10);   // duas quebras de linha
+  const jaTem = _fcTemLoteExtrato();
+  if (false) {
     alert('Este caixa já foi substituído pelo extrato.\n\nUse "↩ Desfazer substituição" antes de refazer.');
     return;
   }
   const ext = (d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || '')));
-  if (!ext.length) {
+  if (!ext.length && !jaTem) {
     alert('Sem retorno da maquininha para este turno.\n\nO EDI é D-1 e o e-mail depende da ingestão — se o turno é de hoje, o extrato pode ainda não ter chegado.');
     return;
   }
@@ -2554,7 +2593,19 @@ async function fcExtratoSubstituir() {
   const novo = ext.reduce((s, r) => s + Number(r.valor || 0), 0);
   const dif = Math.round((novo - atual) * 100) / 100;
 
-  if (!confirm(
+  // JÁ SUBSTITUÍDO: não recria o extrato (duplicaria) — só varre o que entrou
+  // depois e ficou por fora. É o caso do lançamento manual/da pista incluído
+  // antes da substituição, que ficava somando em dobro com a linha do extrato.
+  if (jaTem) {
+    if (!alvos.length) {
+      alert('Este caixa já está substituído e não há lançamento solto de cartão/Pix.');
+      return;
+    }
+    if (!confirm('Este caixa JÁ foi substituído pelo extrato, mas sobraram '
+      + alvos.length + ' lançamento(s) de cartão/Pix somando ' + fcMoney(atual)
+      + '.' + N2 + 'Eles estão contando EM DOBRO com as linhas do extrato.'
+      + N2 + 'Anular agora?')) return;
+  } else if (!confirm(
     'SUBSTITUIR os lançamentos de cartão/Pix pelo extrato da maquininha?\n\n'
     + 'Hoje no caixa: ' + fcMoney(atual) + '  (' + alvos.length + ' lançamento(s))\n'
     + 'Extrato:       ' + fcMoney(novo) + '  (' + ext.length + ' transação(ões))\n'
@@ -2564,12 +2615,18 @@ async function fcExtratoSubstituir() {
     + 'a ser por transação da maquininha.\n\n'
     + 'Nada é apagado: dá para desfazer depois.')) return;
 
-  const lote = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  const loteAtual = Object.values(window._fcConf || {})
+    .map(c => (c && c.ajuste) || {})
+    .find(a => a.extrato_lote && a.turno_ref === turnoId);
+  const lote = (jaTem && loteAtual) ? loteAtual.extrato_lote
+    : ((crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()));
   const eid = window._fcEmpresaId;
   const linhas = [];
   // 1) anula os lançamentos atuais (overlay, o dado original continua intacto)
   alvos.forEach(a => {
-    const base = (window._fcConf[a.tipo + ':' + a.id] || {}).ajuste || {};
+    // o base vem do BANCO (a.base), não do _fcConf: sem isso o desfazer
+    // devolvia o lançamento sem valor/descrição
+    const base = a.base || (window._fcConf[a.tipo + ':' + a.id] || {}).ajuste || {};
     linhas.push({
       empresa_id: eid, turno_id: turnoId, ref_tipo: a.tipo, ref_id: a.id,
       conferido: false,
@@ -2579,8 +2636,9 @@ async function fcExtratoSubstituir() {
       }),
     });
   });
-  // 2) lança o extrato, uma linha por transação
-  ext.forEach(r => {
+  // 2) lança o extrato, uma linha por transação (só na primeira vez — repetir
+  //    aqui criaria uma segunda linha para a mesma transação)
+  if (!jaTem) ext.forEach(r => {
     linhas.push({
       empresa_id: eid, turno_id: turnoId, ref_tipo: 'manual', ref_id: 'ext-' + String(r.id),
       conferido: false,
@@ -2599,7 +2657,8 @@ async function fcExtratoSubstituir() {
   const { error } = await sb.from('oct_fc_lancamentos')
     .upsert(linhas, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
   if (error) { alert('Erro ao substituir: ' + error.message); return; }
-  _fcToast('🏦 Caixa passou a valer o extrato (' + fcMoney(novo) + ')');
+  _fcToast(jaTem ? ('🏦 ' + alvos.length + ' lançamento(s) solto(s) anulado(s)')
+    : ('🏦 Caixa passou a valer o extrato (' + fcMoney(novo) + ')'));
   await _fcRecarregarNode();
 }
 
