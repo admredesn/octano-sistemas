@@ -2528,10 +2528,12 @@ async function _fcExtratoAlvos(turnoId, d0) {
     return !(a && (a.excluido || a.extrato_lote));
   };
 
-  // 2) fila do turno (do banco, com o overlay aplicado)
-  const { data: fs } = await sb.from('oct_fila_transmissao')
-    .select('id,valor,desconto,acrescimo,forma,forma_nome').eq('turno_id', turnoId);
-  (fs || []).forEach(f => {
+  // 2) fila: vem do CACHE DA TELA, não de uma query por turno_id.
+  //    101 dos 122 itens da fila têm turno_id NULO — a tela casa por JANELA DE
+  //    HORÁRIO (com a folga e o acerto de fuso do _turnoFila). Filtrar por
+  //    turno_id pegava só 23 itens e o resto ficava somando em dobro.
+  (d0.fila_itens || []).forEach(f => {
+    if (f._excluido) return;
     if (!vivo('fila', f.id)) return;
     const a = aj['fila:' + f.id] || {};
     const forma = a.forma_nome || f.forma_nome;
