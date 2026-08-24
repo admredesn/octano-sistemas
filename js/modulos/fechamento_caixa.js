@@ -1943,6 +1943,19 @@ async function fcDifResponsavel(dif) {
     </div>`);
 }
 
+// Um título de diferença POR TURNO. Sem isto, cada clique no botão inseria de
+// novo — em 24/08 o mesmo caixa gerou 3 títulos de R$ 58,23 para a mesma pessoa.
+// A amarra é o turno_id (a coluna existe e não estava sendo preenchida).
+async function _fcTituloDifExistente(turnoId) {
+  try {
+    const { data } = await sb.from('oct_pdv_notas_prazo')
+      .select('id,valor,cliente_nome,status')
+      .eq('empresa_id', window._fcEmpresaId).eq('turno_id', turnoId)
+      .eq('forma_nome', 'Diferença de caixa').limit(1);
+    return (data || [])[0] || null;
+  } catch (e) { return null; }
+}
+
 async function fcDifLancar(dif) {
   const sel = document.getElementById('fc-dif-pessoa').value || '';
   const pid = sel.split('|')[0];
@@ -1958,8 +1971,16 @@ async function fcDifLancar(dif) {
   // cobrada/descontada pelo Faturar, junto com os demais títulos em aberto.
   // (Sobra não vira título a receber — ali o posto é que deve à pessoa.)
   if (dif < 0) {
+    const ja = await _fcTituloDifExistente(turnoId);
+    if (ja) {
+      alert('Este caixa já tem título de diferença: ' + fcMoney(ja.valor)
+        + ' no nome de ' + ja.cliente_nome + ' (' + ja.status + ').' + N2
+        + 'Para trocar o responsável, exclua o título no Faturar e lance de novo.');
+      return;
+    }
     const { error } = await sb.from('oct_pdv_notas_prazo').insert({
       empresa_id: window._fcEmpresaId,
+      turno_id: turnoId,
       cliente_id: pid || null,
       cliente_nome: pnome,
       valor: Math.round(Math.abs(dif) * 100) / 100,
@@ -2495,12 +2516,14 @@ async function _fcRespSalvar(turnoId, dif) {
 // Só a FALTA vira título: na sobra é o posto que deve à pessoa.
 async function _fcTituloDaDiferenca(turnoId, pessoaId, pessoaNome, dif) {
   if (!pessoaId || dif >= 0) return false;
+  if (await _fcTituloDifExistente(turnoId)) return true;   // já existe: não duplica
   const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
   const quando = _fcData(t.aberto_em) || '';
   const obs = 'Falta de caixa — turno ' + (t.numero != null ? t.numero : '') + ' (' + quando + ')'
     + ' — responsável: ' + pessoaNome;
   const { error } = await sb.from('oct_pdv_notas_prazo').insert({
     empresa_id: window._fcEmpresaId,
+    turno_id: turnoId,
     cliente_id: pessoaId,
     cliente_nome: pessoaNome,
     valor: Math.round(Math.abs(dif) * 100) / 100,
