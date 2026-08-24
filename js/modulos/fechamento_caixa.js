@@ -2499,6 +2499,9 @@ function _fcEstilo() {
 // Os originais ficam com ajuste.excluido e o lote é reversível pelo botão
 // "↩ Desfazer substituição".
 // ============================================================
+const N1 = String.fromCharCode(10);        // quebra de linha
+const N2 = N1 + N1;
+
 function _fcTemLoteExtrato() {
   const t = window._fcTurnoAtual;
   return Object.values(window._fcConf || {}).some(c =>
@@ -2575,57 +2578,50 @@ async function _fcExtratoAlvos(turnoId, d0) {
 async function fcExtratoSubstituir() {
   if (_fcTravado()) return;
   const turnoId = window._fcTurnoAtual;
+  const eid = window._fcEmpresaId;
   const cache = window._fcCache || {};
   const d0 = (cache.porTurno || {})[turnoId] || {};
-  const N2 = String.fromCharCode(10, 10);   // duas quebras de linha
-  const jaTem = _fcTemLoteExtrato();
-  if (false) {
-    alert('Este caixa já foi substituído pelo extrato.\n\nUse "↩ Desfazer substituição" antes de refazer.');
-    return;
-  }
+
   const ext = (d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || '')));
-  if (!ext.length && !jaTem) {
-    alert('Sem retorno da maquininha para este turno.\n\nO EDI é D-1 e o e-mail depende da ingestão — se o turno é de hoje, o extrato pode ainda não ter chegado.');
+  if (!ext.length) {
+    alert('Sem retorno da maquininha para este turno.' + N2
+      + 'O EDI é D-1 e o e-mail depende da ingestão — se o turno é de hoje, o extrato pode ainda não ter chegado.');
     return;
   }
   const alvos = await _fcExtratoAlvos(turnoId, d0);
   const atual = alvos.reduce((s, a) => s + a.valor, 0);
   const novo = ext.reduce((s, r) => s + Number(r.valor || 0), 0);
-  const dif = Math.round((novo - atual) * 100) / 100;
+  const refazendo = _fcTemLoteExtrato();
 
-  // JÁ SUBSTITUÍDO: não recria o extrato (duplicaria) — só varre o que entrou
-  // depois e ficou por fora. É o caso do lançamento manual/da pista incluído
-  // antes da substituição, que ficava somando em dobro com a linha do extrato.
-  if (jaTem) {
-    if (!alvos.length) {
-      alert('Este caixa já está substituído e não há lançamento solto de cartão/Pix.');
-      return;
+  if (!confirm(
+    (refazendo ? 'REFAZER a substituição pelo extrato?' : 'SUBSTITUIR os lançamentos de cartão/Pix pelo extrato?') + N2
+    + 'Sai TUDO que é cartão/Pix do caixa — fila, cupom e lançamento manual —' + N1
+    + 'e entra uma linha por transação do extrato. O caixa fica igual ao extrato.' + N2
+    + 'Sai do caixa : ' + fcMoney(atual) + '  (' + alvos.length + ' lançamento(s))' + N1
+    + 'Entra extrato: ' + fcMoney(novo) + '  (' + ext.length + ' transação(ões))' + N2
+    + 'O DINHEIRO não é tocado (o extrato da maquininha não conhece espécie).' + N2
+    + 'Nada é apagado de verdade: dá para desfazer depois.')) return;
+
+  // 1) LIMPA o lote anterior: apaga as linhas do extrato que já estavam lá.
+  //    Sem isto, refazer criaria uma segunda linha para a mesma transação.
+  if (refazendo) {
+    const antigos = Object.keys(window._fcConf || {}).filter(k => {
+      const a = (window._fcConf[k] || {}).ajuste || {};
+      return k.indexOf('manual:ext-') === 0 && a.extrato_lote && a.turno_ref === turnoId;
+    });
+    for (const k of antigos) {
+      const rid = k.slice(7);
+      await sb.from('oct_fc_lancamentos').delete()
+        .eq('empresa_id', eid).eq('turno_id', turnoId).eq('ref_tipo', 'manual').eq('ref_id', rid);
+      delete window._fcConf[k];
     }
-    if (!confirm('Este caixa JÁ foi substituído pelo extrato, mas sobraram '
-      + alvos.length + ' lançamento(s) de cartão/Pix somando ' + fcMoney(atual)
-      + '.' + N2 + 'Eles estão contando EM DOBRO com as linhas do extrato.'
-      + N2 + 'Anular agora?')) return;
-  } else if (!confirm(
-    'SUBSTITUIR os lançamentos de cartão/Pix pelo extrato da maquininha?\n\n'
-    + 'Hoje no caixa: ' + fcMoney(atual) + '  (' + alvos.length + ' lançamento(s))\n'
-    + 'Extrato:       ' + fcMoney(novo) + '  (' + ext.length + ' transação(ões))\n'
-    + 'Diferença:     ' + fcMoney(dif) + '\n\n'
-    + 'O caixa passa a valer o que CAIU NA CONTA. Você perde o vínculo de cada\n'
-    + 'recebimento com o abastecimento — o valor deixa de ser por venda e passa\n'
-    + 'a ser por transação da maquininha.\n\n'
-    + 'Nada é apagado: dá para desfazer depois.')) return;
+  }
 
-  const loteAtual = Object.values(window._fcConf || {})
-    .map(c => (c && c.ajuste) || {})
-    .find(a => a.extrato_lote && a.turno_ref === turnoId);
-  const lote = (jaTem && loteAtual) ? loteAtual.extrato_lote
-    : ((crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()));
-  const eid = window._fcEmpresaId;
+  const lote = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
   const linhas = [];
-  // 1) anula os lançamentos atuais (overlay, o dado original continua intacto)
+
+  // 2) ANULA todo lançamento de cartão/Pix do turno (overlay — o original fica)
   alvos.forEach(a => {
-    // o base vem do BANCO (a.base), não do _fcConf: sem isso o desfazer
-    // devolvia o lançamento sem valor/descrição
     const base = a.base || (window._fcConf[a.tipo + ':' + a.id] || {}).ajuste || {};
     linhas.push({
       empresa_id: eid, turno_id: turnoId, ref_tipo: a.tipo, ref_id: a.id,
@@ -2636,9 +2632,9 @@ async function fcExtratoSubstituir() {
       }),
     });
   });
-  // 2) lança o extrato, uma linha por transação (só na primeira vez — repetir
-  //    aqui criaria uma segunda linha para a mesma transação)
-  if (!jaTem) ext.forEach(r => {
+
+  // 3) RELANÇA o extrato, uma linha por transação
+  ext.forEach(r => {
     linhas.push({
       empresa_id: eid, turno_id: turnoId, ref_tipo: 'manual', ref_id: 'ext-' + String(r.id),
       conferido: false,
@@ -2647,18 +2643,16 @@ async function fcExtratoSubstituir() {
         forma_nome: _fcRotForma(null, r.forma, r.bandeira),
         bandeira: r.bandeira || null,
         descricao: '🏦 extrato ' + (r.origem || 'maquininha') + (Number(r.parcelas || 1) > 1 ? ' · ' + r.parcelas + 'x' : ''),
-        // a hora da transação vem junto: sem ela a linha do extrato ficava com
-        // "—" na coluna Hora e ia para o fim da ordenação por horário
         recebido_em: r.recebido_em || null,
         extrato_lote: lote, turno_ref: turnoId,
       },
     });
   });
+
   const { error } = await sb.from('oct_fc_lancamentos')
     .upsert(linhas, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
   if (error) { alert('Erro ao substituir: ' + error.message); return; }
-  _fcToast(jaTem ? ('🏦 ' + alvos.length + ' lançamento(s) solto(s) anulado(s)')
-    : ('🏦 Caixa passou a valer o extrato (' + fcMoney(novo) + ')'));
+  _fcToast('🏦 Caixa igual ao extrato: ' + ext.length + ' transação(ões), ' + fcMoney(novo));
   await _fcRecarregarNode();
 }
 
