@@ -580,6 +580,11 @@ function fcDetalhe(turnoId) {
   // RESPONSÁVEL pela quebra, se já foi lançado (Conferência › Lançar para o responsável).
   const _aResp = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
   const respNome = (_aResp && _aResp.responsavel) ? String(_aResp.responsavel) : '';
+  // TÍTULO GERADO é a condição para o caixa fechar (regra Ronan 25/08). Registrar
+  // o nome não basta: dá para registrar responsável sem gerar título (pessoa fora
+  // do cadastro), e aí a quebra fecharia o caixa sem virar cobrança nenhuma —
+  // sumiria de graça. Só há título na FALTA; na SOBRA quem deve é o posto, e não
+  // existe título a receber, então ali o responsável registrado é o que dá.
   // COM RESPONSÁVEL, A DIFERENÇA SOMA E O CAIXA FECHA (regra Ronan 25/08, modelo
   // TecnoX: lá a "Falta de Caixa 6,00" entra nos Recebimentos e o "Resultado do
   // Caixa" fica 0,00). Faz sentido de conta: ao lançar a falta no nome do
@@ -588,8 +593,11 @@ function fcDetalhe(turnoId) {
   // SEM responsável continua fora do total, senão o caixa fecharia sozinho e a
   // quebra sumiria sem ninguém responder por ela — foi o que aconteceu no turno
   // 31, quando somar sempre contava o mesmo dinheiro duas vezes.
-  const totalReceb = Number((somaReceb + (respNome && difApurada < 0 ? -difApurada : 0)).toFixed(2));
-  const totalVenda = Number((somaVenda + (respNome && difApurada > 0 ? difApurada : 0)).toFixed(2));
+  const temTitulo = !!(_aResp && _aResp.titulo_gerado);
+  const faltaQuitada = respNome && temTitulo && difApurada < 0;   // virou cobrança
+  const sobraAtribuida = respNome && difApurada > 0;              // sobra não gera título
+  const totalReceb = Number((somaReceb + (faltaQuitada ? -difApurada : 0)).toFixed(2));
+  const totalVenda = Number((somaVenda + (sobraAtribuida ? difApurada : 0)).toFixed(2));
   // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA.
   // (mesma fórmula de d.resultado_caixa em fcCarregarDados — a lista, os balões
   //  e este quadro precisam mostrar SEMPRE o mesmo número.)
@@ -606,8 +614,14 @@ function fcDetalhe(turnoId) {
   const sobraCaixa = difApurada > 0 ? difApurada : 0;
   // O rótulo diz de quem é a quebra assim que ela tem dono — é o que explica,
   // olhando a coluna, por que o Resultado do Caixa fechou em zero.
-  const _rotDif = (base, val) => (respNome && val > 0.009)
-    ? base + ' — ' + fcEsc(respNome) : base + ' (resultado)';
+  const _rotDif = (base, val) => {
+    if (!(val > 0.009) || !respNome) return base + ' (resultado)';
+    // sem título, o nome está lá mas a quebra ainda não virou cobrança: o rótulo
+    // precisa dizer isso, senão o operador vê o nome e não entende o porquê do
+    // caixa seguir aberto.
+    const pend = (difApurada < 0 && !temTitulo) ? ' (sem título)' : '';
+    return base + ' — ' + fcEsc(respNome) + pend;
+  };
   const receb = recebBase.concat([[_rotDif('Falta de Caixa', faltaCaixa), faltaCaixa]]);
   const vendas = vendasBase.concat([[_rotDif('Sobra de Caixa', sobraCaixa), sobraCaixa]]);
 
