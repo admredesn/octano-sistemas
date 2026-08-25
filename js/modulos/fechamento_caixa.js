@@ -219,7 +219,7 @@ async function fcCarregarDados() {
     fila_total: 0, fila_litros: 0, fila_itens: [],
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
     // v2 — movimentação completa
-    sangria_f7: 0, sangrias_lst: [],
+    sangria_f7: 0, sangrias_lst: [], np_itens: [],
     vale_haver: 0, vale_desconto: 0, vales_lst: [],
     receb_ext: [], receb_ext_cartao: 0, receb_ext_pix: 0, receb_ext_cofre: 0,
     titulos: 0, titulos_lst: [],
@@ -380,7 +380,15 @@ async function fcCarregarDados() {
     // valor_original: `valor` vira saldo quando o título é baixado parcialmente,
     // e o que a venda do turno gerou é o valor cheio da emissão.
     const v = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
-    if (v > 0) { t.rec.prazo += v; t.np_tecnox = (t.np_tecnox || 0) + v; }
+    if (v > 0) {
+      t.rec.prazo += v;
+      t.np_tecnox = (t.np_tecnox || 0) + v;
+      // guarda a LISTA, não só o total: o balão 📄 Nota a Prazo abre a partir
+      // daqui. Sem isto ele mostrava "Nenhum lançamento nesta forma neste
+      // caixa" com o resumo marcando 1.631,17 — o valor vinha do total e não
+      // tinha de onde tirar as linhas (25/08).
+      (t.np_itens = t.np_itens || []).push(n);
+    }
   });
   // TÍTULOS RECEBIDOS (baixa de a-prazo antigo) — por turno_id
   ((tRes && tRes.data) || []).forEach(x => {
@@ -1809,6 +1817,27 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`)] });
     });
     manuaisMesclados = true;
+
+    // 4) NOTAS A PRAZO espelhadas do TecnoX. Nos postos que ainda operam por lá
+    // a venda a prazo não gera cupom no Octano — a nota é o único registro, e
+    // sem ela o balão ficava vazio embora o resumo somasse o valor.
+    if (tipo === 'prazo') {
+      (d0.np_itens || []).forEach(n => {
+        const vN = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
+        if (!(vN > 0)) return;
+        const cli = fcEsc(n.cliente_nome) || 'cliente não identificado';
+        entradas.push({ val: vN, hora: n.registrado_em || '9999', oficial: 1, rows: [
+          `<tr><td class="fc-td"></td>
+            <td class="fc-td">${n.registrado_em ? _fcHoraLocal(n.registrado_em) : '—'}</td>
+            <td class="fc-td">📄 Nota a prazo <span style="color:#6b7688;font-size:9px">(TecnoX)</span></td>
+            <td class="fc-td">—</td>
+            <td class="fc-td fc-r">—</td>
+            <td class="fc-td">${cli}</td>
+            <td class="fc-td">Nota a prazo</td>
+            <td class="fc-td fc-r">${fcMoney(vN)}</td>
+            <td class="fc-td"></td></tr>`] });
+      });
+    }
 
     _ordena(entradas, e => e.val, e => e.hora);
     const totalLista = entradas.reduce((s, e) => s + e.val, 0);
