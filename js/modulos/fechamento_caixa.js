@@ -585,8 +585,8 @@ function fcDetalhe(turnoId) {
   // DIFERENÇA APURADA entre as duas colunas, antes de qualquer atribuição.
   const difApurada = Number((somaReceb - somaVenda).toFixed(2));
   // RESPONSÁVEL pela quebra, se já foi lançado (Conferência › Lançar para o responsável).
-  const _aResp = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
-  const respNome = (_aResp && _aResp.responsavel) ? String(_aResp.responsavel) : '';
+  const _st = _fcDifStatus(turnoId, difApurada);
+  const respNome = _st.respNome;
   // TÍTULO GERADO é a condição para o caixa fechar (regra Ronan 25/08). Registrar
   // o nome não basta: dá para registrar responsável sem gerar título (pessoa fora
   // do cadastro), e aí a quebra fecharia o caixa sem virar cobrança nenhuma —
@@ -600,7 +600,7 @@ function fcDetalhe(turnoId) {
   // SEM responsável continua fora do total, senão o caixa fecharia sozinho e a
   // quebra sumiria sem ninguém responder por ela — foi o que aconteceu no turno
   // 31, quando somar sempre contava o mesmo dinheiro duas vezes.
-  const temTitulo = !!(_aResp && _aResp.titulo_gerado);
+  const temTitulo = _st.temTitulo;
   const faltaQuitada = respNome && temTitulo && difApurada < 0;   // virou cobrança
   const sobraAtribuida = respNome && difApurada > 0;              // sobra não gera título
   const totalReceb = Number((somaReceb + (faltaQuitada ? -difApurada : 0)).toFixed(2));
@@ -2431,15 +2431,44 @@ async function fcSalvarObs() {
 
 // confirma a conferência de caixa físico e persiste no turno (esperado, diferença,
 // quem/quando conferiu). O gerente audita o dinheiro contado × esperado aqui.
+// A DIFERENÇA JÁ FOI RESOLVIDA? Uma função só, porque o quadro (que zera o
+// Resultado do Caixa) e o fechamento (que decide se pergunta o responsável)
+// PRECISAM concordar. Enquanto cada um tinha a sua leitura, o quadro mostrava
+// "Resultado 0,00 · Falta — Marlon" e o botão Confirmar pedia o responsável de
+// novo, como se nada tivesse sido lançado (25/08).
+//   FALTA -> resolvida quando tem responsável E título gerado (virou cobrança).
+//   SOBRA -> não existe título a gerar; basta o responsável registrado.
+function _fcDifStatus(turnoId, difApurada) {
+  const a = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
+  const respNome = (a && a.responsavel) ? String(a.responsavel) : '';
+  const temTitulo = !!(a && a.titulo_gerado);
+  const dif = Number(difApurada || 0);
+  const resolvida = !!respNome && (dif > 0 ? true : temTitulo);
+  return { respNome, temTitulo, resolvida };
+}
+
 async function fcConfirmarCaixa(turnoId) {
   const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId];
   if (!d) { alert('Dados do turno ainda carregando — tente de novo.'); return; }
   const dif = d.diferenca_caixa || 0;
   // FALTA/SOBRA apurada → antes de fechar, IDENTIFICA O RESPONSÁVEL (pedido
   // Ronan 19/08): a diferença fica em nome do funcionário, registrada no caixa.
-  if (Math.abs(dif) >= 0.01) { _fcModalResponsavel(turnoId, dif); return; }
-  if (!confirm('Confirmar a conferência deste caixa?\n\nEsperado: R$ ' + Number(d.dinheiro_esperado || 0).toFixed(2).replace('.', ',')
-    + '\nContado: R$ ' + Number(d.dinheiro_contado || 0).toFixed(2).replace('.', ',') + '\nCaixa confere (sem diferença).')) return;
+  const st = _fcDifStatus(turnoId, dif);
+  // SÓ PERGUNTA SE AINDA NÃO FOI LANÇADA. Antes olhava só a diferença apurada,
+  // que continua valendo -58,23 mesmo depois de resolvida — então o botão pedia
+  // o responsável de novo, com a quebra já em nome do colaborador e o Resultado
+  // do Caixa em 0,00 (Ronan 25/08).
+  if (Math.abs(dif) >= 0.01 && !st.resolvida) { _fcModalResponsavel(turnoId, dif); return; }
+  const L = String.fromCharCode(10);
+  const linhaDif = st.resolvida
+    ? L + (dif < 0 ? 'Falta' : 'Sobra') + ' de R$ ' + Math.abs(dif).toFixed(2).replace('.', ',')
+      + ' já lançada para ' + st.respNome + (st.temTitulo ? ' (título gerado).' : '.')
+      + L + 'Resultado do Caixa: 0,00.'
+    : L + 'Caixa confere (sem diferença).';
+  if (!confirm('Confirmar a conferência deste caixa?' + L + L
+    + 'Esperado: R$ ' + Number(d.dinheiro_esperado || 0).toFixed(2).replace('.', ',')
+    + L + 'Contado: R$ ' + Number(d.dinheiro_contado || 0).toFixed(2).replace('.', ',')
+    + linhaDif)) return;
   await _fcConfirmarGravar(turnoId, null);
 }
 
