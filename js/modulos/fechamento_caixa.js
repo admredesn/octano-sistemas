@@ -575,8 +575,21 @@ function fcDetalhe(turnoId) {
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
   const somaVenda = soma(vendasBase);
-  const totalReceb = somaReceb;   // prestação de contas: cofre+maquininha+frota+despesas+gaveta
-  const totalVenda = somaVenda;   // origem: vendas + troco inicial (Remessas)
+  // DIFERENÇA APURADA entre as duas colunas, antes de qualquer atribuição.
+  const difApurada = Number((somaReceb - somaVenda).toFixed(2));
+  // RESPONSÁVEL pela quebra, se já foi lançado (Conferência › Lançar para o responsável).
+  const _aResp = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
+  const respNome = (_aResp && _aResp.responsavel) ? String(_aResp.responsavel) : '';
+  // COM RESPONSÁVEL, A DIFERENÇA SOMA E O CAIXA FECHA (regra Ronan 25/08, modelo
+  // TecnoX: lá a "Falta de Caixa 6,00" entra nos Recebimentos e o "Resultado do
+  // Caixa" fica 0,00). Faz sentido de conta: ao lançar a falta no nome do
+  // operador ela deixa de ser um buraco e vira um DIREITO A RECEBER dele — o
+  // turno está prestado, o valor agora é cobrança (o título em Faturar).
+  // SEM responsável continua fora do total, senão o caixa fecharia sozinho e a
+  // quebra sumiria sem ninguém responder por ela — foi o que aconteceu no turno
+  // 31, quando somar sempre contava o mesmo dinheiro duas vezes.
+  const totalReceb = Number((somaReceb + (respNome && difApurada < 0 ? -difApurada : 0)).toFixed(2));
+  const totalVenda = Number((somaVenda + (respNome && difApurada > 0 ? difApurada : 0)).toFixed(2));
   // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA.
   // (mesma fórmula de d.resultado_caixa em fcCarregarDados — a lista, os balões
   //  e este quadro precisam mostrar SEMPRE o mesmo número.)
@@ -587,17 +600,23 @@ function fcDetalhe(turnoId) {
   // esperado) é outra régua e vive no painel "Conferência de Caixa (dinheiro)" —
   // os dois números divergem quando o dinheiro da despesa/troco não sai do
   // depósito, e cada um precisa dizer a sua verdade.
-  const faltaCaixa = resultado < 0 ? -resultado : 0;
-  const sobraCaixa = resultado > 0 ? resultado : 0;
-  // Falta/Sobra aparecem nas colunas (layout TecnoX) mas NÃO somam nos totais —
-  // são o retrato da diferença, não uma nova origem/destino de dinheiro (somar
-  // contava o mesmo dinheiro em dobro: 8.184,27 = 6.453,50 + 1.730,77, turno 31).
-  const receb = recebBase.concat([['Falta de Caixa (resultado)', faltaCaixa]]);
-  const vendas = vendasBase.concat([['Sobra de Caixa (resultado)', sobraCaixa]]);
+  // a linha mostra a diferença APURADA (o valor da quebra), não o resultado já
+  // fechado — como no TecnoX, que exibe "Falta de Caixa 6,00" com Resultado 0,00.
+  const faltaCaixa = difApurada < 0 ? -difApurada : 0;
+  const sobraCaixa = difApurada > 0 ? difApurada : 0;
+  // O rótulo diz de quem é a quebra assim que ela tem dono — é o que explica,
+  // olhando a coluna, por que o Resultado do Caixa fechou em zero.
+  const _rotDif = (base, val) => (respNome && val > 0.009)
+    ? base + ' — ' + fcEsc(respNome) : base + ' (resultado)';
+  const receb = recebBase.concat([[_rotDif('Falta de Caixa', faltaCaixa), faltaCaixa]]);
+  const vendas = vendasBase.concat([[_rotDif('Sobra de Caixa', sobraCaixa), sobraCaixa]]);
 
   // TOTAL MOVIMENTADO no caixa = tudo que passou (vendas/saídas: fila+transmitidos
   // + títulos recebidos).
-  const totalMov = totalVenda;
+  // usa a ORIGEM pura (somaVenda), nao o total ja fechado: a sobra atribuida ao
+  // operador entra em totalVenda para zerar o resultado, mas nao e' dinheiro que
+  // passou pelo caixa — somar aqui inflaria o movimentado.
+  const totalMov = somaVenda;
   const cuponsTransm = Math.max(0, Number(d.venda_total || 0) - Number(d.fila_total || 0));
 
   const linhaVal = (rot, val, opt) => `<div class="fc-lin"><span class="fc-lbl">${rot}${opt && opt.info ? ' <span style="color:#6b7688;font-size:9px">(mov.)</span>' : ''}</span><span class="fc-box"${opt && opt.info ? ' style="opacity:.75"' : ''}>${fcMoney(val)}</span></div>`;
