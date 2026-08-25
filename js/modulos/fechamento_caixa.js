@@ -377,6 +377,14 @@ async function fcCarregarDados() {
   ((npRes && npRes.data) || []).forEach(n => {
     if (!/do TecnoX/i.test(String(n.observacao || ''))) return;
     const t = porTurno[n.turno_id]; if (!t) return;
+    // OVERLAY do gerente (✎ / ✖) por cima da nota espelhada — o registro em
+    // oct_pdv_notas_prazo não é tocado, igual ao resto da tela.
+    const ajN = _aj('np', n.id);
+    if (ajN) {
+      if (ajN.excluido) return;
+      if (ajN.valor != null) { n.valor = ajN.valor; n.valor_original = ajN.valor; }
+      if (ajN.cliente_nome) n.cliente_nome = ajN.cliente_nome;
+    }
     // valor_original: `valor` vira saldo quando o título é baixado parcialmente,
     // e o que a venda do turno gerou é o valor cheio da emissão.
     const v = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
@@ -1197,13 +1205,21 @@ async function fcLancIncluir() {
       ${livresHtml}
       <label style="display:block;color:#9aa;font-size:0.75rem">Valor (R$) *</label>
       <input id="fcm-valor" type="number" step="0.01" class="fc-inp2" style="width:140px">
-      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
-      <select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>
-      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
-      <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
-        <option value="">(sem bandeira)</option>
-        ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
-      </select>
+      ${secao === 'prazo'
+        // NOTA A PRAZO só pode ser prazo, e não tem bandeira: os dois campos
+        // saem da tela e vão fixos, para ninguém lançar uma nota como
+        // "Dinheiro / Visa" por descuido (pedido Ronan 25/08).
+        ? `<input type="hidden" id="fcm-forma" value="Nota a prazo">
+           <input type="hidden" id="fcm-bandeira" value="">
+           <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
+           <input id="fcm-cliente" class="fc-inp2 lg" style="width:100%" placeholder="nome do cliente">`
+        : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
+           <select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>
+           <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
+           <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
+             <option value="">(sem bandeira)</option>
+             ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
+           </select>`}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
@@ -1239,6 +1255,11 @@ async function fcLancIncluirSalvar(secao) {
     bandeira: (document.getElementById('fcm-bandeira').value || '').trim() || null,
     descricao: document.getElementById('fcm-desc').value.trim() || null,
   };
+  if (secao === 'prazo') {
+    const cli = (document.getElementById('fcm-cliente') || {}).value || '';
+    ajuste.cliente_nome = cli.trim() || null;
+    if (!ajuste.descricao && ajuste.cliente_nome) ajuste.descricao = ajuste.cliente_nome;
+  }
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
   const { error } = await sb.from('oct_fc_lancamentos').insert({
     empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
@@ -1383,16 +1404,23 @@ function fcLancEditar(refTipo, refId) {
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Valor (R$)</label>
       <input id="fcl-valor" type="number" step="0.01" value="${Number(v('valor') || 0).toFixed(2)}" class="fc-inp2" style="width:140px">
-      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma de pagamento</label>
-      <select id="fcl-forma" class="fc-inp2" style="width:200px">
-        <option value="">(manter: ${fcEsc(v('forma_nome') || '—')})</option>
-        ${formas.map(f => `<option value="${f}">${f}</option>`).join('')}
-      </select>
-      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
-      <select id="fcl-bandeira" class="fc-inp2" style="width:200px">
-        <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
-        ${bandeiras.filter(b => b !== bandAtual).map(b => `<option value="${b}">${b}</option>`).join('')}
-      </select>
+      ${refTipo === 'np'
+        // NOTA A PRAZO só pode ser prazo e não tem bandeira: mesma regra do
+        // Incluir. Aqui edita-se o que faz sentido — valor e cliente.
+        ? `<input type="hidden" id="fcl-forma" value="">
+           <input type="hidden" id="fcl-bandeira" value="">
+           <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
+           <input id="fcl-cliente" value="${fcEsc(v('cliente_nome') || (base.rotulo || '').replace('Nota a prazo — ', ''))}" class="fc-inp2 lg" style="width:100%">`
+        : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma de pagamento</label>
+           <select id="fcl-forma" class="fc-inp2" style="width:200px">
+             <option value="">(manter: ${fcEsc(v('forma_nome') || '—')})</option>
+             ${formas.map(f => `<option value="${f}">${f}</option>`).join('')}
+           </select>
+           <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
+           <select id="fcl-bandeira" class="fc-inp2" style="width:200px">
+             <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
+             ${bandeiras.filter(b => b !== bandAtual).map(b => `<option value="${b}">${b}</option>`).join('')}
+           </select>`}
       ${refTipo === 'manual' ? `
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcl-desc" value="${fcEsc(aj.descricao || '')}" class="fc-inp2 lg" style="width:100%">` : ''}
@@ -1437,6 +1465,10 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       if (forma) ajuste.forma_nome = forma;
       if (band && band !== String(base.bandeira || '')) ajuste.bandeira = band;
       if (obs) ajuste.obs = obs;
+      // NOTA A PRAZO: o campo que se edita, além do valor, é o CLIENTE — forma e
+      // bandeira nem aparecem no formulário dela.
+      const cliEl = document.getElementById('fcl-cliente');
+      if (refTipo === 'np' && cliEl && cliEl.value.trim()) ajuste.cliente_nome = cliEl.value.trim();
       if (!Object.keys(ajuste).length) ajuste = null;
     }
   }
@@ -1826,16 +1858,19 @@ async function fcNodeDetalhe(tipo) {
         const vN = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
         if (!(vN > 0)) return;
         const cli = fcEsc(n.cliente_nome) || 'cliente não identificado';
+        // _fcLancBase é o que o ✎ lê para abrir o formulário já preenchido.
+        window._fcLancBase['np:' + n.id] = {
+          rotulo: 'Nota a prazo — ' + (n.cliente_nome || ''), valor: vN,
+          forma_nome: 'Nota a prazo', bandeira: null,
+        };
         entradas.push({ val: vN, hora: n.registrado_em || '9999', oficial: 1, rows: [
-          `<tr><td class="fc-td"></td>
-            <td class="fc-td">${n.registrado_em ? _fcHoraLocal(n.registrado_em) : '—'}</td>
+          _fcRow('np', n.id, `<td class="fc-td">${n.registrado_em ? _fcHoraLocal(n.registrado_em) : '—'}</td>
             <td class="fc-td">📄 Nota a prazo <span style="color:#6b7688;font-size:9px">(TecnoX)</span></td>
             <td class="fc-td">—</td>
             <td class="fc-td fc-r">—</td>
             <td class="fc-td">${cli}</td>
             <td class="fc-td">Nota a prazo</td>
-            <td class="fc-td fc-r">${fcMoney(vN)}</td>
-            <td class="fc-td"></td></tr>`] });
+            <td class="fc-td fc-r">${fcMoney(vN)}</td>`)] });
       });
     }
 
