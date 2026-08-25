@@ -134,7 +134,11 @@ async function fcCarregarDados() {
   // combustível não batia com o TecnoX. Folga de 36h cobre madrugada + fuso.
   const janIni = new Date(_fcTsUtc(janIni0) - 36 * 3600e3).toISOString();
   const janFim = new Date(_fcTsUtc(janFim0) + 12 * 3600e3).toISOString();
-  const [vRes, cRes, fRes, rRes, vlRes, tRes, pRes, npRes] = await Promise.all([
+  // A ORDEM AQUI TEM DE SEGUIR A ORDEM DAS CONSULTAS ABAIXO, uma a uma.
+  // Em 25/08 a consulta de notas a prazo entrou ANTES da pista e o destructuring
+  // não acompanhou: `pRes` passou a receber as notas e a VENDA DE COMBUSTÍVEL do
+  // Florestal foi a zero. Ao mexer nesta lista, conferir os dois lados.
+  const [vRes, cRes, fRes, rRes, vlRes, tRes, npRes, pRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
