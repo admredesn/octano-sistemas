@@ -556,7 +556,14 @@ function fcDetalhe(turnoId) {
     ['Deposito em Conta', d.deposito],
     ['Troco Final (gaveta)', Number(t.valor_fechamento || 0)],
     ['Vale Haver', d.vale_haver, I],
-    ['Vale Motorista', d.vale_desconto, I],
+    // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
+    // heranca do layout TecnoX e so' mostrava numero errado — os R$349,38 que
+    // apareceram no turno 52 eram a MESMA falta de caixa lancada 6x como vale,
+    // residuo do modelo antigo (hoje a falta vira titulo em Faturar). A tabela
+    // oct_vales esta vazia nos tres postos.
+    // O calculo de d.vale_desconto continua: a linha era (mov.), nao somava em
+    // total nenhum, e o balao de "Vale / Consumo" segue acessivel se um dia
+    // houver vale de funcionario de verdade.
   ];
   // VENDAS/SAÍDAS — o que gerou o movimento (entram no total) + movimentos (mov.)
   const vendasBase = [
