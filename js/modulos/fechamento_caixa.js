@@ -134,7 +134,7 @@ async function fcCarregarDados() {
   // combustível não batia com o TecnoX. Folga de 36h cobre madrugada + fuso.
   const janIni = new Date(_fcTsUtc(janIni0) - 36 * 3600e3).toISOString();
   const janFim = new Date(_fcTsUtc(janFim0) + 12 * 3600e3).toISOString();
-  const [vRes, cRes, fRes, rRes, vlRes, tRes, pRes] = await Promise.all([
+  const [vRes, cRes, fRes, rRes, vlRes, tRes, pRes, npRes] = await Promise.all([
     sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
@@ -156,6 +156,13 @@ async function fcCarregarDados() {
     // TÍTULOS RECEBIDOS — baixa de nota a prazo antiga; no TecnoX entra no lado
     // Vendas/Saídas. Tem turno_id.
     sb.from('oct_recebimentos_titulo').select('turno_id,cliente_nome,valor,forma,juros,desconto,data_recebimento')
+      .eq('empresa_id', eid).in('turno_id', ids)
+      .then(r => r, () => ({ data: [] })),
+    // NOTAS A PRAZO EMITIDAS no turno. Nos postos que ainda operam no TecnoX
+    // (Florestal, Antônio Carlos) a venda a prazo não passa pelo PDV do Octano:
+    // não há cupom com tpag 05, então o campo "Nota a prazo" ficava zerado
+    // mesmo com centenas de notas replicadas. Aqui elas entram pela emissão.
+    sb.from('oct_pdv_notas_prazo').select('turno_id,valor,valor_original,cliente_nome,observacao,registrado_em')
       .eq('empresa_id', eid).in('turno_id', ids)
       .then(r => r, () => ({ data: [] })),
     // PISTA — fonte IMUTÁVEL da venda de combustível (regra Ronan 19/08): todo
@@ -343,6 +350,18 @@ async function fcCarregarDados() {
     const val = Number(v.valor || 0);
     if (val >= 0) t.vale_haver += val; else t.vale_desconto += Math.abs(val);
     t.vales_lst.push(v);
+  });
+  // NOTA A PRAZO EMITIDA (TecnoX) -> entra em rec.prazo.
+  // SÓ as replicadas do TecnoX: no Tijuco a nota a prazo já vem do cupom
+  // (tpag 05) e TAMBÉM gera título — somar as duas contaria a mesma venda duas
+  // vezes. A marca é a observação que o sync grava.
+  ((npRes && npRes.data) || []).forEach(n => {
+    if (!/do TecnoX/i.test(String(n.observacao || ''))) return;
+    const t = porTurno[n.turno_id]; if (!t) return;
+    // valor_original: `valor` vira saldo quando o título é baixado parcialmente,
+    // e o que a venda do turno gerou é o valor cheio da emissão.
+    const v = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
+    if (v > 0) { t.rec.prazo += v; t.np_tecnox = (t.np_tecnox || 0) + v; }
   });
   // TÍTULOS RECEBIDOS (baixa de a-prazo antigo) — por turno_id
   ((tRes && tRes.data) || []).forEach(x => {
