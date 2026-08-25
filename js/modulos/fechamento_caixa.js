@@ -273,6 +273,18 @@ async function fcCarregarDados() {
     const va = Number(a.valor_total || 0);
     t.venda_comb += va; t.litros_comb += Number(a.litros || 0); t.venda_total += va;
   });
+  // TURNOS COM RECEBIMENTO ESPELHADO DO TECNOX. Nos postos que ainda operam por
+  // lá (Florestal, Antônio Carlos) o pagamento real está no cupom do TecnoX, e o
+  // sync grava essa venda com status 'tecnox'. A FILA do núcleo também alimenta
+  // os recebimentos — somar os dois contaria o mesmo cartão duas vezes. Então,
+  // onde o TecnoX é a fonte, a fila entra só como captura (fila_total, para a
+  // conferência de quanto o núcleo conseguiu casar) e NÃO soma em rec.
+  const turnosTecnox = new Set();
+  (vRes.data || []).forEach(v => {
+    if (v && v.turno_id && String(v.status || '').toLowerCase() === 'tecnox') {
+      turnosTecnox.add(v.turno_id);
+    }
+  });
   ((fRes && fRes.data) || []).forEach(f => {
     if (f._excluido) return;
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
@@ -289,6 +301,7 @@ async function fcCarregarDados() {
       return;
     }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
+    if (turnosTecnox.has(tid)) return;               // recebimento vem do TecnoX
     const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
     t.rec[g] = (t.rec[g] || 0) + vf;
   });
@@ -299,7 +312,9 @@ async function fcCarregarDados() {
     // continua existindo, só não conta neste caixa (pedido Ronan 19/08)
     const ajX = _aj('venda', v.id);
     if (ajX && ajX.excluido) { v._excluido = true; return; }
-    t.qtd_vendas++;
+    // venda espelhada do TecnoX não é cupom emitido pelo Octano: entra pelos
+    // pagamentos (abaixo), mas não conta como cupom nem soma itens (vazios).
+    if (String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
       // combustível NÃO soma venda aqui: já veio da PISTA (fonte imutável);
       // produto de loja do cupom soma normal.
