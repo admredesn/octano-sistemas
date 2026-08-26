@@ -145,7 +145,7 @@ async function _biRender() {
     sb.from('oct_contas_recorrentes').select('empresa_id,valor_previsto').eq('ativo', true),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
-    sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
+    sb.from('oct_tanques').select('id,empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
     sb.from('oct_produtos').select('id,tanque_id,empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
     filaProm,
     pistaProm,
@@ -173,15 +173,28 @@ async function _biRender() {
     const c = custoTq[b.tanque_id];
     if (c > 0 && b.numero != null) custoBico[String(b.numero)] = c;
   });
-  // custo dos combustíveis por empresa/classe (p/ valorar tanque)
+  // custo dos combustíveis por empresa/classe (p/ valorar tanque).
+  // SÓ produto que É combustível — tem tanque_id ou cod_anp. Sem esse filtro, a
+  // classificação por NOME pegava produto de LOJA: "RADNAQ ADITIVO GASOLINA"
+  // (frasco, R$ 9,99/UN) virava o custo do LITRO da gasolina aditivada, e
+  // "FILTRO DE GASOLINA AG 68" (R$ 15,50) o da comum. No Tijuco isso inflava o
+  // tanque de aditivada em R$ 7.499,75 (25/08).
   const custoComb = {};
   (prR.data || []).forEach(p => {
     if (p.ind_combustivel !== 'S' && !p.cod_anp) return;
     const cl = _biClasseComb(p.nome);
     if (!cl) return;
+    // combustível de verdade: está ligado a um tanque OU tem código ANP
+    if (!p.tanque_id && !p.cod_anp) return;
     const custo = Number(p.preco_custo || 0) || Number(p.preco_venda_a || 0);
     if (custo <= 0 || custo > 20) return;   // por litro — ignora lubrificante em caixa
-    (custoComb[p.empresa_id] = custoComb[p.empresa_id] || {})[cl] = custo;
+    // o de TANQUE vence: é o que está fisicamente naquele bocal. Sem esta
+    // preferência, o primeiro da lista ganhava por acaso.
+    const m = (custoComb[p.empresa_id] = custoComb[p.empresa_id] || {});
+    if (m[cl] == null || (p.tanque_id && !m['__tq_' + cl])) {
+      m[cl] = custo;
+      if (p.tanque_id) m['__tq_' + cl] = true;
+    }
   });
 
   // vendas por empresa: hoje, média 14d, realizado do mês e do PERÍODO escolhido
@@ -272,7 +285,10 @@ async function _biRender() {
       const l = Number(t.volume_sonda != null ? t.volume_sonda : t.estoque_atual) || 0;
       const cl = _biClasseComb(t.combustivel);
       const mapa = custoComb[e] || {};
-      const custo = mapa[cl] || (cl === 's10' || cl === 's500' ? mapa.diesel : 0) || 0;
+      // 1º o custo do produto DAQUELE tanque (vínculo direto, sem adivinhar
+      // pelo nome); só depois a classe.
+      const custo = custoTq[t.id]
+        || mapa[cl] || (cl === 's10' || cl === 's500' ? mapa.diesel : 0) || 0;
       litros += l;
       if (custo > 0) estComb += l * custo;
       else if (l > 0) semCusto.push(t.combustivel);
