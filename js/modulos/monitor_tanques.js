@@ -221,6 +221,19 @@ async function _monPistaDias(eid, desdeIso) {
 }
 
 // dia LOCAL em YYYY-MM-DD (toISOString é UTC e vira o dia às 21h no Brasil)
+// LUCRO DISPONÍVEL — a fatia do lucro do dia que virou dinheiro.
+// A venda a prazo sai proporcionalmente: se 30% da receita foi a prazo, 30% do
+// lucro está com o cliente e não no caixa. É o que dá para reinvestir hoje.
+// O lucro cheio continua em `v.lucro` (é o número do B.I).
+function _monLucroDisp(v) {
+  const total = Number((v && v.total) || 0);
+  const lucro = Number((v && v.lucro) || 0);
+  const prazo = Number((v && v.aPrazo) || 0);
+  if (!(total > 0) || !(prazo > 0)) return lucro;
+  const avista = Math.max(0, total - prazo);
+  return lucro * (avista / total);
+}
+
 function _monDiaStr(d) {
   const p = n => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
@@ -258,8 +271,21 @@ async function _monVendas(empIds) {
   const pTq = sb.from('oct_tanques').select('id,numero,empresa_id').in('empresa_id', empIds)
     .then(r => r.data || [], () => []);
   const pBc = sb.from('oct_bicos').select('numero,tanque_id').then(r => r.data || [], () => []);
-  const [rCusto, listas, filaTodos, pistas, tqs, bcs] = await Promise.all(
-    [pCusto.then(r => r, () => ({ data: [] })), pVendas, pFila, pPista, pTq, pBc]);
+  // NOTA A PRAZO DE HOJE. O lucro do dia inclui a venda a prazo, que é lucro no
+  // papel e ainda NAO e caixa — no Florestal chega a 30% da receita. O Monitor
+  // passa a mostrar o que da para reinvestir hoje (pedido Ronan 25/08); o lucro
+  // cheio continua existindo e e o numero do B.I.
+  const pPrazo = sb.from('oct_pdv_notas_prazo')
+    .select('empresa_id,valor,valor_original,registrado_em')
+    .in('empresa_id', empIds).gte('registrado_em', hojeStr)
+    .then(r => r.data || [], () => []);
+  const [rCusto, listas, filaTodos, pistas, tqs, bcs, prazos] = await Promise.all(
+    [pCusto.then(r => r, () => ({ data: [] })), pVendas, pFila, pPista, pTq, pBc, pPrazo]);
+  const prazoPorEmp = {};
+  (prazos || []).forEach(n => {
+    const v = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
+    if (v > 0) prazoPorEmp[n.empresa_id] = (prazoPorEmp[n.empresa_id] || 0) + v;
+  });
   const custoMap = {}, nomeProd = {}, custoPorTanque = {}, custoPorNome = {};
   ((rCusto && rCusto.data) || []).forEach(p => {
     custoMap[p.id] = Number(p.preco_custo || 0);
@@ -483,6 +509,10 @@ async function _monVendas(empIds) {
       // taxas de cartão conhecidas. Sem pista, a conta antiga (fila + cupons).
       lucro: temPista ? (pistaLucro + lojaLucro - taxasTotal)
                       : (lucroApurado + lucroAntigo),
+      // quanto do dia saiu A PRAZO — a tela usa para separar o lucro que virou
+      // dinheiro do que ficou com o cliente.
+      aPrazo: Math.min(Number(prazoPorEmp[eid] || 0),
+                       temPista ? (pistaValor + lojaValor) : totalAntigo),
       taxas: taxasTotal,
       apurado: casados.length > 0,
       ultima: temPista && ultimaPista ? { data_venda: ultimaPista } :
@@ -533,8 +563,9 @@ function _monCardVendaPosto(nome, v, tv) {
     </div>
     <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;flex-wrap:wrap">
       <span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">${v.apurado ? 'Lucro apurado:' : 'Lucro:'}</span>
-      <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(v.lucro)}</span>
-      ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(v.lucro / v.total * 100, 1)}%</span>` : ''}
+      <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(_monLucroDisp(v))}</span>
+      ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(_monLucroDisp(v) / v.total * 100, 1)}%</span>` : ''}
+      ${Number(v.aPrazo || 0) > 0.009 ? `<span title="lucro que saiu a prazo — ainda não é caixa" style="color:#f0b45c;font-size:${tv ? '0.85rem' : '0.68rem'}">a prazo ${_monBRL(v.lucro - _monLucroDisp(v))}</span>` : ''}
       ${v.taxas > 0 ? `<span style="color:#f87171;font-size:${tv ? '0.82rem' : '0.68rem'}" title="taxas de cartão já descontadas do lucro">taxas −${_monBRL(v.taxas)}</span>` : ''}
     </div>
     <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${
@@ -582,7 +613,7 @@ function _monHtml(dados, tv, doCache) {
     // seção VENDAS (NFC-e de hoje)
     const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
     const volGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].volume) || 0), 0);
-    const lucroGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].lucro) || 0), 0);
+    const lucroGeral = ordenados.reduce((s, eid) => s + (vendas[eid] ? _monLucroDisp(vendas[eid]) : 0), 0);
     const colVenda = tv ? '320px' : '250px';
     const vendasGrid = ordenados.map(eid => _monCardVendaPosto(nomes[eid], vendas[eid], tv)).join('');
     const secVendas = `

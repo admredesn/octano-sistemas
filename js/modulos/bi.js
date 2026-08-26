@@ -117,7 +117,10 @@ async function _biRender() {
     return q;
   });
   const fPista = (ini, fim) => _biTudo(() => {
-    let q = sb.from('oct_pdv_abastecimentos').select('empresa_id,data_abast,valor_total,tipo')
+    // litros + produto/tanque: sem eles nao ha como aplicar o custo e calcular
+    // o LUCRO BRUTO do periodo (pedido Ronan 25/08).
+    let q = sb.from('oct_pdv_abastecimentos')
+      .select('empresa_id,data_abast,valor_total,litros,produto_id,tanque_id,bico,tipo')
       .gte('data_abast', ini).or('tipo.is.null,tipo.neq.afericao');
     if (fim) q = q.lte('data_abast', fim);
     return q;
@@ -126,10 +129,16 @@ async function _biRender() {
   const iniJanela = per.ini < d15 ? somaDia(per.ini, -1) : d15;
   const duasJanelas = (fn) => Promise.all([fn(d15, null), fn(somaDia(per.ini, -1), somaDia(per.fim, 2))])
     .then(([a, b]) => a.concat(b));
+  // BICO -> TANQUE. No Antonio Carlos boa parte da pista vem SEM produto_id e
+  // SEM tanque_id — so' o numero do bico. Sem esta ponte, R$ 158 mil de venda
+  // (26% do posto) ficavam sem custo e o lucro saia menor do que e'. O Monitor
+  // ja resolvia assim; o B.I passa a resolver igual.
+  const bicosProm = sb.from('oct_bicos').select('numero,tanque_id')
+    .then(r => r.data || [], () => []);
   const filaProm = umaJanela ? fFila(iniJanela, null) : duasJanelas(fFila);
   const pistaProm = umaJanela ? fPista(iniJanela, null) : duasJanelas(fPista);
 
-  const [empR, cpR, cpMesR, fixasR, npR, fatR, tqR, prR, fila, pista] = await Promise.all([
+  const [empR, cpR, cpMesR, fixasR, npR, fatR, tqR, prR, fila, pista, bicos] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status,categoria').eq('status', 'aberto').order('vencimento'),
     sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', per.ini).lte('competencia', per.fim),
@@ -137,15 +146,33 @@ async function _biRender() {
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
     sb.from('oct_tanques').select('empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
-    sb.from('oct_produtos').select('empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
+    sb.from('oct_produtos').select('id,tanque_id,empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
     filaProm,
     pistaProm,
+    bicosProm,
   ]);
   for (const r of [empR, cpR, cpMesR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
 
   const empresas = (empR.data || []).map(e => ({ id: e.id, nome: _biNomeCurto(e.nome) }))
     .sort((a, b) => a.nome.localeCompare(b.nome));
 
+  // custo por PRODUTO e por TANQUE — e o que casa com a linha da pista.
+  // (Um tanque pode ter mais de um produto apontando para ele; guarda so custo
+  //  REAL, para um produto sem custo nao apagar o que ja foi resolvido — mesma
+  //  guarda do Monitor.)
+  const custoProd = {}, custoTq = {};
+  ((prR && prR.data) || prR || []).forEach(p => {
+    const c = Number(p.preco_custo || 0);
+    if (!(c > 0)) return;
+    if (p.id) custoProd[p.id] = c;
+    if (p.tanque_id && !(custoTq[p.tanque_id] > 0)) custoTq[p.tanque_id] = c;
+  });
+  // custo por BICO (via tanque) — a ponte para a pista que so' tem o bico
+  const custoBico = {};
+  (bicos || []).forEach(b => {
+    const c = custoTq[b.tanque_id];
+    if (c > 0 && b.numero != null) custoBico[String(b.numero)] = c;
+  });
   // custo dos combustíveis por empresa/classe (p/ valorar tanque)
   const custoComb = {};
   (prR.data || []).forEach(p => {
@@ -166,9 +193,22 @@ async function _biRender() {
     if (dt >= d15 && dt < hoje) { (vDia[e] = vDia[e] || {})[dt] = (vDia[e][dt] || 0) + val; }
     if (dt >= per.ini && dt <= per.fim) vPer[e] = (vPer[e] || 0) + val;
   };
+  // LUCRO BRUTO do periodo: (venda - custo) da pista, por posto.
+  // BRUTO de proposito: aqui entra TUDO que saiu da bomba, inclusive a venda a
+  // prazo. E o resultado do negocio no periodo. O Monitor mostra a outra regua
+  // — so o que virou dinheiro (lucro disponivel).
+  const lucPer = {}, lucSemCusto = {};
   // combustível: PISTA (fonte oficial, igual ao Monitor)
   pista.forEach(a => {
-    somaVenda(a.empresa_id, (a.data_abast || '').slice(0, 10), Number(a.valor_total || 0));
+    const dt = (a.data_abast || '').slice(0, 10);
+    const val = Number(a.valor_total || 0);
+    somaVenda(a.empresa_id, dt, val);
+    if (dt < per.ini || dt > per.fim) return;
+    const L = Number(a.litros || 0);
+    const c = custoProd[a.produto_id] || custoTq[a.tanque_id]
+           || custoBico[String(a.bico)] || 0;
+    if (!(c > 0) || !(L > 0)) { lucSemCusto[a.empresa_id] = (lucSemCusto[a.empresa_id] || 0) + val; return; }
+    lucPer[a.empresa_id] = (lucPer[a.empresa_id] || 0) + (val - c * L);
   });
   // produtos de loja: fila (item sem bico)
   fila.forEach(f => {
@@ -249,6 +289,7 @@ async function _biRender() {
       ...emp, pagarTotal, nPagar: contas.length, vencidasTotal, nVencidas: vencidas.length, meta,
       comprasMes, vencePer, receber, estoque: estComb + estLoja, litros, semCusto,
       vendaHoje: hj, vendaPer: vPer[e] || 0, mediaPer: (vPer[e] || 0) / perDias,
+      lucroPer: lucPer[e] || 0, lucroSemCusto: lucSemCusto[e] || 0,
       media, realizadoMes: vMes[e] || 0, projMes,
     };
   });
@@ -256,12 +297,13 @@ async function _biRender() {
   // consolidado do grupo
   const g = {
     pagarTotal: 0, vencidasTotal: 0, comprasMes: 0, vencePer: 0, receber: 0, estoque: 0, vendaHoje: 0,
-    vendaPer: 0, mediaPer: 0, media: 0, realizadoMes: 0, projMes: 0, metaDia: 0,
+    vendaPer: 0, mediaPer: 0, media: 0, realizadoMes: 0, projMes: 0, metaDia: 0, lucroPer: 0,
   };
   dadosPosto.forEach(p => {
     g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.comprasMes += p.comprasMes;
     g.vencePer += p.vencePer; g.receber += p.receber;
     g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.vendaPer += p.vendaPer; g.mediaPer += p.mediaPer;
+    g.lucroPer += (p.lucroPer || 0);
     g.media += p.media; g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
     if (p.meta) { g.metaDia += p.meta.porDia; g.fixoDia = (g.fixoDia || 0) + p.meta.fixoDia; g.boletosDia = (g.boletosDia || 0) + p.meta.boletosDia; }
   });
@@ -324,6 +366,9 @@ function _biCardGrupo(g) {
       ind('💰 Contas a receber', g.receber, '#4caf50', 'notas a prazo + faturas') +
       ind('🛢️ Valor em estoque', g.estoque, '#60a5fa', 'combustível + loja, a custo') +
       ind('💵 Venda no período', g.vendaPer, '#e0e0e0', 'média/dia ' + _biK(g.mediaPer)) +
+      ind('📊 Lucro bruto', g.lucroPer, '#22c55e',
+          (g.vendaPer > 0 ? (g.lucroPer / g.vendaPer * 100).toFixed(2).replace('.', ',') + '% de margem' : 'margem —')
+          + ' · inclui venda a prazo') +
       ind('🔮 Projeção do mês', g.projMes, '#c084fc', 'realizado ' + _biK(g.realizadoMes)) +
     '</div>' +
     '<div style="margin-top:12px">' + _biBarraMeta(g.vendaHoje, g.metaDia, g.fixoDia, g.boletosDia, g.vendaPer) + '</div></div>';
@@ -349,6 +394,7 @@ function _biCardPosto(p) {
     linha('💰 A receber', p.receber, '#4caf50') +
     linha('🛢️ Estoque (' + Math.round(p.litros).toLocaleString('pt-BR') + ' L)', p.estoque, '#60a5fa') +
     linha('💵 Venda no período', p.vendaPer) +
+    linha('📊 Lucro bruto (' + (p.vendaPer > 0 ? (p.lucroPer / p.vendaPer * 100).toFixed(2).replace('.', ',') + '%' : '—') + ')', p.lucroPer, '#22c55e') +
     linha('Ø Média/dia do período', p.mediaPer) +
     linha('📈 Venda hoje', p.vendaHoje) +
     linha('🔮 Projeção do mês', p.projMes, '#c084fc') +
