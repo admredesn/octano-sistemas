@@ -168,10 +168,17 @@ async function _biRender() {
     if (p.tanque_id && !(custoTq[p.tanque_id] > 0)) custoTq[p.tanque_id] = c;
   });
   // custo por BICO (via tanque) — a ponte para a pista que so' tem o bico
-  const custoBico = {};
+  const custoBico = {}, tanqueDoBico = {};
   (bicos || []).forEach(b => {
+    if (b.numero != null && b.tanque_id) tanqueDoBico[String(b.numero)] = b.tanque_id;
     const c = custoTq[b.tanque_id];
     if (c > 0 && b.numero != null) custoBico[String(b.numero)] = c;
+  });
+  // tanque -> classe de combustível (p/ somar litros por produto)
+  const classeDoTanque = {};
+  (tqR.data || []).forEach(t => {
+    const cl = _biClasseComb(t.combustivel);
+    if (cl) classeDoTanque[t.id] = cl;
   });
   // custo dos combustíveis por empresa/classe (p/ valorar tanque).
   // SÓ produto que É combustível — tem tanque_id ou cod_anp. Sem esse filtro, a
@@ -211,6 +218,12 @@ async function _biRender() {
   // prazo. E o resultado do negocio no periodo. O Monitor mostra a outra regua
   // — so o que virou dinheiro (lucro disponivel).
   const lucPer = {}, lucSemCusto = {};
+  // LITROS VENDIDOS por classe nos ULTIMOS 14 DIAS — base da autonomia.
+  // Usa janela fixa de propósito: com o filtro em "dia", a média de um dia só
+  // faria a autonomia pular de 3 para 30 dias conforme o movimento da manhã.
+  const litrosDia = {};          // empresa -> classe -> litros/dia
+  const _litros14 = {};          // empresa -> classe -> total no período
+  const _diasComVenda = {};      // empresa -> Set(dias) — divide pelo que existe
   // combustível: PISTA (fonte oficial, igual ao Monitor)
   pista.forEach(a => {
     const dt = (a.data_abast || '').slice(0, 10);
@@ -218,6 +231,16 @@ async function _biRender() {
     somaVenda(a.empresa_id, dt, val);
     if (dt < per.ini || dt > per.fim) return;
     const L = Number(a.litros || 0);
+    // classe do que saiu: pelo tanque do abastecimento ou pelo bico
+    if (L > 0 && dt >= d15) {
+      const tqId = a.tanque_id || tanqueDoBico[String(a.bico)];
+      const cl = tqId ? classeDoTanque[tqId] : null;
+      if (cl) {
+        const m = (_litros14[a.empresa_id] = _litros14[a.empresa_id] || {});
+        m[cl] = (m[cl] || 0) + L;
+        (_diasComVenda[a.empresa_id] = _diasComVenda[a.empresa_id] || new Set()).add(dt);
+      }
+    }
     const c = custoProd[a.produto_id] || custoTq[a.tanque_id]
            || custoBico[String(a.bico)] || 0;
     if (!(c > 0) || !(L > 0)) { lucSemCusto[a.empresa_id] = (lucSemCusto[a.empresa_id] || 0) + val; return; }
@@ -229,6 +252,12 @@ async function _biRender() {
     if (f.bico !== null && f.bico !== undefined && f.bico !== '') return;  // combustível já veio da pista
     somaVenda(f.empresa_id, (f.ocorrido_em || f.criado_em || '').slice(0, 10),
       Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0));
+  });
+  // média diária por classe: divide pelos dias em que houve venda
+  Object.keys(_litros14).forEach(e2 => {
+    const nd = Math.max(1, (_diasComVenda[e2] || new Set()).size);
+    const m = (litrosDia[e2] = {});
+    Object.keys(_litros14[e2]).forEach(cl => { m[cl] = _litros14[e2][cl] / nd; });
   });
   // dias decorridos do período (p/ média/dia do período)
   const perFimReal = per.fim > hoje ? hoje : per.fim;
@@ -280,7 +309,7 @@ async function _biRender() {
     const receber = npR.filter(n => n.empresa_id === e).reduce((s, n) => s + Number(n.valor), 0)
       + (fatR.data || []).filter(f => f.empresa_id === e && !/liquid|pago|cancel/i.test(f.status || '')).reduce((s, f) => s + Number(f.valor), 0);
     // estoque: tanques (sonda × custo/litro) + produtos de loja (estoque × custo)
-    let estComb = 0, litros = 0, semCusto = [];
+    let estComb = 0, litros = 0, semCusto = [], porTanque = [];
     (tqR.data || []).filter(t => t.empresa_id === e).forEach(t => {
       const l = Number(t.volume_sonda != null ? t.volume_sonda : t.estoque_atual) || 0;
       const cl = _biClasseComb(t.combustivel);
@@ -292,7 +321,16 @@ async function _biRender() {
       litros += l;
       if (custo > 0) estComb += l * custo;
       else if (l > 0) semCusto.push(t.combustivel);
+      // uma linha por combustível: litros, valor e quantos dias ainda dura
+      if (l > 0 || custo > 0) {
+        const porDia = ((litrosDia[e] || {})[cl]) || 0;
+        porTanque.push({
+          nome: t.combustivel, classe: cl, litros: l, valor: l * custo,
+          porDia, dias: porDia > 0 ? l / porDia : null,
+        });
+      }
     });
+    porTanque.sort((a2, b2) => b2.litros - a2.litros);
     const estLoja = (prR.data || []).filter(p => p.empresa_id === e && Number(p.estoque) > 0)
       .reduce((s, p) => s + Number(p.estoque) * (Number(p.preco_custo || 0) || Number(p.preco_venda_a || 0)), 0);
     // vendas
@@ -304,6 +342,7 @@ async function _biRender() {
     return {
       ...emp, pagarTotal, nPagar: contas.length, vencidasTotal, nVencidas: vencidas.length, meta,
       comprasMes, vencePer, receber, estoque: estComb + estLoja, litros, semCusto,
+      estCombustivel: estComb, estLoja, porTanque,
       vendaHoje: hj, vendaPer: vPer[e] || 0, mediaPer: (vPer[e] || 0) / perDias,
       lucroPer: lucPer[e] || 0, lucroSemCusto: lucSemCusto[e] || 0,
       media, realizadoMes: vMes[e] || 0, projMes,
@@ -313,13 +352,14 @@ async function _biRender() {
   // consolidado do grupo
   const g = {
     pagarTotal: 0, vencidasTotal: 0, comprasMes: 0, vencePer: 0, receber: 0, estoque: 0, vendaHoje: 0,
-    vendaPer: 0, mediaPer: 0, media: 0, realizadoMes: 0, projMes: 0, metaDia: 0, lucroPer: 0,
+    vendaPer: 0, mediaPer: 0, media: 0, realizadoMes: 0, projMes: 0, metaDia: 0, lucroPer: 0, litros: 0,
   };
   dadosPosto.forEach(p => {
     g.pagarTotal += p.pagarTotal; g.vencidasTotal += p.vencidasTotal; g.comprasMes += p.comprasMes;
     g.vencePer += p.vencePer; g.receber += p.receber;
     g.estoque += p.estoque; g.vendaHoje += p.vendaHoje; g.vendaPer += p.vendaPer; g.mediaPer += p.mediaPer;
     g.lucroPer += (p.lucroPer || 0);
+    g.litros += (p.litros || 0);
     g.media += p.media; g.realizadoMes += p.realizadoMes; g.projMes += p.projMes;
     if (p.meta) { g.metaDia += p.meta.porDia; g.fixoDia = (g.fixoDia || 0) + p.meta.fixoDia; g.boletosDia = (g.boletosDia || 0) + p.meta.boletosDia; }
   });
@@ -336,7 +376,7 @@ async function _biRender() {
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:14px">' +
           dadosPosto.map(_biCardPosto).join('') +
         '</div>' +
-        '<p style="color:#556;font-size:0.72rem;margin-top:12px">Estoque = sonda dos tanques × custo do combustível + produtos de loja a custo. ' +
+        '<p style="color:#556;font-size:0.72rem;margin-top:12px">Estoque = sonda dos tanques × custo do combustível + produtos de loja a custo. Autonomia (Xd) = litros ÷ média diária dos últimos 14 dias — vermelho abaixo de 3 dias, âmbar até 7. ' +
         'Contas a pagar alimentadas automaticamente pelas duplicatas das NF-e de entrada (6/6h). ' +
         'Projeção do mês = realizado + média dos últimos 14 dias × dias restantes.</p>' +
       '</div></div>';
@@ -367,6 +407,38 @@ function _biBarraMeta(vendidoDia, metaDia, fixoDia, boletosDia, vendidoPer) {
       '<span>vendido ' + _biK(vendido) + '</span><span>' + quebra + alvo + '</span></div>';
 }
 
+// nome curto do combustível, para a linha de litros caber
+const _BI_ROT = { gas_com: 'Gasolina', gas_ad: 'Gas. Aditivada', etanol: 'Etanol',
+                  s10: 'Diesel S10', s500: 'Diesel S500', diesel: 'Diesel' };
+
+// AUTONOMIA em cor: vermelho quando acaba antes de 3 dias, âmbar até 7.
+function _biCorDias(d) {
+  if (d == null) return '#667';
+  if (d < 3) return '#f44336';
+  if (d < 7) return '#fb923c';
+  return '#7ee2a0';
+}
+
+// uma linha por combustível: litros no tanque, valor a custo e quanto ainda dura
+function _biLinhasTanque(p) {
+  const its = (p.porTanque || []).filter(t => t.litros > 0);
+  if (!its.length) return '';
+  return '<div style="margin:6px 0 2px;padding:8px;background:#0f1117;border:1px solid #2a2d3e;border-radius:6px">'
+    + '<div style="color:#8892a0;font-size:0.7rem;margin-bottom:4px">no tanque, a custo · autonomia pela média dos últimos 14 dias</div>'
+    + its.map(t =>
+        '<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;font-size:0.76rem">'
+        + '<span style="color:#9aa;flex:1">' + fcEscBi(_BI_ROT[t.classe] || t.nome) + '</span>'
+        + '<span style="color:#60a5fa;min-width:74px;text-align:right">' + Math.round(t.litros).toLocaleString('pt-BR') + ' L</span>'
+        + '<span style="color:#cdd6e0;min-width:74px;text-align:right">' + _biK(t.valor) + '</span>'
+        + '<span style="min-width:62px;text-align:right;font-weight:700;color:' + _biCorDias(t.dias) + '">'
+        + (t.dias == null ? '—' : (t.dias < 10 ? t.dias.toFixed(1) : Math.round(t.dias)) + 'd') + '</span></div>').join('')
+    + '</div>';
+}
+
+function fcEscBi(x) {
+  return String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 function _biCardGrupo(g) {
   const ind = (rot, val, cor, sub) =>
     '<div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:12px">' +
@@ -380,7 +452,8 @@ function _biCardGrupo(g) {
       ind('📅 Vence no período', g.vencePer, '#fb923c', 'títulos abertos no período') +
       ind('🛒 Compras no período', g.comprasMes, '#fbbf24', 'NF-e de entrada (pagas + abertas)') +
       ind('💰 Contas a receber', g.receber, '#4caf50', 'notas a prazo + faturas') +
-      ind('🛢️ Valor em estoque', g.estoque, '#60a5fa', 'combustível + loja, a custo') +
+      ind('🛢️ Valor em estoque', g.estoque, '#60a5fa',
+          Math.round(g.litros || 0).toLocaleString('pt-BR') + ' L de combustível + loja, a custo') +
       ind('💵 Venda no período', g.vendaPer, '#e0e0e0', 'média/dia ' + _biK(g.mediaPer)) +
       ind('📊 Lucro bruto', g.lucroPer, '#22c55e',
           (g.vendaPer > 0 ? (g.lucroPer / g.vendaPer * 100).toFixed(2).replace('.', ',') + '% de margem' : 'margem —')
@@ -409,6 +482,7 @@ function _biCardPosto(p) {
     linha('🛒 Compras no período', p.comprasMes, '#fbbf24') +
     linha('💰 A receber', p.receber, '#4caf50') +
     linha('🛢️ Estoque (' + Math.round(p.litros).toLocaleString('pt-BR') + ' L)', p.estoque, '#60a5fa') +
+    _biLinhasTanque(p) +
     linha('💵 Venda no período', p.vendaPer) +
     linha('📊 Lucro bruto (' + (p.vendaPer > 0 ? (p.lucroPer / p.vendaPer * 100).toFixed(2).replace('.', ',') + '%' : '—') + ')', p.lucroPer, '#22c55e') +
     linha('Ø Média/dia do período', p.mediaPer) +
