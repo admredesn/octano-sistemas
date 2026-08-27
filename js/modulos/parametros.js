@@ -53,9 +53,9 @@ const PARAM_DEFS = [
   {
     grupo: '⛽ Pista e aferição',
     itens: [
-      { chave: 'afericao_autorizacao', rot: 'Aferição precisa de autorização do retaguarda', pad: true,
+      { chave: 'afericao_autorizacao', pendente: true, rot: 'Aferição precisa de autorização do retaguarda', pad: true,
         desc: 'A aferição fica retida até alguém aprovar. Desligado, sai direto do caixa.' },
-      { chave: 'exigir_vendedor', rot: 'Exigir frentista identificado no abastecimento', pad: false,
+      { chave: 'exigir_vendedor', pendente: true, rot: 'Exigir frentista identificado no abastecimento', pad: false,
         desc: 'Só ligue onde todos os frentistas têm cartão cadastrado.' },
     ],
   },
@@ -132,7 +132,10 @@ function parRender() {
   if (!el) return;
   const grupos = PARAM_DEFS.map(g => {
     const linhas = g.itens.map(i => {
-      const bloq = _parBloqueado(i);
+      // PENDENTE = a tela oferece, mas o PDV ainda nao consulta esta chave.
+      // Deixar clicavel seria pior que nao ter: o operador desligaria achando
+      // que surtiu efeito. Some quando o ponto de aplicacao existir.
+      const bloq = _parBloqueado(i) || !!i.pendente;
       const on = !bloq && parValor(i.chave);
       const cor = bloq ? '#4a5060' : (on ? '#22c55e' : '#6b7688');
       return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid #1a1d2e${bloq ? ';opacity:.5' : ''}">
@@ -145,10 +148,11 @@ function parRender() {
         <div style="flex:1">
           <div style="color:#e0e0e0;font-size:0.88rem;font-weight:600">${_parEsc(i.rot)}</div>
           <div style="color:#8892a0;font-size:0.76rem;margin-top:2px">${_parEsc(i.desc)}</div>
-          ${bloq ? `<div style="color:#a63;font-size:0.72rem;margin-top:3px">⤷ depende de "${_parEsc((PARAM_DEFS.flatMap(x => x.itens).find(x => x.chave === i.depende) || {}).rot || i.depende)}"</div>` : ''}
+          ${i.pendente ? `<div style="color:#a63;font-size:0.72rem;margin-top:3px">⚠ ainda nao aplicado no PDV — a trava vive no nucleo, nao na tela</div>` : ''}
+          ${(bloq && !i.pendente) ? `<div style="color:#a63;font-size:0.72rem;margin-top:3px">⤷ depende de "${_parEsc((PARAM_DEFS.flatMap(x => x.itens).find(x => x.chave === i.depende) || {}).rot || i.depende)}"</div>` : ''}
         </div>
         <div style="color:${bloq ? '#4a5060' : (on ? '#22c55e' : '#6b7688')};font-size:0.74rem;font-weight:700;min-width:64px;text-align:right;margin-top:4px">
-          ${bloq ? 'indisponível' : (on ? 'LIGADO' : 'desligado')}
+          ${i.pendente ? 'em obra' : (bloq ? 'indisponível' : (on ? 'LIGADO' : 'desligado'))}
         </div></div>`;
     }).join('');
     return `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:14px;margin-bottom:12px">
