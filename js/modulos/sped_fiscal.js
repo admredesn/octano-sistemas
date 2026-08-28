@@ -256,15 +256,39 @@ function spedFiscalMontar(d) {
   L.push(`|1010|N|N|${combys.length ? "S" : "N"}|N|N|N|N|N|N|N|N|N|N|`);
   if (!combys.length) A.push("Nenhum produto de tanque com código ANP — bloco 1300 vazio (confira o cadastro).");
 
+  // BICO -> TANQUE: a pista grava o BICO sempre, e o tanque_id só às vezes.
+  // No Antônio Carlos os 9.638 abastecimentos de julho/2026 vieram TODOS com
+  // tanque_id nulo: o 1320 (indexado por bico) saía certo e o 1300/1310
+  // (indexado por tanque) saía ZERADO — metade do bloco 1 em branco, com o
+  // arquivo parecendo íntegro. Resolver pelo bico fecha esse buraco sem
+  // depender de um campo que a pista nem sempre preenche.
+  // SO' BICO DESTE POSTO. oct_bicos guarda os bicos dos 4 postos e o NUMERO se
+  // repete entre eles (todo posto tem bico 1, 5, 6...). Indexar por numero sem
+  // filtrar deixava o bico 5 de um posto sobrescrever o do outro: as vendas
+  // iam para um tanque de OUTRA empresa e sumiam do 1300. No AC de julho/2026
+  // foram 15.440 L de diesel evaporados -- entrou 14.000 L e o livro dizia que
+  // nao se vendeu uma gota. Filtrar pelos tanques da empresa e' a trava certa:
+  // vale mesmo se empresa_id do bico estiver nulo.
+  const idsTanque = new Set((d.tanques || []).map(t => t.id));
+  const tanqueDoBico = new Map();
+  (d.bicos || []).forEach(b => {
+    if (b.numero != null && b.tanque_id && idsTanque.has(b.tanque_id)) {
+      tanqueDoBico.set(String(b.numero), b.tanque_id);
+    }
+  });
+
   // índices por dia
   const vendasDia = new Map();    // "tanqueId|dia" -> litros
   const vendasBico = new Map();   // "bico|dia" -> {vendas, aferi, encIni, encFim}
+  let semTanque = 0;
   (d.abastecimentos || []).forEach(a => {
     const dia = _sfDia(a.data_abast);
     const lit = Number(a.litros || 0);
     const ehAferi = String(a.tipo || "") === "afericao";
-    if (a.tanque_id && !ehAferi) {
-      const k = a.tanque_id + "|" + dia;
+    const tqId = a.tanque_id || (a.bico != null ? tanqueDoBico.get(String(a.bico)) : null);
+    if (!a.tanque_id && tqId) semTanque++;
+    if (tqId && !ehAferi) {
+      const k = tqId + "|" + dia;
       vendasDia.set(k, (vendasDia.get(k) || 0) + lit);
     }
     if (a.bico != null) {
@@ -308,13 +332,40 @@ function spedFiscalMontar(d) {
   }
   const diaAnterior = (dia) => { const x = new Date(dia + "T12:00:00"); x.setDate(x.getDate() - 1); return x.toISOString().slice(0, 10); };
 
+  if (semTanque > 0) {
+    A.push(semTanque + " abastecimento(s) sem tanque no registro — o tanque foi deduzido pelo BICO "
+           + "(oct_bicos). Confira o cadastro de bicos se algum volume parecer trocado de produto.");
+  }
   let semMedicao = 0;
   combys.forEach(g => {
-    // estoque de abertura do 1º dia: medição do dia anterior ao período
+    // ESTOQUE DE ABERTURA DO 1º DIA
+    // Ideal: a medição da sonda no dia anterior ao período. Quando ela não
+    // existe -- sonda instalada no meio do mês, como no Antônio Carlos, cuja
+    // primeira medição de julho/2026 é do dia 13 -- a abertura ficava ZERO e o
+    // estoque escritural saía NEGATIVO nos primeiros dias, o que o PVA rejeita.
+    // Aqui se RETROAGE da primeira medição real do período, desfazendo o que
+    // se moveu no meio: abertura = medição(D) + saídas(ini..D-1) - entradas(ini..D-1).
+    // É a mesma reconstrução que o contador faz à mão.
     const abertIni = new Map();   // tanqueNumero -> volume
     g.tanques.forEach(t => {
       const m = medicaoDia.get(t.numero + "|" + diaAnterior(dias[0]));
-      abertIni.set(t.numero, m ? m.v : null);
+      if (m) { abertIni.set(t.numero, m.v); return; }
+      let achou = null;
+      for (let i = 0; i < dias.length; i++) {
+        const mm = medicaoDia.get(t.numero + "|" + dias[i]);
+        if (mm) { achou = { v: mm.v, i: i }; break; }
+      }
+      if (!achou) { abertIni.set(t.numero, null); return; }
+      let volta = achou.v;
+      for (let i = 0; i <= achou.i; i++) {
+        volta += (vendasDia.get(t.id + "|" + dias[i]) || 0);
+        volta -= (entradasDia.get(t.numero + "|" + dias[i]) || 0);
+      }
+      abertIni.set(t.numero, Math.max(0, volta));
+      if (achou.i > 0) {
+        A.push("Tanque " + t.numero + ": sem medição até " + dias[achou.i]
+             + " — a abertura do período foi RECONSTITUÍDA a partir dela (confira com o contador).");
+      }
     });
     let abertProd = null;
     dias.forEach(dia => {
