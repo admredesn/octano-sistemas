@@ -136,6 +136,7 @@ function spedFiscalMontar(d) {
   const c0 = L.length;
   L.push("|C001|0|");
   let debitos = 0, creditos = 0;
+  const creditados = [];   // p/ o contador conferir item a item o que creditou
   let vSaidas = 0, vEntradas = 0, nSaidas = 0, nCancel = 0;
 
   // SAÍDAS: uma C100 por NFC-e; canceladas em forma curta (só identificação)
@@ -214,16 +215,32 @@ function spedFiscalMontar(d) {
       // ICMS destacado, e as outras onze com CST 61; a regra que vale para as
       // duas é a mesma: item com código ANP não credita.
       // Também não creditam os CST de ST/isento/não-tributado.
-      const semCredito = !!it.cod_anp || /^(10|30|40|41|50|60|61|90)$/.test(cst.slice(-2));
-      bcCapa += bc; icmsCapa += icms;
-      if (!semCredito) creditos += icms;
+      // CRÉDITO SÓ EM COMPRA PARA REVENDA. O CFOP do XML é o do FORNECEDOR e diz
+      // o que ELE fez; o direito a crédito depende do que o POSTO faz com o item,
+      // que o XML não sabe. No EFD real de julho/2026 o contador reclassificou os
+      // uniformes de 1101 para 1556 (uso e consumo, sem crédito) e os aditivos
+      // para CST 060 (ST). Uso e consumo NUNCA credita, então aqui só creditamos
+      // quando o CFOP convertido é de comercialização (x102) e o CST permite.
+      const cst2 = cst.slice(-2);
+      const revenda = /^[12]102$/.test(cfop);
+      const semCredito = !!it.cod_anp
+        || /^(10|30|40|41|50|60|61|90)$/.test(cst2)
+        || !revenda;
+      // o C170 declara o ICMS EFETIVAMENTE creditado: sem direito, vai zero --
+      // senão o documento diz uma coisa e a apuração do E110 diz outra.
+      const bcEf = semCredito ? 0 : bc;
+      const icmsEf = semCredito ? 0 : icms;
+      bcCapa += bcEf; icmsCapa += icmsEf;
+      creditos += icmsEf;
+      if (!semCredito) creditados.push(`${it.codigo || "?"} ${_sfTxt(it.descricao || "")}`.slice(0, 40)
+        + ` (R$ ${icms.toFixed(2)})`);
       // 37 campos, posição a posição do gabarito
-      L.push(`|C170|${i + 1}|${it.codigo || ""}||${_sfNum(it.quantidade, 3)}|${String(it.unidade || "UN").toUpperCase()}|${_sfNum(tot)}|0|0|${cst}|${cfop}||${_sfNum(bc)}|${_sfNum(aliq)}|${_sfNum(icms)}|0|0|0||||0|0|0||0|0||0|0||0|0||0|0|||`);
+      L.push(`|C170|${i + 1}|${it.codigo || ""}||${_sfNum(it.quantidade, 3)}|${String(it.unidade || "UN").toUpperCase()}|${_sfNum(tot)}|0|0|${cst}|${cfop}||${_sfNum(bcEf)}|${_sfNum(semCredito ? 0 : aliq)}|${_sfNum(icmsEf)}|0|0|0||||0|0|0||0|0||0|0||0|0||0|0|||`);
       const nTq = tqPorProduto.get(it.produto_id);
       if (nTq != null && it.cod_anp) L.push(`|C171|${nTq}|${_sfNum(it.quantidade, 3)}|`);
-      const k = cst + "|" + cfop + "|" + aliq;
-      const g = grupos.get(k) || { cst, cfop, aliq, vl: 0, bc: 0, icms: 0 };
-      g.vl += tot; g.bc += bc; g.icms += icms;
+      const k = cst + "|" + cfop + "|" + (semCredito ? 0 : aliq);
+      const g = grupos.get(k) || { cst, cfop, aliq: semCredito ? 0 : aliq, vl: 0, bc: 0, icms: 0 };
+      g.vl += tot; g.bc += bcEf; g.icms += icmsEf;
       grupos.set(k, g);
     });
     L[idxCapa] = L[idxCapa].replace("BCTMP", _sfNum(bcCapa)).replace("ICMSTMP", _sfNum(icmsCapa));
@@ -457,6 +474,11 @@ function spedFiscalMontar(d) {
   // destacado e dos documentos referenciados de CADA nota de compra — dado que
   // o Octano ainda não coleta do XML de entrada. Ficam para o contador
   // complementar no PVA (não afetam a apuração de saída, que é ST/monofásica).
+  if (creditados.length) {
+    A.push(`ICMS creditado em ${creditados.length} item(ns), R$ ${creditos.toFixed(2)} — `
+         + `CONFIRA COM O CONTADOR se todos são de revenda: ${creditados.join("; ")}. `
+         + `Item de uso e consumo não credita, e essa destinação o XML do fornecedor não informa.`);
+  }
   if ((d.entradas || []).length)
     A.push("Crédito de ICMS-ST das entradas (0400/0450/0460/0500, C110/C113/C195/C197) NÃO gerado — depende do ST destacado por nota; o contador complementa no PVA.");
   L.push(`|1990|${L.length - b1 + 1}|`);
