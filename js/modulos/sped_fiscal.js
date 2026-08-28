@@ -119,7 +119,10 @@ function spedFiscalMontar(d) {
   usados.forEach(p => { const u = String(p.unidade || "UN").toUpperCase(); if (!unidades.has(u)) unidades.set(u, u === "L" ? "LITRO" : (u === "UN" ? "UNIDADE" : u)); });
   unidades.forEach((desc, u) => L.push(`|0190|${u}|${desc}|`));
 
+  // guarda o que o 0200 DECLAROU: o 1370 (bico) precisa apontar para um destes
+  const itensDeclarados = new Set();
   usados.forEach((p, cod) => {
+    itensDeclarados.add(String(cod));
     const ncm = String(p.ncm || "").replace(/\D/g, "");
     L.push(`|0200|${cod}|${_sfTxt(p.nome)}|||${String(p.unidade || "UN").toUpperCase()}|00|${ncm}||${ncm.slice(0, 2)}||${_sfNum(p.aliq_icms || 0)}|${String(p.cest || "").replace(/\D/g, "")}|`);
     if (p.cod_anp) L.push(`|0206|${String(p.cod_anp).replace(/\D/g, "")}|`);
@@ -412,7 +415,18 @@ function spedFiscalMontar(d) {
   bombas.forEach(bm => {
     L.push(`|1350|${_sfTxt(bm.serie)}|${_sfTxt(bm.fabricante)}|${_sfTxt(bm.modelo)}|${bm.medicao || 1}|`);
     (bm.lacres || []).forEach(lc => L.push(`|1360|${_sfTxt(lc.numero)}|${_sfData(lc.data)}|`));
-    (bm.bicos || []).forEach(bi => L.push(`|1370|${bi.numero}|${bi.cod_item}|${bi.tanque}|`));
+    (bm.bicos || []).forEach(bi => {
+      // o COD_ITEM do 1370 tem de existir no 0200 -- o PVA cruza os dois.
+      // O sped_config do AC trazia os codigos do EFD antigo ("1","2","6") e o
+      // 0200 declara os do Octano ("01","0301","00514"): 6 bicos apontavam para
+      // item inexistente e o arquivo passava na contagem de campos mesmo assim.
+      if (bi.cod_item && !itensDeclarados.has(String(bi.cod_item))) {
+        A.push(`Bico ${bi.numero}: o 1370 aponta para o item "${bi.cod_item}", que NÃO está no 0200 `
+             + `(itens declarados: ${Array.from(itensDeclarados).join(", ")}). `
+             + `Corrija em Config. Fiscal — o PVA cruza os dois registros.`);
+      }
+      L.push(`|1370|${bi.numero}|${bi.cod_item}|${bi.tanque}|`);
+    });
   });
   if (combys.length && !bombas.length)
     A.push("Bombas/lacres (1350-1370) não cadastrados no sped_config — o gabarito do posto os informa; confirme com o contador se são exigidos.");

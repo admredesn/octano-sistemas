@@ -66,7 +66,16 @@ function _cfPendencias() {
       if (!(b.lacres || []).length) p.push('Bomba ' + (i + 1) + ': nenhum lacre (1360)');
       if (!(b.bicos || []).length) p.push('Bomba ' + (i + 1) + ': nenhum bico (1370)');
       (b.bicos || []).forEach(bi => {
-        if (!bi.cod_item) p.push('Bomba ' + (i + 1) + ', bico ' + bi.numero + ': produto não escolhido (1370)');
+        if (!bi.cod_item) {
+          p.push('Bomba ' + (i + 1) + ', bico ' + bi.numero + ': produto não escolhido (1370)');
+        } else if (!_cfProdutos.some(x => x.codigo === bi.cod_item)) {
+          // CODIGO ORFAO: o 1370 aponta para um item que o 0200 nao declara --
+          // o PVA rejeita. Aconteceu no Antonio Carlos, cujo sped_config veio do
+          // EFD antigo com os codigos daquele sistema ("1", "2", "6") enquanto o
+          // Octano passou a usar os seus ("01", "0301", "00514").
+          p.push('Bomba ' + (i + 1) + ', bico ' + bi.numero + ': código "' + bi.cod_item
+               + '" não existe no cadastro de produtos — o 1370 apontaria para item fora do 0200');
+        }
       });
     });
   }
@@ -140,7 +149,7 @@ async function cfSalvar() {
 }
 
 function _cfCampo(rot, caminho, valor, dica, largura) {
-  return `<div style="flex:${largura || 1};min-width:150px">
+  return `<div style="flex:${largura || 1};min-width:150px;display:flex;flex-direction:column;justify-content:flex-end">
     <label style="display:block;color:#8892a0;font-size:0.74rem;margin-bottom:3px">${_cfEsc(rot)}</label>
     <input value="${_cfEsc(valor)}" oninput="cfSet('${caminho}', this.value)"
       placeholder="${_cfEsc(dica || '')}"
@@ -165,14 +174,21 @@ function cfRender() {
       </div>`).join('') || '<div style="color:#a63;font-size:0.76rem;padding:4px 0">⚠ nenhum lacre — o 1360 sai vazio</div>';
 
     const bicos = (b.bicos || []).map((bi, j) => {
-      const opts = _cfProdutos.map(p =>
+      // o valor gravado entra na lista mesmo quando nao e' um produto conhecido:
+      // sem isto o select mostrava "— escolha —" e o codigo salvo ficava
+      // invisivel, dando a impressao de campo vazio num dado que existe
+      const orfao = bi.cod_item && !_cfProdutos.some(p => p.codigo === bi.cod_item);
+      const opts = (orfao
+          ? `<option value="${_cfEsc(bi.cod_item)}" selected>⚠ ${_cfEsc(bi.cod_item)} — não existe no cadastro</option>`
+          : '')
+        + _cfProdutos.map(p =>
         `<option value="${_cfEsc(p.codigo)}"${p.codigo === bi.cod_item ? ' selected' : ''}>${_cfEsc(p.codigo)} — ${_cfEsc(p.nome)}</option>`).join('');
       return `<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px">
         ${_cfCampo('Bico nº', `bombas.${i}.bicos.${j}.numero`, bi.numero, '', 1)}
         <div style="flex:3;min-width:180px">
           <label style="display:block;color:#8892a0;font-size:0.74rem;margin-bottom:3px">Produto (cód. do 0200)</label>
           <select onchange="cfBicoProduto(${i},${j},this.value)"
-            style="width:100%;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem">
+            style="width:100%;padding:7px 9px;border-radius:6px;border:1px solid ${orfao ? '#b45309' : '#2a2d3e'};background:#0f1117;color:${orfao ? '#fbbf24' : '#e0e0e0'};font-size:0.84rem">
             <option value="">— escolha —</option>${opts}
           </select>
         </div>
