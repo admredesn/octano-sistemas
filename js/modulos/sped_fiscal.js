@@ -249,7 +249,13 @@ function spedFiscalMontar(d) {
     const t = (d.tanques || []).find(x => x.id === p.tanque_id);
     if (!t) return;
     const g = porProd.get(p.codigo) || { produto: p, tanques: [] };
-    g.tanques.push(t);
+    // MESMO TANQUE SO' UMA VEZ. O cadastro repete o codigo do produto (no
+    // Florestal ha' dois "OB10", um ativo e um inativo, os DOIS no tanque 4) e
+    // sem esta trava o tanque entrava duas vezes no grupo: o 1300 somava o
+    // volume EM DOBRO e saiam dois 1310 iguais. O percentual do livro
+    // disfarcava -- entrada e saida dobravam juntas -- mas o volume declarado
+    // ficava com o dobro do que passou pelo tanque.
+    if (!g.tanques.some(x => x.id === t.id)) g.tanques.push(t);
     porProd.set(p.codigo, g);
   });
   porProd.forEach(g => combys.push(g));
