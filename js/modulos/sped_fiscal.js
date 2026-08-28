@@ -189,12 +189,34 @@ function spedFiscalMontar(d) {
     const idxCapa = L.length - 1;
     (n.itens || []).forEach((it, i) => {
       const cst = _sfCst(it);
-      const cfop = String(it.cfop || "1652").replace(/\D/g, "");
+      // CFOP DE ENTRADA. O XML traz o CFOP do FORNECEDOR, que é a saída DELE
+      // (5xxx/6xxx). Num documento de entrada o PVA exige 1xxx/2xxx/3xxx — o
+      // primeiro dígito é a origem da operação, não o código todo. Sem isto o
+      // C170 saía com 5102/5655 onde o EFD real do posto traz 1102/1652.
+      let cfop = String(it.cfop || "1652").replace(/\D/g, "");
+      if (/^[567]/.test(cfop)) {
+        // A família 565x NÃO converte dígito a dígito: na saída ela distingue o
+        // destino (industrialização/comercialização/consumidor) em 5654/5655/5656,
+        // e na entrada isso vira 1651/1652/1653. Traduzir "5655" para "1655"
+        // produzia um CFOP QUE NÃO EXISTE na tabela — o EFD real do posto traz
+        // 1652 nessas mesmas notas.
+        const par = { "654": "651", "655": "652", "656": "653" }[cfop.slice(1)];
+        cfop = String(Number(cfop[0]) - 4) + (par || cfop.slice(1));
+      }
       const aliq = Number(it.aliq_icms || 0);
       const tot = Number(it.valor_total || 0);
       const bc = aliq > 0 ? tot : 0;
       const icms = bc * aliq / 100;
-      bcCapa += bc; icmsCapa += icms; creditos += icms;
+      // COMBUSTÍVEL NÃO DÁ CRÉDITO ao posto revendedor: é monofásico/ST, o
+      // imposto já foi retido na origem. Creditar aqui inverteu a apuração de
+      // julho/2026 do Florestal -- R$ 2.096,70 de saldo CREDOR onde o EFD real
+      // acusa R$ 152,20 A RECOLHER. A nota 358897 (etanol) veio com CST 10 e
+      // ICMS destacado, e as outras onze com CST 61; a regra que vale para as
+      // duas é a mesma: item com código ANP não credita.
+      // Também não creditam os CST de ST/isento/não-tributado.
+      const semCredito = !!it.cod_anp || /^(10|30|40|41|50|60|61|90)$/.test(cst.slice(-2));
+      bcCapa += bc; icmsCapa += icms;
+      if (!semCredito) creditos += icms;
       // 37 campos, posição a posição do gabarito
       L.push(`|C170|${i + 1}|${it.codigo || ""}||${_sfNum(it.quantidade, 3)}|${String(it.unidade || "UN").toUpperCase()}|${_sfNum(tot)}|0|0|${cst}|${cfop}||${_sfNum(bc)}|${_sfNum(aliq)}|${_sfNum(icms)}|0|0|0||||0|0|0||0|0||0|0||0|0||0|0|||`);
       const nTq = tqPorProduto.get(it.produto_id);
