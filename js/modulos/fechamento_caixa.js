@@ -143,8 +143,11 @@ async function fcCarregarDados() {
     // vendas espelhadas do TecnoX -- sem paginar, os turnos do meio da lista
     // sumiam e a tela mostrava RECEBIMENTO ZERO num turno que tinha tudo
     // registrado (caso 02/08). As outras consultas grandes ja' usavam _fcTudo.
+    // ORDER OBRIGATORIO ao paginar: sem ordem estavel o Postgres nao garante
+    // que as paginas se encaixem -- linhas se repetem numa e somem na outra.
+    // Sem o order aqui, das 80 vendas do turno 1068 vinham 2.
     _fcTudo(() => sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status')
-      .eq('empresa_id', eid).in('turno_id', ids)),
+      .eq('empresa_id', eid).in('turno_id', ids).order('id')),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
     // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
