@@ -1288,7 +1288,11 @@ async function fcLancIncluir() {
         ? `<input type="hidden" id="fcm-forma" value="Nota a prazo">
            <input type="hidden" id="fcm-bandeira" value="">
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
-           <input id="fcm-cliente" class="fc-inp2 lg" style="width:100%" placeholder="nome do cliente">`
+           <input id="fcm-cliente" class="fc-inp2 lg" style="width:100%" autocomplete="off"
+                  placeholder="digite o nome para procurar no cadastro"
+                  oninput="_fcCliDigitou(this.value)">
+           <input type="hidden" id="fcm-cliente-id" value="">
+           <div id="fcm-cli-lista" style="max-height:170px;overflow:auto"></div>`
         : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
            ${formas.length === 1
              ? `<input type="hidden" id="fcm-forma" value="${fcEsc(formas[0])}">
@@ -1309,6 +1313,60 @@ async function fcLancIncluir() {
       </div>
     </div>`);
   window._fcModalVolta = true;   // fechar sem salvar volta pra conferência
+}
+
+// BUSCA DE CLIENTE (31/08): o nome ia solto e o título nascia sem cliente_id.
+// Procura no cadastro a cada 300 ms; escolher preenche nome E id.
+let _fcCliTimer = null;
+
+function _fcCliDigitou(v) {
+  const hid = document.getElementById('fcm-cliente-id');
+  if (hid) hid.value = '';        // mexeu no texto: a escolha anterior não vale mais
+  clearTimeout(_fcCliTimer);
+  _fcCliTimer = setTimeout(function () { _fcCliBuscar(v); }, 300);
+}
+
+async function _fcCliBuscar(termo) {
+  const el = document.getElementById('fcm-cli-lista');
+  if (!el) return;
+  const t = String(termo || '').trim();
+  if (t.length < 2) { el.innerHTML = ''; return; }
+  el.innerHTML = '<p style="color:#888;font-size:0.75rem;padding:4px 2px">procurando...</p>';
+  let achados = [];
+  try {
+    const lim = t.replace(/[,()*%"']/g, ' ').trim();
+    const r = await sb.from('oct_pessoas').select('id,nome,documento,aceita_nota_prazo')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
+      .ilike('nome', '*' + lim + '*').order('nome').limit(12);
+    achados = r.data || [];
+  } catch (e) {
+    el.innerHTML = '<p style="color:#f87171;font-size:0.75rem;padding:4px 2px">erro ao procurar</p>';
+    return;
+  }
+  if (!achados.length) {
+    el.innerHTML = '<p style="color:#f0b45c;font-size:0.75rem;padding:4px 2px">'
+      + 'ninguém com esse nome no cadastro — o título ficará com o nome digitado, sem vínculo.</p>';
+    return;
+  }
+  el.innerHTML = achados.map(function (p) {
+    const doc = String(p.documento || '').trim();
+    const naoAceita = p.aceita_nota_prazo === false
+      ? ' <span style="color:#f0b45c">· não aceita a prazo</span>' : '';
+    return '<div onclick="_fcCliEscolher(\'' + p.id + '\',this)" data-nome="' + fcEsc(p.nome)
+      + '" style="padding:5px 8px;border-bottom:1px solid #1a1d2e;cursor:pointer;font-size:0.8rem">'
+      + fcEsc(p.nome) + (doc ? ' <span style="color:#8892a0">· ' + fcEsc(doc) + '</span>' : '')
+      + naoAceita + '</div>';
+  }).join('');
+}
+
+function _fcCliEscolher(id, el) {
+  const inp = document.getElementById('fcm-cliente');
+  const hid = document.getElementById('fcm-cliente-id');
+  if (inp) inp.value = el.getAttribute('data-nome') || '';
+  if (hid) hid.value = id || '';
+  const lst = document.getElementById('fcm-cli-lista');
+  if (lst) lst.innerHTML = '<p style="color:#7ee2a0;font-size:0.75rem;padding:4px 2px">'
+    + '\u2714 cliente do cadastro</p>';
 }
 
 // rádio da pista com DESMARCAR: clicar de novo no selecionado limpa a escolha
@@ -1339,6 +1397,8 @@ async function fcLancIncluirSalvar(secao) {
   if (secao === 'prazo') {
     const cli = (document.getElementById('fcm-cliente') || {}).value || '';
     ajuste.cliente_nome = cli.trim() || null;
+    // id do cadastro quando veio da busca: é o que liga o título à pessoa no Faturar
+    ajuste.cliente_id = (document.getElementById('fcm-cliente-id') || {}).value || null;
     if (!ajuste.descricao && ajuste.cliente_nome) ajuste.descricao = ajuste.cliente_nome;
   }
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
