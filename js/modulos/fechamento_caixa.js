@@ -1170,7 +1170,24 @@ async function fcLancIncluir() {
   const secao = window._fcNodeAtual || 'dinheiro';
   // no balão de itens vendidos, incluir = lançar item esquecido (com produto do cadastro)
   if (secao === 'itens') { fcItemVendidoForm(); return; }
-  const formas = ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
+  // FORMA POR SEÇÃO: o balão só aceita a forma que ele soma. Sem isto dava para
+  // lançar "Dinheiro" dentro de Cartão + Pix -- e o valor entrava na conferência
+  // do dinheiro sem entrar no Total Recebimentos (falta fantasma de R$ 2.500 no
+  // turno 1110, achada pelo Ronan em 31/08).
+  const FORMAS_SECAO = {
+    cartao:       ['Crédito', 'Débito', 'Pix', 'Pix CNPJ'],
+    frota:        ['Crédito', 'Débito'],
+    dinheiro:     ['Dinheiro'],
+    cheque:       ['Cheque'],
+    troco_final:  ['Dinheiro'],
+    despesa:      ['Dinheiro'],
+    deposito:     ['Dinheiro'],
+    suprimento:   ['Dinheiro'],
+    receita:      ['Dinheiro', 'Pix', 'Cheque'],
+    titulos:      ['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Cheque'],
+  };
+  const formas = FORMAS_SECAO[secao]
+    || ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
 
   // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h)
   let livresHtml = '';
@@ -1245,12 +1262,17 @@ async function fcLancIncluir() {
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
            <input id="fcm-cliente" class="fc-inp2 lg" style="width:100%" placeholder="nome do cliente">`
         : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma</label>
-           <select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>
-           <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
-           <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
-             <option value="">(sem bandeira)</option>
-             ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
-           </select>`}
+           ${formas.length === 1
+             ? `<input type="hidden" id="fcm-forma" value="${fcEsc(formas[0])}">
+                <div class="fc-inp2" style="width:200px;color:#8892a0">${fcEsc(formas[0])}</div>`
+             : `<select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>`}
+           ${(secao === 'cartao' || secao === 'frota')
+             ? `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
+                <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
+                  <option value="">(sem bandeira)</option>
+                  ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
+                </select>`
+             : `<input type="hidden" id="fcm-bandeira" value="">`}`}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
