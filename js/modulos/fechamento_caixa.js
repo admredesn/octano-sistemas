@@ -1189,9 +1189,11 @@ async function fcLancIncluir() {
   const formas = FORMAS_SECAO[secao]
     || ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
 
-  // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h)
+  // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h).
+  // SÓ na nota a prazo (31/08): é lá que se amarra o abastecimento ao título;
+  // nas outras seções a lista atrapalhava e ainda pagava duas consultas.
   let livresHtml = '';
-  try {
+  if (secao === 'prazo') try {
     const cache = window._fcCache || {};
     const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
     const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
@@ -1889,8 +1891,9 @@ async function fcNodeDetalhe(tipo) {
     });
 
     // 3) lançamentos manuais deste grupo — na MESMA sequência
-    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao) ||
-      grupos.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
+    // SÓ a seção onde foi lançado. Casar pelo grupo da FORMA trazia a despesa
+    // paga em dinheiro para dentro do balão Dinheiro/Sangria (31/08).
+    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao));
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
@@ -2020,8 +2023,7 @@ async function fcNodeDetalhe(tipo) {
   if (!manuaisMesclados) {
     const gruposNode = cfg.grupos || [tipo];
     const mans = (((cache.porTurno || {})[turnoId] || {}).manuais || [])
-      .filter(m => m.secao === tipo || gruposNode.includes(m.secao) ||
-                   gruposNode.includes(typeof _fcGrupoNome === 'function' ? _fcGrupoNome(m.forma_nome, '') : ''));
+      .filter(m => m.secao === tipo || gruposNode.includes(m.secao));
     if (mans.length) {
       let totM = 0;
       const linM = mans.map(m => {
