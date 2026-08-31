@@ -205,6 +205,30 @@ async function _comBuscar() {
       if (data.length < 1000) break;
     } catch (e) { break; }
   }
+  // ITEM VENDIDO LANÇADO À MÃO no fechamento de caixa. Ele não passa pela fila
+  // de transmissão (é um acerto do caixa, não uma venda capturada na pista),
+  // então ficava FORA da comissão -- justamente o caso em que o frentista
+  // vendeu, esqueceu de registrar, e alguém lançou depois por ele.
+  try {
+    const { data: manuais } = await sb.from('oct_fc_lancamentos')
+      .select('ajuste,criado_em')
+      .eq('empresa_id', eid).eq('ref_tipo', 'manual')
+      .gte('criado_em', _comDe).lte('criado_em', _comAte + 'T23:59:59')
+      .limit(2000);
+    (manuais || []).forEach(m => {
+      const a2 = m.ajuste || {};
+      if (!a2.item_vendido || !a2.vendedor) return;
+      linhas.push({
+        vendedor: a2.vendedor,
+        descricao: a2.descricao || 'item lançado manualmente',
+        litros: 0,
+        valor: Number(a2.valor || 0),
+        desconto: 0, acrescimo: 0,
+        criado_em: m.criado_em, ocorrido_em: m.criado_em,
+        status: 'fila', marca: 'MANUAL',
+      });
+    });
+  } catch (e) { /* tabela/coluna ausente: segue só com a fila */ }
   _comDados = linhas;
   _comAberto = null;
   _comRenderTabela();

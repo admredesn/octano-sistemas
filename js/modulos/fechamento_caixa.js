@@ -2427,6 +2427,24 @@ async function fcItemVendidoForm() {
     prods = r.data || [];
   } catch (e) {}
   window._fcProdsIV = prods;
+  // VENDEDORES: a lista sai de quem REALMENTE vendeu (oct_fila_transmissao),
+  // não do cadastro de pessoas. Dois motivos: a comissão casa o vendedor pelo
+  // NOME, então tem de ser exatamente a mesma string que a pista grava
+  // ("FULANO (POSTO)"); e o cadastro de funcionário está poluído de
+  // fornecedores (BANCO INTER, distribuidoras) que nunca venderam nada.
+  let vends = [];
+  try {
+    const de = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+    const r2 = await sb.from('oct_fila_transmissao').select('vendedor')
+      .eq('empresa_id', window._fcEmpresaId).not('vendedor', 'is', null)
+      .gte('criado_em', de).limit(4000);
+    const vistos = new Set();
+    (r2.data || []).forEach(x => {
+      const v = String(x.vendedor || '').trim();
+      if (v && !vistos.has(v)) { vistos.add(v); vends.push(v); }
+    });
+    vends.sort((x, y) => x.localeCompare(y, 'pt-BR'));
+  } catch (e) {}
   fcModal('➕ Lançar item vendido', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">Produto que o frentista vendeu e esqueceu de registrar. Entra como VENDA e como RECEBIMENTO da forma escolhida (auditável como manual).</p>
@@ -2444,6 +2462,14 @@ async function fcItemVendidoForm() {
           <select id="fciv-forma" class="fc-inp2" style="width:170px">
             ${['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Cartão Frota', 'Nota a prazo'].map(f => `<option>${f}</option>`).join('')}
           </select></div>
+      </div>
+      <div style="margin-top:8px">
+        <label style="display:block;color:#9aa;font-size:0.75rem">Vendedor * <span style="color:#666">(conta para a comissão)</span></label>
+        <select id="fciv-vend" class="fc-inp2" style="width:100%">
+          <option value="">— escolha o vendedor —</option>
+          ${vends.map(v => `<option value="${fcEsc(v)}">${fcEsc(v)}</option>`).join('')}
+        </select>
+        ${vends.length ? '' : '<div style="color:#a63;font-size:0.72rem;margin-top:3px">⚠ nenhum vendedor encontrado nos últimos 120 dias — o item entra sem comissão</div>'}
       </div>
       <button class="fc-btn azul" style="width:100%;margin-top:14px" onclick="fcItemVendidoSalvar()">💾 Lançar</button>
       <div id="fciv-msg" style="margin-top:8px;font-size:0.78rem;color:#f87171"></div>
@@ -2463,16 +2489,24 @@ async function fcItemVendidoSalvar() {
   const qtd = parseFloat(document.getElementById('fciv-qtd').value) || 1;
   const valor = parseFloat(document.getElementById('fciv-valor').value);
   const forma = document.getElementById('fciv-forma').value;
+  const vendEl = document.getElementById('fciv-vend');
+  const vendedor = vendEl ? String(vendEl.value || '').trim() : '';
   const msg = document.getElementById('fciv-msg');
   if (!sel.value) { msg.textContent = 'Escolha o produto.'; return; }
   if (isNaN(valor) || valor <= 0) { msg.textContent = 'Informe o valor.'; return; }
+  // sem vendedor a venda entraria em "(sem vendedor)" na comissão e ninguém
+  // receberia por ela -- que é justamente o que este lançamento quer consertar
+  if (vendEl && vendEl.options.length > 1 && !vendedor) {
+    msg.textContent = 'Escolha o vendedor — é ele quem recebe a comissão.'; return;
+  }
   const secao = _fcGrupoNome(forma, '');
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
   const { error } = await sb.from('oct_fc_lancamentos').insert({
     empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
     ref_tipo: 'manual', ref_id: refId, conferido: false,
     ajuste: { manual: true, item_vendido: true, secao, valor, qtd,
-              forma_nome: forma, descricao: nome, produto_id: sel.value },
+              forma_nome: forma, descricao: nome, produto_id: sel.value,
+              vendedor: vendedor || null },
   });
   if (error) { msg.textContent = 'Erro: ' + error.message; return; }
   _fcToast('✔ Item vendido lançado');
