@@ -138,17 +138,22 @@ async function fcCarregarDados() {
   // Em 25/08 a consulta de notas a prazo entrou ANTES da pista e o destructuring
   // não acompanhou: `pRes` passou a receber as notas e a VENDA DE COMBUSTÍVEL do
   // Florestal foi a zero. Ao mexer nesta lista, conferir os dois lados.
-  const [vRes, cRes, fRes, rRes, vlRes, tRes, npRes, pRes] = await Promise.all([
+  const [vRes, cRes, aggRes, fRes, rRes, vlRes, tRes, npRes, pRes] = await Promise.all([
     // PAGINADO: o PostgREST corta em 1000 linhas. Um mes do Florestal tem 3.851
     // vendas espelhadas do TecnoX -- sem paginar, os turnos do meio da lista
     // sumiam e a tela mostrava RECEBIMENTO ZERO num turno que tinha tudo
     // registrado (caso 02/08). As outras consultas grandes ja' usavam _fcTudo.
-    // ORDER OBRIGATORIO ao paginar: sem ordem estavel o Postgres nao garante
-    // que as paginas se encaixem -- linhas se repetem numa e somem na outra.
-    // Sem o order aqui, das 80 vendas do turno 1068 vinham 2.
-    _fcTudo(() => sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status')
+    // SEM os itens: eles pesam 1,3 MB no mes e a tela travava em "Carregando
+    // turnos...". O total por turno (combustivel x produto) vem agregado da
+    // view oct_v_turno_venda; o JSON so' e' aberto no turno que o operador
+    // abre. ORDER obrigatorio ao paginar -- sem ordem estavel as paginas nao
+    // se encaixam e linhas somem (das 80 vendas do turno vinham 2).
+    _fcTudo(() => sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,status')
       .eq('empresa_id', eid).in('turno_id', ids).order('id')),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
+    // venda por turno ja' somada no banco (59 linhas em vez de 3.808 vendas)
+    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod')
+      .eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
     // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
     // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
@@ -334,19 +339,8 @@ async function fcCarregarDados() {
     // venda espelhada do TecnoX não é cupom emitido pelo Octano: entra pelos
     // pagamentos (abaixo), mas não conta como cupom nem soma itens (vazios).
     if (String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
-    const ehTecnox = String(v.status || '').toLowerCase() === 'tecnox';
-    (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
-      // combustível só soma aqui no turno ESPELHADO (nele a pista foi ignorada);
-      // nos demais ele já veio da pista, que é a fonte imutável.
-      const ehComb = it.tipo === 'abastecimento';
-      if (ehComb && !ehTecnox) return;
-      const val = (it.total != null)
-        ? Number(it.total)
-        : Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
-      if (ehComb) { t.venda_comb += val; t.litros_comb += Number(it.qtd || 0); }
-      else { t.venda_prod += val; }
-      t.venda_total += val;
-    });
+    // os ITENS não vêm mais nesta consulta (pesavam 1,3 MB); o total por turno
+    // entra pela view, logo abaixo deste laço.
     (Array.isArray(v.pagamentos) ? v.pagamentos : []).forEach(p => {
       // RECLASSIFICAÇÃO pelo ✎ (18/08): o ajuste de forma numa venda TRANSMITIDA
       // não muda a nota (fiscal já emitido), mas MUDA o grupo no fechamento —
@@ -357,6 +351,18 @@ async function fcCarregarDados() {
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
       t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
     });
+  });
+  // VENDA DO TURNO ESPELHADO vem da view (soma dos itens do cupom, feita no
+  // banco). Nos turnos onde o PDV do Octano opera, a venda continua vindo da
+  // PISTA -- por isso só se aplica onde há venda 'tecnox'.
+  ((aggRes && aggRes.data) || []).forEach(g => {
+    const t = porTurno[g.turno_id]; if (!t) return;
+    if (!turnosTecnox.has(g.turno_id)) return;
+    const comb = Number(g.venda_comb || 0), prod = Number(g.venda_prod || 0);
+    t.venda_comb += comb;
+    t.litros_comb += Number(g.litros_comb || 0);
+    t.venda_prod += prod;
+    t.venda_total += comb + prod;
   });
   (cRes.data || []).forEach(m => {
     if (m._excluido) return;
