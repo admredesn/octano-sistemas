@@ -1249,6 +1249,32 @@ async function fcLancIncluir() {
     }
   } catch (e) { livresHtml = ''; }
 
+  // BANDEIRA DA FROTA: as operadoras vêm do cadastro (Formas de Pagamento >
+  // classificação "Cartão Frota"). A lista de cartão comum (Visa/Master/Elo)
+  // não serve aqui — pedido Ronan 31/08.
+  let bandeiras = ['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'];
+  let avisoBand = '';
+  if (secao === 'frota') {
+    let ops = [];
+    try {
+      const r = await sb.from('oct_formas_pagamento').select('nome')
+        .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
+        .eq('classificacao', 'cartao_frota').order('ordem');
+      // a forma genérica "CARTAO FROTA" não é operadora, é o guarda-chuva
+      ops = (r.data || []).map(x => String(x.nome || '').trim())
+        .filter(nm => nm && !/^cart[aã]o\s*frota$/i.test(nm));
+    } catch (e) { /* sem cadastro: cai no padrão abaixo */ }
+    if (ops.length) {
+      bandeiras = ops;
+    } else {
+      bandeiras = ['Ticket Log', 'ValeCard', 'Prime', 'FitCard', 'Goodcard',
+                   'Sem Parar', 'WEX / Link', 'Abastece Aí'];
+      avisoBand = '<p style="color:#f0b45c;font-size:0.72rem;margin:4px 0 0">'
+        + 'Nenhuma operadora de frota cadastrada — cadastre em <b>Formas de Pagamento</b> '
+        + '(classificação "Cartão Frota") para esta lista virar a sua.</p>';
+    }
+  }
+
   fcModal('➕ Incluir lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">Lançamento manual na seção <b>${fcEsc(secao)}</b> — entra nas somas do fechamento (auditável como manual).</p>
@@ -1269,11 +1295,11 @@ async function fcLancIncluir() {
                 <div class="fc-inp2" style="width:200px;color:#8892a0">${fcEsc(formas[0])}</div>`
              : `<select id="fcm-forma" class="fc-inp2" style="width:200px">${formas.map(f => `<option>${f}</option>`).join('')}</select>`}
            ${(secao === 'cartao' || secao === 'frota')
-             ? `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
+             ? `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">${secao === 'frota' ? 'Operadora' : 'Bandeira'}</label>
                 <select id="fcm-bandeira" class="fc-inp2" style="width:200px">
-                  <option value="">(sem bandeira)</option>
-                  ${['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'].map(b => `<option value="${b}">${b}</option>`).join('')}
-                </select>`
+                  <option value="">${secao === 'frota' ? '(sem operadora)' : '(sem bandeira)'}</option>
+                  ${bandeiras.map(b => `<option value="${fcEsc(b)}">${fcEsc(b)}</option>`).join('')}
+                </select>${avisoBand}`
              : `<input type="hidden" id="fcm-bandeira" value="">`}`}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
