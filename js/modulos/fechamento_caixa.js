@@ -2090,16 +2090,26 @@ async function fcTrocoSalvar(campo) {
   await fcRecarregar(window._fcNodeAtual);
 }
 
+// PESSOA FISICA so'. Cadastro com CNPJ (ou razao social de empresa) marcado
+// como funcionario por engano nao pode receber vale de diferenca de caixa --
+// o Florestal tinha 5 fornecedores assim na lista.
+function _fcEhGente(p) {
+  const dig = String(p.documento || '').replace(/\D/g, '');
+  if (dig.length === 14) return false;                       // CNPJ
+  return !/\b(LTDA|S\.?A\.?|ME|EIRELI|EPP|MEI|INSTITUICAO|DISTRIBUIDORA|BANCO)\b/i
+            .test(String(p.nome || ''));
+}
+
 // lança a falta (vale: pessoa deve) ou sobra (haver) para o responsável escolhido
 async function fcDifResponsavel(dif) {
   const cache = window._fcCache || {};
   const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
   let pessoas = [];
   try {
-    const r = await sb.from('oct_pessoas').select('id,nome')
+    const r = await sb.from('oct_pessoas').select('id,nome,documento')
       .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
       .contains('classificacoes', ['funcionario']).order('nome');
-    pessoas = r.data || [];
+    pessoas = (r.data || []).filter(_fcEhGente);
   } catch (e) {}
   if (!pessoas.length) { alert('Nenhum funcionário ativo no cadastro de Pessoas.'); return; }
   fcModal('👷 Lançar diferença para o responsável', `
@@ -2889,9 +2899,13 @@ async function _fcModalResponsavel(turnoId, dif) {
   // funcionários cadastrados: é a eles que o vale pode ser lançado
   let pessoas = [];
   try {
-    const r = await sb.from('oct_pessoas').select('id,nome')
-      .eq('empresa_id', window._fcEmpresaId).eq('tipo', 'funcionario').eq('ativo', true);
-    pessoas = r.data || [];
+    // CLASSIFICACOES, nao `tipo`: o frentista costuma ser tipo='cliente'
+    // (compra fiado aqui) com 'funcionario' na classificacao. Mesmo criterio de
+    // fcDifResponsavel.
+    const r = await sb.from('oct_pessoas').select('id,nome,documento')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
+      .contains('classificacoes', ['funcionario']).order('nome');
+    pessoas = (r.data || []).filter(_fcEhGente);
   } catch (e) { /* segue sem cadastro: dá para registrar o nome mesmo assim */ }
   window._fcRespPessoas = pessoas;
 
