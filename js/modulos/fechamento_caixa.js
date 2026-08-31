@@ -2215,6 +2215,68 @@ function fcNodeMov(tipo) {
       : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
   }
 
+  if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales') {
+    let vs = d.vales_lst || [];
+    if (tipo === 'vale_haver') vs = vs.filter(v => Number(v.valor || 0) >= 0);
+    else if (tipo === 'vale_motorista') vs = vs.filter(v => Number(v.valor || 0) < 0);
+    const linhas = vs.map(v => {
+      const val = Number(v.valor || 0);
+      return `<tr><td class="fc-td">${_fcHoraLocal(v.criado_em)}</td>
+        <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
+        <td class="fc-td">${_VALE_ROT[v.tipo] || fcEsc(v.tipo) || '—'}</td>
+        <td class="fc-td">${fcEsc(v.descricao) || ''}</td>
+        <td class="fc-td">${fcEsc(v.operador) || '—'}</td>
+        <td class="fc-td fc-r" style="color:${val >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(val)}</td></tr>`;
+    });
+    const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
+    const tit = tipo === 'vale_haver' ? '🤝 Haver (o posto deve)' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
+    return fcModal(tit, vs.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
+         <table class="fc-grid"><thead><tr><th>Hora</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Saldo do turno</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
+      : '<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>');
+  }
+
+  if (tipo === 'receb_ext') {
+    const rs = d.receb_ext || [];
+    const linhas = rs.map(r => `<tr><td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
+      <td class="fc-td">${fcEsc(r.origem) || '—'}</td>
+      <td class="fc-td">${fcEsc(r.forma) || '—'}${r.bandeira ? ' ' + fcEsc(r.bandeira) : ''}</td>
+      <td class="fc-td">${r.parcelas ? fcEsc(r.parcelas) + 'x' : ''}</td>
+      <td class="fc-td">${r.conciliado ? '✓' : '—'}</td>
+      <td class="fc-td fc-r">${fcMoney(r.valor)}</td></tr>`);
+    const tot = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
+    return fcModal('💳 Recebimentos (maquininha / cofre / Pix)', rs.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Tudo que entrou pela maquininha, cofre e Pix no período do turno (EDI/cofre). Já casa com os cupons/fila — aqui é a conferência bruta, casado ou não.</p>
+         <div style="display:flex;gap:14px;padding:4px 10px;color:#9fb0c4;font-size:0.78rem">
+           <span>Cartão: <b>${fcMoney(d.receb_ext_cartao)}</b></span>
+           <span>Pix: <b>${fcMoney(d.receb_ext_pix)}</b></span>
+           <span>Cofre/dinheiro: <b>${fcMoney(d.receb_ext_cofre)}</b></span></div>
+         <table class="fc-grid"><thead><tr><th>Hora</th><th>Origem</th><th>Forma</th><th>Parc.</th><th>Casado</th><th>Valor</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
+      : '<p style="padding:24px;color:#777">Nenhum recebimento de maquininha/cofre no período.</p>');
+  }
+
+  // MOVIMENTAÇÃO COMPLETA — ledger único de tudo do turno, em ordem de horário
+  if (tipo === 'movimentacao') {
+    const ev = [];
+    (d.sangrias_lst || []).forEach(s => ev.push([s.recebido_em, '💰 Sangria', 'retirada de dinheiro', -Number(s.valor || 0)]));
+    (d.receb_ext || []).forEach(r => ev.push([r.recebido_em, '💳 Recebimento', (r.origem || '') + ' ' + (r.forma || ''), Number(r.valor || 0)]));
+    (d.vales_lst || []).forEach(v => ev.push([v.criado_em, (Number(v.valor || 0) >= 0 ? '🤝 Haver' : '👷 Vale'), (v.pessoa_nome || '') + ' · ' + (_VALE_ROT[v.tipo] || v.tipo || ''), Number(v.valor || 0)]));
+    (d.fila_itens || []).forEach(f => ev.push([f.atualizado_em, '⏳ Fila NFC-e', (f.descricao || '') + ' (bico ' + (f.bico ?? '?') + ')', Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0)]));
+    ev.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || '')));
+    const linhas = ev.map(e => `<tr><td class="fc-td">${_fcHora(e[0])}</td>
+      <td class="fc-td">${e[1]}</td><td class="fc-td">${fcEsc(e[2])}</td>
+      <td class="fc-td fc-r" style="color:${e[3] >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(e[3])}</td></tr>`);
+    return fcModal('🧾 Movimentação completa do turno', ev.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Todo movimento do PDV neste turno, em ordem de horário: sangrias, recebimentos de maquininha/cofre, vales/haver e a fila de NFC-e. Vendas fiscais estão em "Cupons Fiscais".</p>
+         <table class="fc-grid"><thead><tr><th>Hora</th><th>Movimento</th><th>Detalhe</th><th>Valor</th></tr></thead>
+         <tbody>${linhas.join('')}</tbody></table>`
+      : '<p style="padding:24px;color:#777">Sem movimentação registrada além dos cupons neste turno.</p>');
+  }
+}
+
+
 
 // ---------- BAIXA DE NOTA A PRAZO (31/08) ----------
 // A tela de Titulos Recebidos so' mostrava o que JA' tinha sido baixado; nao
@@ -2382,67 +2444,6 @@ async function fcTitBaixar() {
   }
   _fcToast('\u2714 ' + ids.length + ' nota(s) baixada(s) \u2014 ' + fcMoney(liquido));
   await fcRecarregar('titulos');
-}
-
-  if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales') {
-    let vs = d.vales_lst || [];
-    if (tipo === 'vale_haver') vs = vs.filter(v => Number(v.valor || 0) >= 0);
-    else if (tipo === 'vale_motorista') vs = vs.filter(v => Number(v.valor || 0) < 0);
-    const linhas = vs.map(v => {
-      const val = Number(v.valor || 0);
-      return `<tr><td class="fc-td">${_fcHoraLocal(v.criado_em)}</td>
-        <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
-        <td class="fc-td">${_VALE_ROT[v.tipo] || fcEsc(v.tipo) || '—'}</td>
-        <td class="fc-td">${fcEsc(v.descricao) || ''}</td>
-        <td class="fc-td">${fcEsc(v.operador) || '—'}</td>
-        <td class="fc-td fc-r" style="color:${val >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(val)}</td></tr>`;
-    });
-    const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
-    const tit = tipo === 'vale_haver' ? '🤝 Haver (o posto deve)' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
-    return fcModal(tit, vs.length
-      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
-         <table class="fc-grid"><thead><tr><th>Hora</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Saldo do turno</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
-      : '<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>');
-  }
-
-  if (tipo === 'receb_ext') {
-    const rs = d.receb_ext || [];
-    const linhas = rs.map(r => `<tr><td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
-      <td class="fc-td">${fcEsc(r.origem) || '—'}</td>
-      <td class="fc-td">${fcEsc(r.forma) || '—'}${r.bandeira ? ' ' + fcEsc(r.bandeira) : ''}</td>
-      <td class="fc-td">${r.parcelas ? fcEsc(r.parcelas) + 'x' : ''}</td>
-      <td class="fc-td">${r.conciliado ? '✓' : '—'}</td>
-      <td class="fc-td fc-r">${fcMoney(r.valor)}</td></tr>`);
-    const tot = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
-    return fcModal('💳 Recebimentos (maquininha / cofre / Pix)', rs.length
-      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Tudo que entrou pela maquininha, cofre e Pix no período do turno (EDI/cofre). Já casa com os cupons/fila — aqui é a conferência bruta, casado ou não.</p>
-         <div style="display:flex;gap:14px;padding:4px 10px;color:#9fb0c4;font-size:0.78rem">
-           <span>Cartão: <b>${fcMoney(d.receb_ext_cartao)}</b></span>
-           <span>Pix: <b>${fcMoney(d.receb_ext_pix)}</b></span>
-           <span>Cofre/dinheiro: <b>${fcMoney(d.receb_ext_cofre)}</b></span></div>
-         <table class="fc-grid"><thead><tr><th>Hora</th><th>Origem</th><th>Forma</th><th>Parc.</th><th>Casado</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
-      : '<p style="padding:24px;color:#777">Nenhum recebimento de maquininha/cofre no período.</p>');
-  }
-
-  // MOVIMENTAÇÃO COMPLETA — ledger único de tudo do turno, em ordem de horário
-  if (tipo === 'movimentacao') {
-    const ev = [];
-    (d.sangrias_lst || []).forEach(s => ev.push([s.recebido_em, '💰 Sangria', 'retirada de dinheiro', -Number(s.valor || 0)]));
-    (d.receb_ext || []).forEach(r => ev.push([r.recebido_em, '💳 Recebimento', (r.origem || '') + ' ' + (r.forma || ''), Number(r.valor || 0)]));
-    (d.vales_lst || []).forEach(v => ev.push([v.criado_em, (Number(v.valor || 0) >= 0 ? '🤝 Haver' : '👷 Vale'), (v.pessoa_nome || '') + ' · ' + (_VALE_ROT[v.tipo] || v.tipo || ''), Number(v.valor || 0)]));
-    (d.fila_itens || []).forEach(f => ev.push([f.atualizado_em, '⏳ Fila NFC-e', (f.descricao || '') + ' (bico ' + (f.bico ?? '?') + ')', Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0)]));
-    ev.sort((a, b) => String(a[0] || '').localeCompare(String(b[0] || '')));
-    const linhas = ev.map(e => `<tr><td class="fc-td">${_fcHora(e[0])}</td>
-      <td class="fc-td">${e[1]}</td><td class="fc-td">${fcEsc(e[2])}</td>
-      <td class="fc-td fc-r" style="color:${e[3] >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(e[3])}</td></tr>`);
-    return fcModal('🧾 Movimentação completa do turno', ev.length
-      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Todo movimento do PDV neste turno, em ordem de horário: sangrias, recebimentos de maquininha/cofre, vales/haver e a fila de NFC-e. Vendas fiscais estão em "Cupons Fiscais".</p>
-         <table class="fc-grid"><thead><tr><th>Hora</th><th>Movimento</th><th>Detalhe</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}</tbody></table>`
-      : '<p style="padding:24px;color:#777">Sem movimentação registrada além dos cupons neste turno.</p>');
-  }
 }
 
 // CUPONS (15/08 — pedido Ronan): TODAS as vendas do turno — fila de transmissão
