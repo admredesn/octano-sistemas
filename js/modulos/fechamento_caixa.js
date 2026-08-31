@@ -2477,6 +2477,8 @@ function _fcTitCasca() {
     + '</select></div>'
     + '<p id="fctit-status" style="color:#888;font-size:0.75rem;margin:6px 0 0"></p></div>'
     + '<div id="fctit-lista" style="max-height:340px;overflow:auto"></div>'
+    + '<div id="fctit-soma" style="padding:8px 12px;background:#0f1520;border-top:1px solid #2a3a4a;'
+    + 'font-size:0.85rem;color:#b8c4d0">nenhuma nota selecionada</div>'
     + '<div style="padding:12px;border-top:1px solid #2a2d3e;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'
     + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Forma</label>'
     + '<select id="fctit-forma" class="fc-inp2" style="width:150px">'
@@ -2484,13 +2486,31 @@ function _fcTitCasca() {
         .map(function (x) { return '<option>' + x + '</option>'; }).join('')
     + '</select></div>'
     + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Juros (R$)</label>'
-    + '<input id="fctit-juros" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"></div>'
+    + '<input id="fctit-juros" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"'
+    + ' oninput="_fcTitSoma()"></div>'
     + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Desconto (R$)</label>'
-    + '<input id="fctit-desc" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"></div>'
+    + '<input id="fctit-desc" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"'
+    + ' oninput="_fcTitSoma()"></div>'
     + '<button class="fc-btn azul" style="flex:1;min-width:150px" onclick="fcTitBaixar()">\uD83D\uDCBE Dar baixa</button>'
     + '</div><div id="fctit-msg" style="padding:0 12px 12px;font-size:0.78rem;color:#f87171"></div>');
   const inp = document.getElementById('fctit-busca');
   if (inp) inp.focus();
+}
+
+// TOTAL DO QUE ESTÁ MARCADO (31/08): o operador precisa bater com o dinheiro
+// que o cliente trouxe antes de dar a baixa.
+function _fcTitSoma() {
+  const el = document.getElementById('fctit-soma');
+  if (!el) return;
+  const cks = Array.prototype.slice.call(document.querySelectorAll('.fctit-ck:checked'));
+  const soma = cks.reduce(function (t, c) { return t + Number(c.dataset.valor || 0); }, 0);
+  const j = parseFloat((document.getElementById('fctit-juros') || {}).value) || 0;
+  const d = parseFloat((document.getElementById('fctit-desc') || {}).value) || 0;
+  const liq = Math.round((soma + j - d) * 100) / 100;
+  if (!cks.length) { el.innerHTML = 'nenhuma nota selecionada'; return; }
+  el.innerHTML = '<b>' + cks.length + '</b> nota(s) selecionada(s) \u2014 soma <b style="color:#7ee2a0">'
+    + fcMoney(soma) + '</b>'
+    + ((j || d) ? ' &nbsp;·&nbsp; com juros/desconto: <b style="color:#f0b45c">' + fcMoney(liq) + '</b>' : '');
 }
 
 function _fcTitPaga(n) {
@@ -2523,7 +2543,7 @@ function _fcTitRender() {
       const vMostrar = pg ? Number(n.valor_original || 0) : Number(n.valor || 0);
       return '<tr' + (pg ? ' style="opacity:.65"' : '') + '>'
         + '<td class="fc-td" style="width:26px">'
-        + (pg ? '\u2714' : '<input type="checkbox" class="fctit-ck" value="' + n.id
+        + (pg ? '\u2714' : '<input type="checkbox" class="fctit-ck" onchange="_fcTitSoma()" value="' + n.id
                 + '" data-valor="' + Number(n.valor || 0) + '">') + '</td>'
         + '<td class="fc-td">' + _fcData(n.registrado_em) + '</td>'
         + '<td class="fc-td">' + fcEsc(n.numero_nfe || '\u2014') + '</td>'
@@ -2542,6 +2562,7 @@ function _fcTitRender() {
     + '</tbody></table>';
   const rot = _fcTitSit === 'pago' ? 'j\u00e1 baixada(s)'
             : (_fcTitSit === 'todos' ? 'nota(s)' : 'em aberto');
+  _fcTitSoma();   // a lista mudou: a seleção some junto
   const st = document.getElementById('fctit-status');
   if (st) st.textContent = (_fcTitFiltro
     ? (lst.length + ' de ' + _fcTitTotal + ' ' + rot + ' que casam com "' + _fcTitFiltro + '"'
