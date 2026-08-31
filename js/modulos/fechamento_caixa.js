@@ -139,7 +139,12 @@ async function fcCarregarDados() {
   // não acompanhou: `pRes` passou a receber as notas e a VENDA DE COMBUSTÍVEL do
   // Florestal foi a zero. Ao mexer nesta lista, conferir os dois lados.
   const [vRes, cRes, fRes, rRes, vlRes, tRes, npRes, pRes] = await Promise.all([
-    sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status').eq('empresa_id', eid).in('turno_id', ids),
+    // PAGINADO: o PostgREST corta em 1000 linhas. Um mes do Florestal tem 3.851
+    // vendas espelhadas do TecnoX -- sem paginar, os turnos do meio da lista
+    // sumiam e a tela mostrava RECEBIMENTO ZERO num turno que tinha tudo
+    // registrado (caso 02/08). As outras consultas grandes ja' usavam _fcTudo.
+    _fcTudo(() => sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,itens,status')
+      .eq('empresa_id', eid).in('turno_id', ids)),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
     // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
