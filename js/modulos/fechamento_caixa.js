@@ -2449,7 +2449,19 @@ async function fcTitBaixar() {
   if (desc) txt += ' - desconto ' + fcMoney(desc);
   txt += '\nRecebido: ' + fcMoney(liquido) + ' em ' + forma;
   if (!confirm(txt)) return;
-  const hoje = new Date().toISOString().slice(0, 10);
+  // a data e' a do TURNO, nao a de hoje: baixa de caixa retroativo (turno de
+  // 25/08 conferido em 31/08) nascia com a data errada dentro do turno certo.
+  const _tno = ((window._fcCache || {}).turnos || [])
+    .find(function (x) { return x.id === window._fcTurnoAtual; }) || {};
+  // aberto_em e' UTC verdadeiro: fatiar a string daria o dia errado no turno da
+  // noite (25/08 22h BRT = 26/08 01h UTC). Converte para o dia LOCAL.
+  const _dLocal = function (v) {
+    const d = v ? new Date(v) : new Date();
+    if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+         + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  const hoje = _dLocal(_tno.aberto_em);
   try {
     // uma linha por nota; juros/desconto entram na PRIMEIRA, para o total do
     // turno fechar sem ratear centavo entre as notas
