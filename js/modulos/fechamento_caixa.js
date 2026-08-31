@@ -2285,12 +2285,18 @@ function fcNodeMov(tipo) {
 let _fcTitAbertas = [];
 let _fcTitTotal = 0;     // quantas ha' no banco (nao so' as que couberam na tela)
 let _fcTitFiltro = '';
+let _fcTitSit = 'aberto';   // aberto | pago | todos
 let _fcTitTimer = null;
 
 // O FILTRO VAI AO BANCO. A primeira versao baixava 400 notas e peneirava no
 // navegador -- so' que 400 com `registrado_em` CRESCENTE sao as mais ANTIGAS:
 // iam de 01/02/2025 a 17/08/2026 e deixavam 208 notas de fora, justamente as
 // recentes, que sao as que o operador procura ao conferir o caixa do dia.
+function _fcTitSitMudou(v) {
+  _fcTitSit = v || 'aberto';
+  fcTitBuscar(_fcTitFiltro);
+}
+
 function _fcTitDigitou(v) {
   _fcTitFiltro = v;
   clearTimeout(_fcTitTimer);
@@ -2306,9 +2312,12 @@ async function fcTitBuscar(filtro) {
   if (st) st.textContent = 'procurando...';
   try {
     let q = sb.from('oct_pdv_notas_prazo')
-      .select('id,cliente_id,cliente_nome,valor,valor_original,vencimento,registrado_em,numero_nfe,observacao',
-              { count: 'exact' })
-      .eq('empresa_id', window._fcEmpresaId).eq('status', 'aberto');
+      .select('id,cliente_id,cliente_nome,valor,valor_original,vencimento,registrado_em,' +
+              'numero_nfe,observacao,status,pago_em', { count: 'exact' })
+      .eq('empresa_id', window._fcEmpresaId);
+    // 'pago' inclui o que o espelho do TecnoX ja' baixou (valor 0). Sem isso a
+    // nota parecia nao existir no Octano.
+    if (_fcTitSit !== 'todos') q = q.eq('status', _fcTitSit);
     if (f) {
       // limpa o que o PostgREST leria como sintaxe do filtro (a virgula fecha o or)
       const t = f.replace(/[,()*%"']/g, ' ').trim();
@@ -2338,6 +2347,14 @@ function _fcTitCasca() {
     + '<input id="fctit-busca" placeholder="cliente ou n\u00ba da nota \u2014 procura em TODAS as notas em aberto"'
     + ' class="fc-inp2 lg" style="width:100%" oninput="_fcTitDigitou(this.value)" value="'
     + fcEsc(_fcTitFiltro || '') + '">'
+    + '<div style="margin:8px 0 0;display:flex;gap:6px;align-items:center">'
+    + '<label style="color:#9aa;font-size:0.75rem">Situa\u00e7\u00e3o</label>'
+    + '<select id="fctit-sit" class="fc-inp2" style="width:210px" onchange="_fcTitSitMudou(this.value)">'
+    + [['aberto', 'Em aberto'], ['pago', 'J\u00e1 baixadas'], ['todos', 'Todas']]
+        .map(function (o) {
+          return '<option value="' + o[0] + '"' + (_fcTitSit === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+        }).join('')
+    + '</select></div>'
     + '<p id="fctit-status" style="color:#888;font-size:0.75rem;margin:6px 0 0"></p></div>'
     + '<div id="fctit-lista" style="max-height:340px;overflow:auto"></div>'
     + '<div style="padding:12px;border-top:1px solid #2a2d3e;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'
@@ -2356,6 +2373,10 @@ function _fcTitCasca() {
   if (inp) inp.focus();
 }
 
+function _fcTitPaga(n) {
+  return String(n.status || '') === 'pago' || Number(n.valor || 0) === 0;
+}
+
 function _fcTitRender() {
   const lst = _fcTitAbertas;
   // AGRUPA POR CLIENTE: e' assim que o pagamento chega -- o cliente aparece e
@@ -2365,7 +2386,7 @@ function _fcTitRender() {
     const k = n.cliente_nome || '(sem cliente)';
     if (!porCli[k]) porCli[k] = { itens: [], total: 0, ult: '' };
     porCli[k].itens.push(n);
-    porCli[k].total += Number(n.valor || 0);
+    porCli[k].total += _fcTitPaga(n) ? Number(n.valor_original || 0) : Number(n.valor || 0);
     const r = String(n.registrado_em || '');
     if (r > porCli[k].ult) porCli[k].ult = r;
   });
@@ -2376,13 +2397,20 @@ function _fcTitRender() {
   const linhas = nomes.map(function (nome) {
     const g = porCli[nome];
     const its = g.itens.map(function (n) {
-      return '<tr>'
-        + '<td class="fc-td" style="width:26px"><input type="checkbox" class="fctit-ck" value="' + n.id
-        + '" data-valor="' + Number(n.valor || 0) + '"></td>'
+      // nota ja' baixada (pelo espelho do TecnoX) vem com valor 0: mostra o
+      // valor ORIGINAL e nao oferece checkbox -- nao se baixa duas vezes.
+      const pg = _fcTitPaga(n);
+      const vMostrar = pg ? Number(n.valor_original || 0) : Number(n.valor || 0);
+      return '<tr' + (pg ? ' style="opacity:.65"' : '') + '>'
+        + '<td class="fc-td" style="width:26px">'
+        + (pg ? '\u2714' : '<input type="checkbox" class="fctit-ck" value="' + n.id
+                + '" data-valor="' + Number(n.valor || 0) + '">') + '</td>'
         + '<td class="fc-td">' + _fcData(n.registrado_em) + '</td>'
         + '<td class="fc-td">' + fcEsc(n.numero_nfe || '\u2014') + '</td>'
-        + '<td class="fc-td" style="color:#888">' + fcEsc(String(n.observacao || '').slice(0, 30)) + '</td>'
-        + '<td class="fc-td fc-r">' + fcMoney(n.valor) + '</td></tr>';
+        + '<td class="fc-td" style="color:#888">'
+        + (pg ? 'baixada' + (n.pago_em ? ' em ' + _fcData(n.pago_em) : '')
+              : fcEsc(String(n.observacao || '').slice(0, 30))) + '</td>'
+        + '<td class="fc-td fc-r">' + fcMoney(vMostrar) + '</td></tr>';
     }).join('');
     return '<tr><td class="fc-td" colspan="5" style="background:#151a22;color:#f0b45c;font-weight:600">'
       + fcEsc(nome) + ' \u2014 ' + g.itens.length + ' nota(s), ' + fcMoney(g.total) + '</td></tr>' + its;
@@ -2392,12 +2420,17 @@ function _fcTitRender() {
     + '<thead><tr><th></th><th>Registro</th><th>Nota</th><th>Obs.</th><th>Valor</th></tr></thead><tbody>'
     + (linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nada encontrado.</td></tr>')
     + '</tbody></table>';
+  const rot = _fcTitSit === 'pago' ? 'j\u00e1 baixada(s)'
+            : (_fcTitSit === 'todos' ? 'nota(s)' : 'em aberto');
   const st = document.getElementById('fctit-status');
-  if (st) st.textContent = _fcTitFiltro
-    ? (lst.length + ' de ' + _fcTitTotal + ' nota(s) em aberto que casam com "' + _fcTitFiltro + '"'
+  if (st) st.textContent = (_fcTitFiltro
+    ? (lst.length + ' de ' + _fcTitTotal + ' ' + rot + ' que casam com "' + _fcTitFiltro + '"'
        + (_fcTitTotal > lst.length ? ' \u2014 refine para ver o resto' : ''))
-    : (_fcTitTotal + ' nota(s) em aberto; mostrando as ' + lst.length
-       + ' mais recentes. Digite o cliente ou o n\u00ba para achar as antigas.');
+    : (_fcTitTotal + ' ' + rot + '; mostrando as ' + lst.length
+       + ' mais recentes. Digite o cliente ou o n\u00ba para achar as antigas.'))
+    + (_fcTitSit !== 'aberto'
+       ? ' \u2014 as baixadas vieram do espelho do TecnoX (val_aberto_np) e mostram o valor original.'
+       : '');
 }
 
 async function fcTitBaixar() {
