@@ -2198,12 +2198,142 @@ function fcNodeMov(tipo) {
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
       <td class="fc-td fc-r">${fcMoney(x.valor)}</td></tr>`);
     const tot = ts.reduce((s, x) => s + Number(x.valor || 0), 0);
+    const btnBuscar = `<div style="padding:8px 10px">
+        <button class="fc-btn azul" onclick="fcTitBuscar()">🔎 Buscar notas a prazo em aberto</button>
+      </div>`;
     return fcModal('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
+         ${btnBuscar}
          <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
-      : '<p style="padding:24px;color:#777">Nenhum título recebido neste caixa.</p>');
+      : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
   }
+
+
+// ---------- BAIXA DE NOTA A PRAZO (31/08) ----------
+// A tela de Titulos Recebidos so' mostrava o que JA' tinha sido baixado; nao
+// havia como ACHAR a nota em aberto para dar baixa. O Florestal tem 607 notas
+// abertas, R$ 119.478,53 -- e o unico caminho era saber o numero de cor.
+let _fcTitAbertas = [];
+
+async function fcTitBuscar(filtro) {
+  if (_fcTravado()) return;
+  fcModal('\uD83D\uDD0E Notas a prazo em aberto', '<p style="padding:20px;color:#888">Buscando...</p>');
+  try {
+    const { data, error } = await sb.from('oct_pdv_notas_prazo')
+      .select('id,cliente_id,cliente_nome,valor,valor_original,vencimento,registrado_em,numero_nfe,observacao')
+      .eq('empresa_id', window._fcEmpresaId).eq('status', 'aberto')
+      .order('registrado_em', { ascending: true }).limit(400);
+    if (error) throw error;
+    _fcTitAbertas = data || [];
+  } catch (e) {
+    fcModal('\uD83D\uDD0E Notas a prazo em aberto',
+      '<p style="padding:20px;color:#f87171">Erro: ' + fcEsc(String(e.message || e)) + '</p>');
+    return;
+  }
+  _fcTitRender(filtro || '');
+}
+
+function _fcTitRender(filtro) {
+  const f = String(filtro || '').trim().toLowerCase();
+  const lst = !f ? _fcTitAbertas : _fcTitAbertas.filter(function (n) {
+    return String(n.cliente_nome || '').toLowerCase().indexOf(f) >= 0
+        || String(n.numero_nfe || '').toLowerCase().indexOf(f) >= 0;
+  });
+  // AGRUPA POR CLIENTE: e' assim que o pagamento chega -- o cliente aparece e
+  // quita varias notas de uma vez, nao uma a uma.
+  const porCli = {};
+  lst.forEach(function (n) {
+    const k = n.cliente_nome || '(sem cliente)';
+    if (!porCli[k]) porCli[k] = { itens: [], total: 0 };
+    porCli[k].itens.push(n);
+    porCli[k].total += Number(n.valor || 0);
+  });
+  const nomes = Object.keys(porCli).sort(function (a, b) { return porCli[b].total - porCli[a].total; });
+  const linhas = nomes.slice(0, 60).map(function (nome) {
+    const g = porCli[nome];
+    const its = g.itens.map(function (n) {
+      return '<tr>'
+        + '<td class="fc-td" style="width:26px"><input type="checkbox" class="fctit-ck" value="' + n.id
+        + '" data-valor="' + Number(n.valor || 0) + '"></td>'
+        + '<td class="fc-td">' + _fcData(n.registrado_em) + '</td>'
+        + '<td class="fc-td">' + fcEsc(n.numero_nfe || '\u2014') + '</td>'
+        + '<td class="fc-td" style="color:#888">' + fcEsc(String(n.observacao || '').slice(0, 30)) + '</td>'
+        + '<td class="fc-td fc-r">' + fcMoney(n.valor) + '</td></tr>';
+    }).join('');
+    return '<tr><td class="fc-td" colspan="5" style="background:#151a22;color:#f0b45c;font-weight:600">'
+      + fcEsc(nome) + ' \u2014 ' + g.itens.length + ' nota(s), ' + fcMoney(g.total) + '</td></tr>' + its;
+  }).join('');
+  const aviso = nomes.length > 60 ? ' \u2014 mostrando os 60 maiores clientes; use o filtro' : '';
+  fcModal('\uD83D\uDD0E Notas a prazo em aberto',
+    '<div style="padding:10px 12px">'
+    + '<input id="fctit-busca" placeholder="filtrar por cliente ou n\u00ba da nota..." class="fc-inp2 lg"'
+    + ' style="width:100%" oninput="_fcTitRender(this.value)" value="' + fcEsc(filtro || '') + '">'
+    + '<p style="color:#888;font-size:0.75rem;margin:6px 0 0">' + lst.length + ' nota(s) em aberto' + aviso
+    + '. Marque as que foram pagas e informe a forma.</p></div>'
+    + '<div style="max-height:340px;overflow:auto"><table class="fc-grid">'
+    + '<thead><tr><th></th><th>Registro</th><th>Nota</th><th>Obs.</th><th>Valor</th></tr></thead><tbody>'
+    + (linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nada encontrado.</td></tr>')
+    + '</tbody></table></div>'
+    + '<div style="padding:12px;border-top:1px solid #2a2d3e;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'
+    + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Forma</label>'
+    + '<select id="fctit-forma" class="fc-inp2" style="width:150px">'
+    + ['Dinheiro', 'Pix', 'Cart\u00e3o D\u00e9bito', 'Cart\u00e3o Cr\u00e9dito', 'Cheque', 'Dep\u00f3sito']
+        .map(function (x) { return '<option>' + x + '</option>'; }).join('')
+    + '</select></div>'
+    + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Juros (R$)</label>'
+    + '<input id="fctit-juros" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"></div>'
+    + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Desconto (R$)</label>'
+    + '<input id="fctit-desc" type="number" step="0.01" value="0" class="fc-inp2" style="width:90px"></div>'
+    + '<button class="fc-btn azul" style="flex:1;min-width:150px" onclick="fcTitBaixar()">\uD83D\uDCBE Dar baixa</button>'
+    + '</div><div id="fctit-msg" style="padding:0 12px 12px;font-size:0.78rem;color:#f87171"></div>');
+}
+
+async function fcTitBaixar() {
+  if (_fcTravado()) return;
+  const cks = Array.prototype.slice.call(document.querySelectorAll('.fctit-ck:checked'));
+  const msg = document.getElementById('fctit-msg');
+  if (!cks.length) { if (msg) msg.textContent = 'Marque ao menos uma nota.'; return; }
+  const forma = document.getElementById('fctit-forma').value;
+  const juros = parseFloat(document.getElementById('fctit-juros').value) || 0;
+  const desc = parseFloat(document.getElementById('fctit-desc').value) || 0;
+  const ids = cks.map(function (c) { return c.value; });
+  const soma = cks.reduce(function (s, c) { return s + Number(c.dataset.valor || 0); }, 0);
+  const liquido = Math.round((soma + juros - desc) * 100) / 100;
+  let txt = 'Dar baixa em ' + ids.length + ' nota(s)?\n\nValor ' + fcMoney(soma);
+  if (juros) txt += ' + juros ' + fcMoney(juros);
+  if (desc) txt += ' - desconto ' + fcMoney(desc);
+  txt += '\nRecebido: ' + fcMoney(liquido) + ' em ' + forma;
+  if (!confirm(txt)) return;
+  const hoje = new Date().toISOString().slice(0, 10);
+  try {
+    // uma linha por nota; juros/desconto entram na PRIMEIRA, para o total do
+    // turno fechar sem ratear centavo entre as notas
+    const linhas = ids.map(function (id, i) {
+      const n = _fcTitAbertas.find(function (x) { return x.id === id; }) || {};
+      return {
+        empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+        nota_prazo_id: id, cliente_id: n.cliente_id || null,
+        cliente_nome: n.cliente_nome || null,
+        valor: Number(n.valor || 0), forma: forma,
+        juros: i === 0 ? juros : 0, desconto: i === 0 ? desc : 0,
+        data_recebimento: hoje, origem: 'fechamento', autor: 'retaguarda',
+      };
+    });
+    const r1 = await sb.from('oct_recebimentos_titulo').insert(linhas);
+    if (r1.error) throw r1.error;
+    // a nota sai de "aberto" -- senao reaparece na proxima busca e seria baixada
+    // duas vezes
+    const r2 = await sb.from('oct_pdv_notas_prazo')
+      .update({ status: 'pago', pago_em: new Date().toISOString() }).in('id', ids);
+    if (r2.error) throw r2.error;
+  } catch (e) {
+    if (msg) msg.textContent = 'Erro ao dar baixa: ' + (e.message || e);
+    return;
+  }
+  _fcToast('\u2714 ' + ids.length + ' nota(s) baixada(s) \u2014 ' + fcMoney(liquido));
+  await fcRecarregar('titulos');
+}
 
   if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales') {
     let vs = d.vales_lst || [];
