@@ -214,6 +214,7 @@ async function fcCarregarDados() {
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
+    litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
     fila_total: 0, fila_litros: 0, fila_itens: [],
@@ -265,11 +266,27 @@ async function fcCarregarDados() {
     if (tetoVao) return null;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
+  // TURNO ESPELHADO DO TECNOX: precisa ser sabido ANTES da pista, porque nele a
+  // venda vem do CUPOM, não da bomba.
+  const turnosTecnox = new Set();
+  (vRes.data || []).forEach(v => {
+    if (v && v.turno_id && String(v.status || '').toLowerCase() === 'tecnox') {
+      turnosTecnox.add(v.turno_id);
+    }
+  });
   // VENDA DE COMBUSTÍVEL = PISTA, imutável (regra Ronan 19/08): todo litro que
   // saiu da bomba conta como venda, pago ou não, excluído ou não. Exclusão de
   // lançamento (fila/cupom) tira apenas o RECEBIMENTO.
+  //
+  // EXCEÇÃO — turno espelhado do TecnoX: a pista guarda o preço DA BOMBA (à
+  // vista) e o cupom cobra o preço cheio no crédito/prazo. No turno 1068 do
+  // Florestal a pista dava R$ 7.303,21 contra R$ 7.382,30 faturados, e o
+  // produto de loja (R$ 264,23) não existia na pista. Onde o TecnoX é a fonte
+  // do recebimento, ele também é a fonte da VENDA — senão os dois lados do
+  // caixa saem de réguas diferentes e a diferença é estrutural.
   ((pRes && pRes.data) || []).forEach(a => {
     const tid = _turnoFila(a.data_abast); const t = tid && porTurno[tid]; if (!t) return;
+    if (turnosTecnox.has(tid)) { t.litros_pista += Number(a.litros || 0); return; }
     const va = Number(a.valor_total || 0);
     t.venda_comb += va; t.litros_comb += Number(a.litros || 0); t.venda_total += va;
   });
@@ -279,12 +296,6 @@ async function fcCarregarDados() {
   // os recebimentos — somar os dois contaria o mesmo cartão duas vezes. Então,
   // onde o TecnoX é a fonte, a fila entra só como captura (fila_total, para a
   // conferência de quanto o núcleo conseguiu casar) e NÃO soma em rec.
-  const turnosTecnox = new Set();
-  (vRes.data || []).forEach(v => {
-    if (v && v.turno_id && String(v.status || '').toLowerCase() === 'tecnox') {
-      turnosTecnox.add(v.turno_id);
-    }
-  });
   ((fRes && fRes.data) || []).forEach(f => {
     if (f._excluido) return;
     const tid = _turnoFila(f.ocorrido_em || f.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
@@ -315,12 +326,18 @@ async function fcCarregarDados() {
     // venda espelhada do TecnoX não é cupom emitido pelo Octano: entra pelos
     // pagamentos (abaixo), mas não conta como cupom nem soma itens (vazios).
     if (String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
+    const ehTecnox = String(v.status || '').toLowerCase() === 'tecnox';
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
-      // combustível NÃO soma venda aqui: já veio da PISTA (fonte imutável);
-      // produto de loja do cupom soma normal.
-      if (it.tipo === 'abastecimento') return;
-      const val = Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
-      t.venda_prod += val; t.venda_total += val;
+      // combustível só soma aqui no turno ESPELHADO (nele a pista foi ignorada);
+      // nos demais ele já veio da pista, que é a fonte imutável.
+      const ehComb = it.tipo === 'abastecimento';
+      if (ehComb && !ehTecnox) return;
+      const val = (it.total != null)
+        ? Number(it.total)
+        : Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
+      if (ehComb) { t.venda_comb += val; t.litros_comb += Number(it.qtd || 0); }
+      else { t.venda_prod += val; }
+      t.venda_total += val;
     });
     (Array.isArray(v.pagamentos) ? v.pagamentos : []).forEach(p => {
       // RECLASSIFICAÇÃO pelo ✎ (18/08): o ajuste de forma numa venda TRANSMITIDA
