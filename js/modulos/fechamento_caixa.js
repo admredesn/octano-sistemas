@@ -24,8 +24,13 @@ function _fcGrupoNome(nome, cod) {
   if (n) {
     // FROTA antes de cartão (18/08): "cartão frota"/Prime/Fit/TicketLog/GoodCard
     // é outra natureza — liquida pela administradora, não pela adquirente.
+    // mesma lista do sync_pagamentos_tecnox.py (FROTA)
     if (n.indexOf('frota') >= 0 || n.indexOf('prime') >= 0 || n.indexOf('fit') >= 0
-        || n.indexOf('ticket') >= 0 || n.indexOf('good') >= 0) return 'frota';
+        || n.indexOf('ticket') >= 0 || n.indexOf('good') >= 0 || n.indexOf('ecx') >= 0
+        || n.indexOf('valecard') >= 0 || n.indexOf('vale card') >= 0
+        || n.indexOf('agilli') >= 0 || n.indexOf('neo') >= 0
+        || n.indexOf('sem parar') >= 0 || n.indexOf('abastece') >= 0
+        || n.indexOf('wex') >= 0) return 'frota';
     if (n.indexOf('dinheiro') >= 0) return 'dinheiro';
     if (n.indexOf('pix') >= 0) return 'pix';
     if (n.indexOf('créd') >= 0 || n.indexOf('cred') >= 0 || n === 'cartão' || n === 'cartao'
@@ -461,7 +466,14 @@ async function fcCarregarDados() {
     // não é venda em dinheiro, é dinheiro físico que saiu da gaveta pro cofre.
     else if (a.secao === 'dinheiro') t.receb_ext_cofre += v;
     else {
-      const g = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(a.forma_nome, '') : null) || a.secao;
+      // A SEÇÃO MANDA quando ela é frota: quem lançou escolheu o balão 🚛 Cartão
+      // Frota, e a forma lá é "Crédito"/"Débito" com a OPERADORA na bandeira --
+      // pelo nome sozinho isso virava 'cartao' e sumia do campo (31/08).
+      // Nas outras seções o nome continua decidindo (o balão cartão soma Pix
+      // junto, e Pix tem campo próprio na tela).
+      const nomeCompleto = String(a.forma_nome || '') + ' ' + String(a.bandeira || '');
+      const g = a.secao === 'frota' ? 'frota'
+        : ((typeof _fcGrupoNome === 'function' ? _fcGrupoNome(nomeCompleto, '') : null) || a.secao);
       const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
       const chave = GRUPOS_REC.includes(g) ? g : (GRUPOS_REC.includes(a.secao) ? a.secao : 'outros');
       if (chave === 'outros') t.outrosCaixa += v;
