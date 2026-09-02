@@ -514,6 +514,7 @@ function _fatBolMostrar(b) {
     return;
   }
   const linha = b.linha_digitavel || "—";
+  window._fatBolAtual = b;
   _fatBolCaixa(`
     <p style="color:#7ee2a0;font-weight:600">✔ Boleto registrado no Sicoob</p>
     <table style="width:100%;margin-top:12px;font-size:0.85rem;text-align:left">
@@ -525,8 +526,241 @@ function _fatBolMostrar(b) {
     <p style="color:#889;font-size:0.75rem;margin:12px 0 4px">Linha digitável</p>
     <div style="background:#0f1520;padding:10px;border-radius:6px;font-family:monospace;
       font-size:0.82rem;word-break:break-all;color:#e8eef5">${_fatEsc(linha)}</div>
-    <button class="fat-btn" style="margin-top:12px" onclick="navigator.clipboard.writeText('${_fatEsc(linha)}')">
-      📋 Copiar linha digitável</button>`);
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="fat-btn" onclick="navigator.clipboard.writeText('${_fatEsc(linha)}')">
+        📋 Copiar linha digitável</button>
+      <button class="fat-btn azul" style="flex:1" onclick="fatBoletoImprimir()">
+        🖨 Imprimir boleto</button>
+    </div>`);
+}
+
+// ---------- IMPRESSÃO DO BOLETO (02/09) ----------
+// Mesmo layout do modelo do posto: RECIBO DO PAGADOR em cima, linha de corte,
+// FICHA DE COMPENSAÇÃO embaixo. Abre em janela própria para a impressão sair
+// limpa, sem o menu do sistema em volta.
+const _I25 = { "0": "00110", "1": "10001", "2": "01001", "3": "11000", "4": "00101",
+               "5": "10100", "6": "01100", "7": "00011", "8": "10010", "9": "01010" };
+
+// Interleaved 2 of 5 (FEBRABAN, 44 dígitos): barras finas e largas 1:3.
+function _fatBarras(codigo) {
+  if (!codigo || codigo.length !== 44) return "";
+  let fluxo = "0000";                                   // start
+  for (let i = 0; i < codigo.length; i += 2) {
+    const a = _I25[codigo[i]], b = _I25[codigo[i + 1]];
+    if (!a || !b) return "";
+    for (let j = 0; j < 5; j++) fluxo += a[j] + b[j];   // barra + espaço
+  }
+  fluxo += "100";                                       // stop
+  let html = "";
+  for (let i = 0; i < fluxo.length; i++) {
+    const larg = (fluxo[i] === "1" ? 3 : 1);            // múltiplos da barra fina
+    const cor = (i % 2 === 0) ? "#000" : "transparent"; // par = barra preta
+    html += `<i style="width:${larg}px;background:${cor}"></i>`;
+  }
+  return html;
+}
+
+function _fatLdFmt(ld) {
+  ld = String(ld || "").replace(/\D/g, "");
+  if (ld.length !== 47) return ld;
+  return `${ld.slice(0,5)}.${ld.slice(5,10)}  ${ld.slice(10,15)}.${ld.slice(15,21)}  ` +
+         `${ld.slice(21,26)}.${ld.slice(26,32)}  ${ld.slice(32,33)}  ${ld.slice(33)}`;
+}
+
+// nosso número: posições 34-41 do campo livre. É o que o banco gravou —
+// calcular o DV por conta própria deu resultado diferente do boleto real.
+function _fatNossoNumero(cb, fallback) {
+  cb = String(cb || "");
+  if (cb.length === 44) {
+    const nn = cb.slice(19).slice(14, 22);
+    if (/^\d+$/.test(nn)) return String(parseInt(nn, 10));
+  }
+  return String(fallback || "");
+}
+
+async function fatBoletoImprimir() {
+  const b = window._fatBolAtual;
+  if (!b) { alert("Nenhum boleto carregado."); return; }
+  const d = (b.resposta && (b.resposta.resultado || b.resposta)) || {};
+  const [{ data: emp }, { data: conta }] = await Promise.all([
+    sb.from("oct_empresas").select("nome,cnpj,endereco,cidade,uf,cep")
+      .eq("id", b.empresa_id).maybeSingle(),
+    sb.from("oct_sicoob_contas").select("numero_cliente,cobranca_modalidade,agencia")
+      .eq("empresa_id", b.empresa_id).maybeSingle(),
+  ]);
+  const w = window.open("", "_blank", "width=900,height=1150");
+  if (!w) { alert("O navegador bloqueou a janela de impressão. Libere o pop-up e tente de novo."); return; }
+  w.document.write(_fatBoletoHtml(b, d, emp || {}, conta || {}));
+  w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
+}
+
+function _fatBoletoHtml(b, d, emp, conta) {
+  const E = _fatEsc;
+  const pag = d.pagador || {};
+  const coop = String(conta.agencia || "4208");
+  const coopBen = `${coop}/${conta.numero_cliente || ""}`;
+  const nn = _fatNossoNumero(d.codigoBarras, d.nossoNumero || b.nosso_numero);
+  const venc = _fatData(b.vencimento || d.dataVencimento);
+  const emiss = _fatData(d.dataEmissao || b.criado_em);
+  const val = _fatMoney(b.valor != null ? b.valor : d.valor);
+  const instr = (d.mensagensInstrucao && d.mensagensInstrucao.length)
+    ? d.mensagensInstrucao : ["Não cobrar encargos por atraso.", "Não conceder desconto."];
+  const cx = (rot, v, cls) => `<td class="cx ${cls || ""}"><b class="rot">${E(rot)}</b>
+      <span class="val">${v == null ? "" : E(v)}</span></td>`;
+  const logo = `<div class="logo"><svg viewBox="0 0 26 20" width="26" height="20">
+      <polygon points="0,0 17,0 8.5,20" fill="#00ae9d"/>
+      <polygon points="8.5,0 17,0 12.7,10" fill="#ffc72c"/></svg><span>SICOOB</span></div>`;
+
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>Boleto ${E(nn)} — ${E(b.cliente_nome || "")}</title>
+<style>
+  @page { size: A4; margin: 10mm 8mm; }
+  body { font: 11px Arial, Helvetica, sans-serif; color:#000; margin:0; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  td.cx { border:1px solid #000; padding:1px 3px 3px; vertical-align:top; height:26px; }
+  .rot { font-size:8px; font-weight:normal; display:block; line-height:11px; }
+  .val { font-size:11px; font-weight:bold; display:block; text-align:right; padding-top:2px; }
+  .val.esq { text-align:left; }
+  .val.cen { text-align:center; }
+  .cinza { background:#e9e9e9; }
+  .semborda { border:0; }
+  .logo { display:flex; align-items:center; gap:6px; margin:2px 0 4px; }
+  .logo span { font-size:22px; font-weight:bold; color:#00766a; letter-spacing:.5px; }
+  .topo { display:flex; align-items:center; gap:10px; margin:6px 0 4px; }
+  .banco { font-size:20px; font-weight:bold; padding:0 10px;
+           border-left:2px solid #000; border-right:2px solid #000; }
+  .ld { flex:1; text-align:right; font-size:15px; font-weight:bold; letter-spacing:.3px; }
+  .corte { border-top:1px dashed #777; margin:10px 0 6px; }
+  .recibo-rod { display:flex; gap:10px; align-items:flex-start; margin-top:4px; }
+  .recibo-rod .txt { background:#e9e9e9; padding:5px 6px; font-size:8.5px;
+                     line-height:12px; width:58%; }
+  .recibo-rod .aut { flex:1; text-align:right; font-size:9px; padding-top:4px;
+                     border-left:1px solid #666; border-right:1px solid #666; min-height:34px; }
+  .barras { margin-top:8px; height:44px; display:flex; align-items:flex-end; }
+  .barras i { display:inline-block; height:44px; }
+  .rodape { display:flex; justify-content:space-between; align-items:flex-end; }
+  .peq { font-size:7.5px; line-height:10px; color:#000; }
+  .lin { font-size:10.5px; font-weight:bold; line-height:14px; }
+  .titulo { text-align:right; font-weight:bold; font-size:12px; margin-bottom:2px; }
+  @media print { .naoimprime { display:none; } }
+</style></head><body>
+
+<div class="naoimprime" style="text-align:right;margin-bottom:6px">
+  <button onclick="window.print()" style="padding:6px 14px;font-size:13px;cursor:pointer">🖨 Imprimir</button>
+</div>
+
+<div class="titulo">RECIBO DO PAGADOR</div>
+${logo}
+<table>
+  <tr>
+    <td class="cx" rowspan="4" colspan="4"><b class="rot">Beneficiário</b>
+      <div class="lin">${E(emp.nome || "")} &nbsp;&nbsp; ${E(emp.cnpj || "")}</div>
+      <div class="lin">${E(emp.endereco || "")}</div>
+      <div class="lin">${E(emp.cidade || "")} - ${E(emp.uf || "")} &nbsp;&nbsp; ${E(emp.cep || "")}</div>
+    </td>
+    ${cx("Vencimento", venc)}${cx("Valor do Documento", val)}
+  </tr>
+  <tr>${cx("(+) Outros acréscimos", "")}${cx("(+) Mora / Multa", "")}</tr>
+  <tr>${cx("(-) Desconto / Abatimento", "")}${cx("(-) Outras deduções", "")}</tr>
+  <tr>${cx("Data de Emissão", emiss)}${cx("(=) Valor cobrado", "")}</tr>
+  <tr>
+    <td class="cx" colspan="4"><b class="rot">Instruções (texto de responsabilidade do beneficiário)</b>
+      ${instr.map(t => `<div class="lin">${E(t)}</div>`).join("")}</td>
+    <td class="cx" colspan="2"><b class="rot">Coop Contr/Cód. Beneficiário</b>
+      <span class="val">${E(coopBen)}</span>
+      <b class="rot" style="margin-top:4px">Nosso Número</b><span class="val">${E(nn)}</span></td>
+  </tr>
+</table>
+
+<div style="font-size:8px;margin:6px 0 1px">Dados do Pagador</div>
+<table>
+  <tr>${cx("Nome do pagador", null)}<td class="cx" style="width:70px"><b class="rot">Número do Documento</b>
+      <span class="val">${E(d.seuNumero || "")}</span></td></tr>
+</table>
+<table>
+  <tr><td class="cx"><b class="rot">Nome do pagador</b>
+    <span class="val esq">${E(pag.nome || b.cliente_nome || "")}</span></td></tr>
+  <tr><td class="cx"><b class="rot">Endereço</b>
+    <span class="val esq">${E(pag.endereco || "")}</span></td></tr>
+  <tr><td class="cx"><b class="rot">Bairro / Distrito</b>
+    <span class="val esq">${E(pag.bairro || "")}</span></td></tr>
+</table>
+<table>
+  <tr>
+    <td class="cx"><b class="rot">Munícipio</b><span class="val esq">${E(pag.cidade || "")}</span></td>
+    <td class="cx" style="width:60px"><b class="rot">UF</b><span class="val cen">${E(pag.uf || "")}</span></td>
+    <td class="cx" style="width:110px"><b class="rot">CEP</b><span class="val">${E(pag.cep || "")}</span></td>
+  </tr>
+  <tr><td class="cx" colspan="3" style="height:34px"><b class="rot">Mensagem Pagador</b></td></tr>
+</table>
+
+<div class="recibo-rod">
+  <div class="txt">Este recibo somente terá validade com a autenticação mecânica ou acompanhado do
+    recibo de pagamento emitido pelo Banco. Recebimento através do cheque n.________ do
+    banco________ Esta quitação só terá validade após o pagamento do cheque pelo banco pagador.</div>
+  <div class="aut">Autenticação mecânica &nbsp;-&nbsp; <b>Recibo do pagador</b></div>
+</div>
+
+<div class="corte"></div>
+
+<div class="topo">${logo}<span class="banco">756</span>
+  <span class="ld">${E(_fatLdFmt(d.linhaDigitavel || b.linha_digitavel))}</span></div>
+<table>
+  <tr>
+    <td class="cx" colspan="5"><b class="rot">Local de pagamento</b>
+      <span class="val esq">PAGAVEL PREFERENCIALMENTE NO SICOOB</span></td>
+    <td class="cx cinza" style="width:150px"><b class="rot">Vencimento</b>
+      <span class="val">${E(venc)}</span></td>
+  </tr>
+  <tr>
+    <td class="cx" colspan="5"><b class="rot">Beneficiário</b>
+      <span class="val esq">${E(emp.nome || "")} &nbsp;&nbsp; ${E(emp.cnpj || "")}</span></td>
+    <td class="cx"><b class="rot">Cooperativa contratante/Cód. Beneficiário</b>
+      <span class="val">${E(coopBen)}</span></td>
+  </tr>
+  <tr>
+    ${cx("Data do documento", emiss, "")}${cx("N. documento", d.seuNumero || "")}
+    ${cx("Espécie", d.codigoEspecieDocumento || "DM")}${cx("Aceite", "N")}
+    ${cx("Data processamento", emiss)}
+    <td class="cx"><b class="rot">Nosso número</b><span class="val">${E(nn)}</span></td>
+  </tr>
+  <tr>
+    <td class="cx cinza"><b class="rot">Uso do Banco</b></td>
+    ${cx("Carteira", String(conta.cobranca_modalidade || 1))}${cx("Espécie", "R$")}
+    ${cx("Quantidade", "")}${cx("Valor", "")}
+    <td class="cx"><b class="rot">Valor documento</b><span class="val">${E(val)}</span></td>
+  </tr>
+  <tr>
+    <td class="cx" colspan="5" rowspan="5" style="height:96px">
+      <b class="rot">Instruções (texto de responsabilidade do beneficiário)</b>
+      ${instr.map(t => `<div class="lin">${E(t)}</div>`).join("")}
+      <div class="peq" style="margin-top:34px">
+        EMITIDO PELA COOPERATIVA CONTRATANTE SEM RESPONSABILIDADE DO BANCOOB<br>
+        COOPERATIVA CONTRATANTE ${E(coop)} SICOOB UFVCREDI</div></td>
+    ${cx("(-) Desconto / Abatimento", "")}
+  </tr>
+  <tr>${cx("(-) Outras deduções", "")}</tr>
+  <tr>${cx("(+) Mora / Multa", "")}</tr>
+  <tr>${cx("(+) Outros acréscimos", "")}</tr>
+  <tr>${cx("(=) Valor cobrado", "")}</tr>
+  <tr>
+    <td class="cx" colspan="5" style="height:64px"><b class="rot">Pagador</b>
+      <div class="lin">${E(pag.nome || b.cliente_nome || "")} &nbsp;&nbsp; ${E(pag.numeroCpfCnpj || "")}</div>
+      <div class="lin">${E(pag.endereco || "")}</div>
+      <div class="lin">${E(pag.bairro || "")}</div>
+      <div class="lin">${E(pag.cidade || "")} - ${E(pag.uf || "")} &nbsp;&nbsp; ${E(pag.cep || "")}</div></td>
+    <td class="cx"></td>
+  </tr>
+  <tr><td class="cx" colspan="6" style="height:20px"><b class="rot">Beneficiário final</b></td></tr>
+</table>
+
+<div class="rodape">
+  <div class="barras">${_fatBarras(d.codigoBarras || b.codigo_barras)}</div>
+  <div style="font-size:9px;padding-bottom:4px">Autenticação mecânica &nbsp;-&nbsp;
+    <b>Ficha de compensação</b></div>
+</div>
+</body></html>`;
 }
 
 function _fatBolCaixa(html) {
