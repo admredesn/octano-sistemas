@@ -1191,7 +1191,8 @@ async function fatEnviarOk(faturaId) {
   msg.style.color = "#9aa"; msg.textContent = "Enviando...";
 
   const { error } = await sb.from("oct_faturas").update({
-    envio_canais: canais, envio_pedido_em: new Date().toISOString(),
+    envio_canais: canais, envio_tipo: "fatura",
+    envio_pedido_em: new Date().toISOString(),
     enviada_em: null, envio_erro: null,      // reenvio comeca do zero
   }).eq("id", faturaId);
   if (error) {
@@ -1939,7 +1940,7 @@ function _fatSelFSync() {
       ? `<b style="color:#4ade80">${marcadas.length}</b> selecionada(s) · <b style="color:#f59e0b">R$ ${_fatMoney(tot)}</b>`
       : `<span style="color:#6b7688">nenhuma selecionada</span>`;
   }
-  ["fatf-btn-boleto", "fatf-btn-nf", "fatf-btn-enviar"].forEach(b => {
+  ["fatf-btn-boleto", "fatf-btn-nf", "fatf-btn-enviar", "fatf-btn-cobrar"].forEach(b => {
     const x = document.getElementById(b);
     if (x) x.disabled = !marcadas.length;
   });
@@ -1963,7 +1964,8 @@ function _fatBarraLote(faturas, status) {
     <span style="margin-left:auto">
       ${status === "aberta" ? b("fatf-btn-nf", "#0e7490", "🧾 Gerar NF", "fatLoteNf()") +
         b("fatf-btn-boleto", "#334155", "🏦 Gerar boletos", "fatLoteBoleto()") +
-        b("fatf-btn-enviar", "#15803d", "📤 Enviar faturas", "fatLoteEnviar()") : ""}
+        b("fatf-btn-enviar", "#15803d", "📤 Enviar faturas", "fatLoteEnviar()") +
+        b("fatf-btn-cobrar", "#b45309", "📣 Cobrar", "fatLoteCobrar()") : ""}
     </span></div>`;
 }
 
@@ -2104,6 +2106,73 @@ async function fatLoteBoleto() {
   _fatProgFim();
 }
 
+// ---------- LOTE: cobrar ----------
+// Mesmos anexos do envio normal, texto diferente. Reaproveita a mesma fila --
+// o que muda e' envio_tipo, que diz ao nucleo qual modelo usar.
+//
+// Ao contrario do "Enviar", aqui NAO pula quem ja' recebeu: cobrar e' justamente
+// insistir com quem ja' recebeu a fatura e nao pagou. O que se pula e' quem nao
+// deve mais nada.
+async function fatLoteCobrar() {
+  const alvo = _fatSelecionadas();
+  if (!alvo.length) return;
+  const hoje = _fatHojeIso();
+  const vencidas = alvo.filter(f => f.vencimento && String(f.vencimento).slice(0, 10) < hoje).length;
+  const aVencer = alvo.length - vencidas;
+  const semDoc = alvo.filter(f => !f.fatura_pdf_path).length;
+  const jaCobradas = alvo.filter(f => Number(f.cobrancas || 0) > 0).length;
+
+  if (!confirm(
+      `Enviar COBRANÇA de ${alvo.length} fatura(s) ao cliente?\n\n` +
+      `${vencidas} vencida(s)` + (aVencer ? ` e ${aVencer} ainda a vencer (vai como lembrete)` : "") + `.\n` +
+      (jaCobradas ? `${jaCobradas} já receberam cobrança antes.\n` : "") +
+      (semDoc ? `${semDoc} sem fatura em PDF serão puladas.\n` : "") +
+      `\nIsto manda mensagem de verdade para os clientes.`)) return;
+
+  _fatProgAbrir("📣 Enviando cobranças", alvo.length);
+  const naFila = [];
+  for (const f of alvo) {
+    if (!f.fatura_pdf_path) { _fatProgPasso(f.cliente_nome || "", "pulou", "sem fatura em PDF"); continue; }
+    const recebido = await _fatRecebidoDa(f.id);
+    if (recebido + 0.005 >= _fatLiquido(f)) {
+      _fatProgPasso(f.cliente_nome || "", "pulou", "já está paga");
+      continue;
+    }
+    const { error } = await sb.from("oct_faturas").update({
+      envio_canais: "ambos", envio_tipo: "cobranca",
+      envio_pedido_em: new Date().toISOString(), envio_erro: null,
+    }).eq("id", f.id);
+    if (error) {
+      _fatProgPasso(f.cliente_nome || "", "erro",
+        /envio_tipo|column/i.test(error.message || "") ? "falta rodar SQL-COBRANCA.sql" : error.message);
+      continue;
+    }
+    naFila.push({ id: f.id, nome: f.cliente_nome || "", antes: Number(f.cobrancas || 0) });
+  }
+  if (!naFila.length) { _fatProgFim(); return; }
+
+  _fatProgAgora(`Aguardando o posto enviar ${naFila.length}...`);
+  const pend = new Map(naFila.map(x => [x.id, x]));
+  for (let volta = 0; volta < 60 && pend.size; volta++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data } = await sb.from("oct_faturas")
+      .select("id,cobrancas,cobrada_em,envio_pedido_em,envio_erro").in("id", [...pend.keys()]);
+    (data || []).forEach(f => {
+      const x = pend.get(f.id);
+      if (!x) return;
+      if (Number(f.cobrancas || 0) > x.antes) {
+        _fatProgPasso(x.nome, "ok", "cobrança nº " + f.cobrancas);
+        pend.delete(f.id);
+      } else if (!f.envio_pedido_em && f.envio_erro) {
+        _fatProgPasso(x.nome, "erro", f.envio_erro);
+        pend.delete(f.id);
+      }
+    });
+  }
+  pend.forEach(x => _fatProgPasso(x.nome, "erro", "não voltou a tempo (o posto pode estar desligado)"));
+  _fatProgFim();
+}
+
 // ---------- LOTE: enviar ----------
 async function fatLoteEnviar() {
   const alvo = _fatSelecionadas();
@@ -2122,7 +2191,8 @@ async function fatLoteEnviar() {
     if (f.enviada_em) { _fatProgPasso(f.cliente_nome || "", "pulou", "já enviada"); continue; }
     if (!f.fatura_pdf_path) { _fatProgPasso(f.cliente_nome || "", "pulou", "sem fatura em PDF"); continue; }
     const { error } = await sb.from("oct_faturas").update({
-      envio_canais: "ambos", envio_pedido_em: new Date().toISOString(), envio_erro: null,
+      envio_canais: "ambos", envio_tipo: "fatura",
+      envio_pedido_em: new Date().toISOString(), envio_erro: null,
     }).eq("id", f.id);
     if (error) { _fatProgPasso(f.cliente_nome || "", "erro", error.message); continue; }
     naFila.push({ id: f.id, nome: f.cliente_nome || "" });
@@ -2167,12 +2237,14 @@ function _fatStatusCel(f, bol) {
   else if (temBol)           { rot = "Falta a NF-e";                      cor = "#f0b45c"; }
   else if (temNf)            { rot = "Falta o boleto";                    cor = "#f0b45c"; }
   else                       { rot = "Sem NF-e nem boleto";               cor = "#8b93a3"; }
+  const cob = Number(f.cobrancas || 0)
+    ? `<div style="font-size:9.5px;color:#f0b45c" title="Última em ${_fatData(f.cobrada_em)}">📣 ${f.cobrancas} cobrança(s)</div>` : "";
   const erro = f.envio_erro
     ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ última tentativa falhou</div>` : "";
   return sel(temNf, "NF", "NF-e anexada à fatura") +
          sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
          sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
-         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + erro;
+         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + cob + erro;
 }
 
 // o numero grande e' o que se cobra; o bruto so' aparece quando ha' abatimento,

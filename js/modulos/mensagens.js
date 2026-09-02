@@ -17,6 +17,10 @@ const MSG_MODELOS = [
     desc: 'Vai com a fatura detalhada, o boleto e a nota fiscal em anexo.' },
   { chave: 'fatura_whatsapp',     rot: '📄 Fatura — WhatsApp',    email: false,
     desc: 'Mensagem que acompanha os PDFs no WhatsApp. Use *asterisco* para negrito.' },
+  { chave: 'cobranca_email',      rot: '📣 Cobrança — e-mail',    email: true,
+    desc: 'Reenvio da fatura com lembrete de vencimento. Use {situacao} — ele vira "vencida há 5 dias", "vence hoje" ou "vence em 3 dias" sozinho.' },
+  { chave: 'cobranca_whatsapp',   rot: '📣 Cobrança — WhatsApp',  email: false,
+    desc: 'Mesma coisa no WhatsApp, que é por onde 85 dos 91 clientes são alcançados.' },
   { chave: 'comprovante_email',   rot: '🧾 Comprovante — e-mail', email: true,
     desc: 'Via da compra a prazo, enviada na hora do abastecimento.' },
   { chave: 'comprovante_whatsapp', rot: '🧾 Comprovante — WhatsApp', email: false,
@@ -31,6 +35,8 @@ const MSG_VARS = [
   ['{valor}',      'valor (2.057,58)'],
   ['{vencimento}', 'vencimento (10/09/2026)'],
   ['{emissao}',    'data de emissão'],
+  ['{situacao}',   'vencida há N dias / vence hoje / vence em N dias'],
+  ['{atraso}',     'dias de atraso (0 se não venceu)'],
 ];
 
 const MSG_EXEMPLO = {
@@ -40,6 +46,8 @@ const MSG_EXEMPLO = {
   '{valor}': '2.057,58',
   '{vencimento}': '10/09/2026',
   '{emissao}': '02/09/2026',
+  '{situacao}': 'vencida há 5 dias',
+  '{atraso}': '5',
 };
 
 let _msgAtual = {};       // chave -> linha do banco
