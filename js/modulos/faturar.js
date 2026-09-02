@@ -1600,6 +1600,32 @@ async function fatEditarFaturaOk(faturaId) {
   fatListarFaturas(st.f.status || "aberta");
 }
 
+// STATUS do ciclo da fatura: gerada -> NF-e -> boleto -> enviada.
+// Nao e' um campo guardado: e' lido do que existe. Se o boleto for cancelado no
+// banco ou o XML trocado, a etiqueta acompanha sem ninguem ter de "corrigir o
+// status" na mao.
+function _fatStatusCel(f, bol) {
+  const temNf  = !!f.nfe_chave;
+  const temBol = !!(bol && ["registrado", "liquidado"].includes(bol.status));
+  const env    = !!f.enviada_em;
+  const sel = (ok, txt, tit) => `<span title="${tit}" style="display:inline-block;padding:1px 5px;` +
+    `border-radius:4px;font-size:9.5px;font-weight:700;margin-right:3px;` +
+    (ok ? "background:#14532d;color:#86efac" : "background:#1f2430;color:#5b6474") + `">${txt}</span>`;
+
+  let rot, cor;
+  if (env)                   { rot = "Enviada " + _fatData(f.enviada_em); cor = "#4ade80"; }
+  else if (temNf && temBol)  { rot = "Pronta p/ enviar";                  cor = "#60a5fa"; }
+  else if (temBol)           { rot = "Falta a NF-e";                      cor = "#f0b45c"; }
+  else if (temNf)            { rot = "Falta o boleto";                    cor = "#f0b45c"; }
+  else                       { rot = "Sem NF-e nem boleto";               cor = "#8b93a3"; }
+  const erro = f.envio_erro
+    ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ falha no último envio</div>` : "";
+  return sel(temNf, "NF", "NF-e anexada à fatura") +
+         sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
+         sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
+         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + erro;
+}
+
 // o numero grande e' o que se cobra; o bruto so' aparece quando ha' abatimento,
 // senao a coluna viraria duas linhas em toda fatura sem desconto
 function _fatValorCel(f) {
@@ -1635,6 +1661,15 @@ async function fatListarFaturas(status) {
     return;
   }
   const faturas = data || [];
+  // um boleto por fatura numa consulta so' -- 20 faturas nao podem virar 20 idas
+  const bolPorFat = {};
+  if (faturas.length) {
+    try {
+      const r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status")
+        .in("fatura_id", faturas.map(x => x.id));
+      (r.data || []).forEach(b => { bolPorFat[b.fatura_id] = b; });
+    } catch (e) { /* tabela de boletos pode nao existir */ }
+  }
   const linhas = faturas.map(fatr => `<tr>
     <td class="fat-td">${fatr.numero ?? "—"}</td>
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
@@ -1642,6 +1677,7 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     <td class="fat-td fat-r">${_fatValorCel(fatr)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
+    <td class="fat-td">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
     <td class="fat-td" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
@@ -1655,8 +1691,8 @@ async function fatListarFaturas(status) {
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Docs</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="8" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
   // saldo por fatura (recebimentos parciais) — assíncrono, não trava a lista
