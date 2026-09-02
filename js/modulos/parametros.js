@@ -219,7 +219,9 @@ async function parTestarEmail() {
     return;
   }
 
-  for (let i = 0; i < 24; i++) {
+  // o SMTP pode demorar; esperar pouco fazia a tela culpar o worker por um
+  // problema de rede que ainda estava sendo diagnosticado
+  for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2500));
     const { data: t } = await sb.from('oct_email_testes')
       .select('status,erro,detalhe,destino').eq('id', novo.id).maybeSingle();
