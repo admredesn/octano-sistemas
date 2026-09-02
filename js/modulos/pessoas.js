@@ -139,6 +139,7 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Cashback</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cashback" type="checkbox" ${p?.cashback_ativo?'checked':''} style="width:auto" /> Recebe cashback (R$0,05/litro via Pix)</label></div>
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
+        <div class="form-group"><label>Prazo de pagamento (dias) <span style="font-size:0.72rem;color:#888">(vencimento proposto ao faturar)</span></label><input id="fpe-prazo-dias" type="number" step="1" min="0" max="365" value="${p?.prazo_dias ?? ''}" placeholder="ex.: 10" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
         <!-- TABELA DE PREÇO no cadastro (modelo TecnoX 17/08): o vínculo
              cliente→negociação é escolhido AQUI, não dentro da tabela. -->
@@ -389,6 +390,8 @@ async function salvarPessoa(id, empresaId) {
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
     aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
     limite_nota_prazo: parseFloat(document.getElementById('fpe-prazo-limite')?.value) || null,
+    // dias, nao data: "10 dias da emissao" vale para toda fatura que vier
+    prazo_dias: (document.getElementById('fpe-prazo-dias')?.value || '') === '' ? null : parseInt(document.getElementById('fpe-prazo-dias').value, 10),
     credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
     // exigências da venda a prazo (o PDV as respeita desde sempre; a tela é nova)
     exige_placa:          !!document.getElementById('fpe-ex-placa')?.checked,

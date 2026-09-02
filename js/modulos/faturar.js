@@ -174,7 +174,6 @@ async function fatListarTitulos() {
         <button class="fat-btn mini" onclick="fatSelTodos(false)">☐ Nenhum</button>
         <span style="color:#5b6474;font-size:11px;margin-left:10px">↑↓ navega · espaço marca · shift+↑↓ marca em sequência</span></span>
       <span style="display:flex;gap:8px">
-        <input type="date" id="fat-venc" class="fat-inp" title="Vencimento da fatura">
         <button class="fat-btn azul" onclick="fatGerarFatura()">💠 Gerar Fatura</button>
         <button class="fat-btn" style="background:#0e7490" onclick="fatGerarNfConsolidada()" title="Consolida os cupons selecionados numa NF-e (modelo 55, CFOP 5929) — HOMOLOGAÇÃO">🧾 Gerar NF (consolidada)</button>
       </span>
@@ -1320,6 +1319,28 @@ async function fatParcelarOk(id) {
 }
 
 // ---------- Gerar Fatura (Fase B — precisa da migração oct_faturas) ----------
+// ---------- VENCIMENTO DA FATURA (02/09) ----------
+// O vencimento saia' de um campo de data solto no rodape que quase nunca era
+// preenchido -- as duas faturas existentes nasceram sem vencimento. Agora o
+// prazo e' do CLIENTE (oct_pessoas.prazo_dias) e a geracao PEDE confirmacao com
+// a data ja' proposta. Sem prazo cadastrado, propoe o dia da geracao: data
+// errada na tela o operador ve', data em branco ninguem ve'.
+function _fatHojeIso() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// soma dias sem passar por UTC (new Date("2026-09-02") volta um dia no Brasil)
+function _fatSomaDias(iso, dias) {
+  const p = String(iso).split("-").map(Number);
+  const d = new Date(p[0], p[1] - 1, p[2]);
+  d.setDate(d.getDate() + Number(dias || 0));
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function _fatDiasEntre(isoA, isoB) {
+  const a = String(isoA).split("-").map(Number), b = String(isoB).split("-").map(Number);
+  return Math.round((new Date(b[0], b[1] - 1, b[2]) - new Date(a[0], a[1] - 1, a[2])) / 86400000);
+}
+
 async function fatGerarFatura() {
   const sel = [...window._fatSel];
   if (!sel.length) { alert("Selecione ao menos um título."); return; }
@@ -1327,29 +1348,183 @@ async function fatGerarFatura() {
   const cliIds = [...new Set(titulos.map(t => t.cliente_id))];
   if (cliIds.length > 1) { alert("Selecione títulos de UM cliente só por fatura."); return; }
   const total = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
-  const venc = document.getElementById("fat-venc")?.value || null;
-  if (!confirm(`Gerar fatura de ${titulos.length} título(s), total R$ ${_fatMoney(total)}?`)) return;
+  const cliId = titulos[0].cliente_id || null;
 
-  const fatura = {
-    empresa_id: window._fatEid, cliente_id: titulos[0].cliente_id || null,
-    cliente_nome: titulos[0].cliente_nome || null, valor: total,
+  // prazo do cadastro. Le' a pessoa inteira de proposito: se a coluna
+  // prazo_dias ainda nao existir (SQL nao rodado), isso nao quebra a geracao.
+  let prazo = null, cliNome = titulos[0].cliente_nome || "";
+  if (cliId) {
+    const { data: p } = await sb.from("oct_pessoas").select("*").eq("id", cliId).maybeSingle();
+    if (p) {
+      if (p.prazo_dias != null && p.prazo_dias !== "") prazo = Number(p.prazo_dias);
+      cliNome = p.nome || cliNome;
+    }
+  }
+  const hoje = _fatHojeIso();
+  const venc = (prazo != null && !isNaN(prazo)) ? _fatSomaDias(hoje, prazo) : hoje;
+  window._fatNovaFat = { sel, titulos, total, cliId, cliNome, prazo, hoje };
+
+  const origem = (prazo != null && !isNaN(prazo))
+    ? `<span style="color:#7ee2a0">prazo de ${prazo} dia(s) do cadastro de ${_fatEsc(cliNome)}</span>`
+    : `<span style="color:#f0b45c">${_fatEsc(cliNome) || "Este cliente"} não tem prazo cadastrado — proposto o dia de hoje. Ajuste abaixo.</span>`;
+
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>💠 Gerar fatura</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0">
+      <table style="width:100%;font-size:0.86rem;text-align:left;margin-bottom:14px">
+        <tr><td style="color:#889;padding:3px 0">Cliente</td><td><b>${_fatEsc(cliNome) || "—"}</b></td></tr>
+        <tr><td style="color:#889;padding:3px 0">Títulos</td><td>${titulos.length}</td></tr>
+        <tr><td style="color:#889;padding:3px 0">Total</td><td style="color:#f59e0b;font-weight:700">R$ ${_fatMoney(total)}</td></tr>
+        <tr><td style="color:#889;padding:3px 0">Emissão</td><td>${_fatData(hoje)}</td></tr>
+      </table>
+      <label style="color:#9aa;font-size:0.78rem">Vencimento</label>
+      <input type="date" id="fgf-venc" value="${venc}" oninput="_fatVencDica()"
+        style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.05rem">
+      <p id="fgf-dica" style="font-size:0.78rem;margin:6px 0 0">${origem}</p>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:0.8rem;color:#9aa;cursor:pointer">
+        <input type="checkbox" id="fgf-salvar" ${prazo == null ? "checked" : ""} style="width:auto">
+        <span id="fgf-salvar-txt">Gravar este prazo no cadastro do cliente</span></label>
+      <div id="fgf-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button class="fat-btn azul" style="flex:2" id="fgf-ok" onclick="fatGerarFaturaOk()">Gerar fatura</button>
+      </div>
+    </div>`);
+  _fatVencDica();
+}
+
+function _fatVencDica() {
+  const st = window._fatNovaFat; if (!st) return;
+  const v = document.getElementById("fgf-venc")?.value;
+  const dica = document.getElementById("fgf-dica");
+  const txt = document.getElementById("fgf-salvar-txt");
+  if (!v || !dica) return;
+  const d = _fatDiasEntre(st.hoje, v);
+  dica.innerHTML = d < 0
+    ? `<span style="color:#f87171">⚠ ${-d} dia(s) ANTES de hoje — a fatura já nasceria vencida.</span>`
+    : d === 0
+      ? `<span style="color:#f0b45c">Vence hoje mesmo (sem prazo).</span>`
+      : `<span style="color:#7ee2a0">${d} dia(s) de prazo.</span>` +
+        (st.prazo != null && st.prazo !== d ? `<span style="color:#889"> · cadastro diz ${st.prazo}</span>` : "");
+  if (txt) txt.textContent = d > 0
+    ? `Gravar ${d} dia(s) como prazo padrão deste cliente`
+    : "Gravar este prazo no cadastro do cliente";
+}
+
+// numeracao propria: o TecnoX numera as faturas dele, a nossa serie comeca do 1
+// por posto. O indice unico (empresa_id, numero) e' a garantia de verdade.
+async function _fatProximoNumero() {
+  const { data } = await sb.from("oct_faturas").select("numero")
+    .eq("empresa_id", window._fatEid).not("numero", "is", null)
+    .order("numero", { ascending: false }).limit(1);
+  return ((data && data[0] && Number(data[0].numero)) || 0) + 1;
+}
+
+async function fatGerarFaturaOk() {
+  const st = window._fatNovaFat; if (!st) return;
+  const msg = document.getElementById("fgf-msg");
+  const btn = document.getElementById("fgf-ok");
+  const venc = document.getElementById("fgf-venc").value || "";
+  if (!venc) { msg.textContent = "Informe o vencimento."; return; }
+  if (venc < st.hoje && !confirm("O vencimento é anterior a hoje — a fatura nasce vencida. Gerar assim mesmo?")) return;
+
+  btn.disabled = true;
+  msg.style.color = "#9aa"; msg.textContent = "Gerando...";
+
+  const base = {
+    empresa_id: window._fatEid, cliente_id: st.cliId,
+    cliente_nome: st.cliNome || null, valor: st.total,
     vencimento: venc, status: "aberta",
   };
-  const { data: nova, error } = await sb.from("oct_faturas").insert(fatura).select("id").single();
-  if (error) {
-    if (String(error.message || error.code || "").match(/oct_faturas|does not exist|not exist|relation|404|PGRST/i))
-      alert("A tabela de faturas ainda não existe. Rode a migração SQL que te enviei (oct_faturas) no Supabase e tente de novo.");
-    else alert("Erro ao gerar fatura: " + (error.message || error.code));
-    return;
+  let nova = null, erro = null;
+  for (let tent = 0; tent < 3 && !nova; tent++) {
+    const numero = await _fatProximoNumero();
+    const r = await sb.from("oct_faturas").insert({ ...base, numero }).select("id,numero").single();
+    if (!r.error) { nova = r.data; break; }
+    erro = r.error;
+    // 23505 = outro faturamento pegou o mesmo numero; tenta o proximo
+    if (String(r.error.code) !== "23505") break;
   }
-  // vincula os títulos à fatura (best-effort — colunas fatura_id/status vêm da migração)
-  await sb.from("oct_pdv_notas_prazo").update({ fatura_id: nova.id, status: "faturado" }).in("id", sel);
+  if (!nova) {
+    // sem a coluna numero (SQL nao rodado) a fatura ainda tem de sair
+    const r = await sb.from("oct_faturas").insert(base).select("id,numero").single();
+    if (r.error) {
+      msg.style.color = "#f87171";
+      msg.textContent = /oct_faturas|does not exist|relation|PGRST/i.test(String(erro?.message || r.error.message))
+        ? "A tabela de faturas ainda não existe — rode a migração SQL."
+        : "Erro ao gerar fatura: " + (r.error.message || r.error.code);
+      btn.disabled = false;
+      return;
+    }
+    nova = r.data;
+  }
+
+  await sb.from("oct_pdv_notas_prazo").update({ fatura_id: nova.id, status: "faturado" }).in("id", st.sel);
+
+  // grava o prazo no cadastro (falha aqui nao desfaz a fatura -- so' avisa)
+  let avisoPrazo = "";
+  const dias = _fatDiasEntre(st.hoje, venc);
+  if (document.getElementById("fgf-salvar")?.checked && st.cliId && dias > 0) {
+    const { error } = await sb.from("oct_pessoas").update({ prazo_dias: dias }).eq("id", st.cliId);
+    if (error) avisoPrazo = /prazo_dias|column/i.test(error.message || "")
+      ? "\n\n(O prazo não foi salvo no cadastro: falta rodar SQL-PRAZO-CLIENTE.sql.)"
+      : "\n\n(O prazo não foi salvo no cadastro: " + error.message + ")";
+  }
   window._fatSel.clear();
-  alert("Fatura gerada!");
+  _fatFechaModal();
+  alert(`Fatura ${nova.numero ?? ""} gerada — vence em ${_fatData(venc)}.` + avisoPrazo);
   fatAba("faturas");
 }
 
-// ---------- Abas: Faturas em Aberto / Liquidadas ----------
+// ---------- CORRIGIR O VENCIMENTO DEPOIS ----------
+// Errar a data nao pode custar excluir e refazer a fatura (refazer desvincula os
+// titulos, e a numeracao ja' foi gasta).
+async function fatEditarVencimento(faturaId) {
+  const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+  if (!f) { alert("Fatura não encontrada."); return; }
+  let bol = null;
+  try {
+    const r = await sb.from("oct_boletos").select("nosso_numero,status,vencimento")
+      .eq("fatura_id", faturaId).order("id", { ascending: false }).limit(1);
+    bol = (r.data || [])[0] || null;
+  } catch (e) { /* tabela pode nao existir */ }
+  const temBoleto = bol && ["registrado", "liquidado"].includes(bol.status);
+
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>📅 Vencimento — fatura ${f.numero ?? ""} · ${_fatEsc(f.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0">
+      <p style="color:#889;font-size:0.82rem;margin:0 0 12px">
+        Valor R$ ${_fatMoney(f.valor)} · emitida em ${_fatData(f.emissao)} ·
+        vencimento atual <b style="color:#f59e0b">${f.vencimento ? _fatData(f.vencimento) : "em branco"}</b></p>
+      <label style="color:#9aa;font-size:0.78rem">Novo vencimento</label>
+      <input type="date" id="fev-venc" value="${f.vencimento ? String(f.vencimento).slice(0, 10) : _fatHojeIso()}"
+        style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.05rem">
+      ${temBoleto ? `<div style="margin-top:12px;background:#2a2010;border:1px solid #63501f;border-radius:8px;padding:10px;font-size:0.78rem;color:#f0c98a">
+        ⚠ Esta fatura já tem o boleto <b>${_fatEsc(bol.nosso_numero || "")}</b> registrado no Sicoob para
+        ${_fatData(bol.vencimento)}. Mudar aqui <b>não muda no banco</b> — o boleto que o cliente tem em mãos
+        continua com a data antiga. Para valer no banco é preciso alterar o título lá.</div>` : ""}
+      <div id="fev-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button class="fat-btn azul" style="flex:2" onclick="fatEditarVencimentoOk('${faturaId}')">Salvar vencimento</button>
+      </div>
+    </div>`);
+}
+
+async function fatEditarVencimentoOk(faturaId) {
+  const v = document.getElementById("fev-venc").value || "";
+  const msg = document.getElementById("fev-msg");
+  if (!v) { msg.textContent = "Informe a data."; return; }
+  msg.style.color = "#9aa"; msg.textContent = "Salvando...";
+  const { error } = await sb.from("oct_faturas").update({ vencimento: v }).eq("id", faturaId);
+  if (error) { msg.style.color = "#f87171"; msg.textContent = "Erro: " + error.message; return; }
+  _fatFechaModal();
+  fatListarFaturas("aberta");
+}
+
 // o que ja' esta' arquivado na nuvem desta fatura. Enquanto o campo estiver
 // vazio o documento so' existe no disco do posto -- que e' exatamente o que
 // estamos deixando de aceitar.
@@ -1387,7 +1562,8 @@ async function fatListarFaturas(status) {
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
       <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
-      <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>` : ""}
+      <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>
+      <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarVencimento('${fatr.id}')">📅 Vencimento</button>` : ""}
     </td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + Number(fr.valor || 0), 0);
