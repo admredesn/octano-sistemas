@@ -61,6 +61,7 @@ const PARAM_DEFS = [
   },
   {
     grupo: '📧 Cobrança — envio de fatura',
+    acao: { rot: '✉ Testar envio', fn: 'parTestarEmail()' },
     itens: [
       { chave: 'cobranca_envio_ativo', rot: 'Enviar fatura ao cliente automaticamente', pad: false,
         desc: 'Libera o botão "Enviar fatura" (NF-e + boleto + fatura) por WhatsApp e e-mail.',
@@ -183,6 +184,78 @@ async function parToggle(ch, el) {
   parRender();   // redesenha: desligar um "pai" trava os filhos
 }
 
+// ---------- TESTE DE E-MAIL ----------
+// A tela nao fala SMTP (nem poderia: a senha vive no gateway). Enfileira o
+// teste e espera a resposta -- que traz o erro do servidor sem traducao, porque
+// e' o texto do servidor que resolve o problema.
+async function parTestarEmail() {
+  const de = String(_parAtual['cobranca_email_remetente'] || '').trim();
+  if (!de) { _parToast('Preencha e salve o e-mail que envia a cobrança antes de testar.', 'erro'); return; }
+  const destino = prompt('Enviar o teste para qual endereço?', de);
+  if (destino === null) return;
+
+  const cx = document.createElement('div');
+  cx.id = 'par-teste';
+  cx.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99998;display:flex;align-items:center;justify-content:center';
+  cx.innerHTML = `<div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;width:min(520px,92vw);color:#dbe2ea">
+      <h3 style="color:#f97316;margin:0 0 12px">✉ Teste de envio</h3>
+      <div id="par-teste-corpo"><p style="color:#9aa">Conectando ao servidor e enviando...</p></div>
+      <div style="text-align:right;margin-top:14px">
+        <button onclick="document.getElementById('par-teste').remove()"
+          style="background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:8px 16px;color:#c7d0dc;cursor:pointer">Fechar</button>
+      </div></div>`;
+  document.body.appendChild(cx);
+  const corpo = () => document.getElementById('par-teste-corpo');
+
+  const { data: s } = await sb.auth.getSession();
+  const quem = (s && s.session && s.session.user && s.session.user.email) || 'retaguarda';
+  const { data: novo, error } = await sb.from('oct_email_testes')
+    .insert({ empresa_id: _parEmpresa, destino: String(destino).trim() || de, pedido_por: quem })
+    .select('id').single();
+  if (error) {
+    if (corpo()) corpo().innerHTML = /oct_email_testes|does not exist|relation|PGRST/i.test(error.message || '')
+      ? '<p style="color:#f87171">Falta rodar <code>repo/sql/SQL-TESTE-EMAIL.sql</code> no Supabase.</p>'
+      : '<p style="color:#f87171">Erro: ' + _parEsc(error.message) + '</p>';
+    return;
+  }
+
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 2500));
+    const { data: t } = await sb.from('oct_email_testes')
+      .select('status,erro,detalhe,destino').eq('id', novo.id).maybeSingle();
+    if (!t || t.status === 'pendente') continue;
+    if (!corpo()) return;
+    if (t.status === 'ok') {
+      corpo().innerHTML = `<p style="color:#7ee2a0;font-weight:600">✔ Funcionou</p>
+        <p style="margin-top:8px">Enviado para <b>${_parEsc(t.destino || '')}</b>. Confira a caixa de entrada
+        (e o spam, na primeira vez).</p>
+        <p style="color:#6b7688;font-size:0.76rem;margin-top:8px">Resposta do servidor: ${_parEsc(t.detalhe || '')}</p>`;
+    } else {
+      corpo().innerHTML = `<p style="color:#f87171;font-weight:600">Não enviou</p>
+        <pre style="background:#0f1520;padding:10px;border-radius:6px;font-size:0.74rem;white-space:pre-wrap;
+          color:#c8d0da;margin-top:8px;max-height:220px;overflow:auto">${_parEsc(t.erro || '')}</pre>
+        ${_parDicaSmtp(t.erro || '')}`;
+    }
+    return;
+  }
+  if (corpo()) corpo().innerHTML = `<p style="color:#f59e0b">O teste não voltou.</p>
+    <p style="color:#889;font-size:0.8rem;margin-top:8px">O pedido ficou na fila. Se o worker do gateway
+    (<code>BOLETO_WORKER=1</code> no Railway) não estiver ligado, ele não é executado.</p>`;
+}
+
+// traduz os erros de SMTP que aparecem de verdade
+function _parDicaSmtp(erro) {
+  const e = String(erro || '').toLowerCase();
+  let d = '';
+  if (/inválido|sem @/.test(e)) d = 'Corrija o campo <b>Servidor de saída</b>: é o endereço do servidor (ex.: smtp.terra.com.br), não um e-mail.';
+  else if (/enotfound|getaddrinfo|dns/.test(e)) d = 'O servidor não existe ou está escrito errado. Confira o <b>Servidor de saída</b>.';
+  else if (/535|auth|credential|senha|password|login/.test(e)) d = 'Usuário ou senha recusados. No Gmail/Outlook use <b>senha de app</b>, não a senha da conta.';
+  else if (/etimedout|timeout|econnrefused/.test(e)) d = 'Conectou não. Costuma ser <b>porta errada</b>: 587 com STARTTLS ou 465 com SSL.';
+  else if (/self.signed|certificate|tls|ssl/.test(e)) d = 'Problema de TLS — normalmente porta 465 marcada como 587, ou o contrário.';
+  else if (/relay|not permitted|sender/.test(e)) d = 'O servidor não aceita enviar como esse remetente. O e-mail tem de ser o da própria conta autenticada.';
+  return d ? `<p style="color:#f0b45c;font-size:0.82rem;margin-top:10px">💡 ${d}</p>` : '';
+}
+
 // Enter no campo = sair do campo = grava (o onchange faz o resto)
 function _parEnter(ev, el) {
   if (ev.key !== 'Enter') return;
@@ -288,8 +361,12 @@ function parRender() {
     // botao so' onde ha' campo digitado: chave liga/desliga grava no clique e
     // um "Salvar" ali daria a entender que o clique nao valeu
     const temTexto = g.itens.some(i => i.tipo === 'texto' || i.tipo === 'senha');
+    const extra = g.acao ? `<button onclick="${g.acao.fn}"
+          style="background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:8px 14px;
+                 color:#c7d0dc;font-size:0.84rem;cursor:pointer">${_parEsc(g.acao.rot)}</button>` : '';
     const rodape = temTexto ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;padding-top:12px">
         <span style="color:#6b7688;font-size:0.72rem">salva sozinho ao sair do campo — o botão é para garantir</span>
+        ${extra}
         <button onclick="parSalvarGrupo(${gi})"
           style="background:#f97316;border:none;border-radius:6px;padding:8px 16px;color:#fff;
                  font-weight:700;font-size:0.84rem;cursor:pointer">💾 Salvar alterações</button>
