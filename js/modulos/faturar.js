@@ -1120,6 +1120,8 @@ async function fatVerFatura(faturaId) {
   const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
   if (!f) { alert("Fatura não encontrada."); return; }
   if (f.fatura_pdf_path) { fatVerDoc(f.fatura_pdf_path); return; }
+  // ja' pedida (nasce assim): so' espera, nao pede de novo
+  const jaNaFila = !!f.fatura_pdf_pedido_em;
 
   _fatModal(`<div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0">
       📄 Fatura ${f.numero ?? ""}</div>
@@ -1128,7 +1130,7 @@ async function fatVerFatura(faturaId) {
       <p style="font-size:0.8rem;color:#889;margin-top:8px">O extrato traz um abastecimento por linha,
       com placa, odômetro e cupom. Fica arquivado na nuvem — na próxima vez abre na hora.</p></div>`);
 
-  const { error } = await sb.from("oct_faturas")
+  const { error } = jaNaFila ? { error: null } : await sb.from("oct_faturas")
     .update({ fatura_pdf_pedido_em: new Date().toISOString() }).eq("id", faturaId);
   if (error) {
     _fatVfCaixa(/fatura_pdf_pedido_em|column/i.test(error.message || "")
@@ -1498,6 +1500,9 @@ async function fatGerarFaturaOk() {
     empresa_id: window._fatEid, cliente_id: st.cliId,
     cliente_nome: st.cliNome || null, valor: st.total,
     vencimento: venc, status: "aberta",
+    // ja' nasce pedindo o PDF: o worker gera em segundos e o documento existe
+    // desde o comeco, em vez de so' quando alguem lembra de abrir a fatura
+    fatura_pdf_pedido_em: new Date().toISOString(),
   };
   let nova = null, erro = null;
   for (let tent = 0; tent < 3 && !nova; tent++) {
@@ -1642,9 +1647,10 @@ async function fatEditarFaturaOk(faturaId) {
   const patch = {
     vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs,
     alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
-    // o PDF guardado virou mentira: some com ele para ser refeito no proximo
-    // "Ver fatura" -- pior que nao ter a fatura e' ter a fatura errada
+    // o PDF guardado virou mentira: joga fora e ja' pede outro -- pior que nao
+    // ter a fatura e' ter a fatura errada, e pior ainda e' nao ter nenhuma
     fatura_pdf_path: null,
+    fatura_pdf_pedido_em: new Date().toISOString(),
   };
   let { error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId);
   if (error && /desconto|acrescimo|observacao|alterado_|column/i.test(error.message || "")) {
