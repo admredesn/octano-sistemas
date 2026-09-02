@@ -1099,9 +1099,69 @@ async function fatAnexarNfeConfirmar() {
 // link assinado e temporario: documento fiscal nao fica em URL publica eterna
 async function fatVerDoc(path) {
   if (!path) return;
+  // a janela abre AGORA, junto ao clique: se abrisse depois do await o Chrome
+  // trataria como pop-up e bloquearia calado
+  const w = window.open("", "_blank");
   const { data, error } = await sb.storage.from(_FAT_BUCKET).createSignedUrl(path, 600);
-  if (error || !data) { alert("Não consegui abrir o arquivo: " + (error?.message || "sem link")); return; }
-  window.open(data.signedUrl, "_blank");
+  if (error || !data) {
+    if (w) w.close();
+    alert("Não consegui abrir o arquivo: " + (error?.message || "sem link"));
+    return;
+  }
+  if (w) w.location = data.signedUrl; else window.open(data.signedUrl, "_blank");
+}
+
+// ---------- VER A FATURA (o documento que o cliente recebe) ----------
+// A tela nao chama o gateway: marca o pedido na fatura e o worker do
+// octano-sicoob gera o PDF, guarda no bucket e devolve o caminho. E' o MESMO
+// arquivo que o envio vai anexar -- desenhar a fatura aqui tambem criaria dois
+// documentos para divergirem.
+async function fatVerFatura(faturaId) {
+  const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+  if (!f) { alert("Fatura não encontrada."); return; }
+  if (f.fatura_pdf_path) { fatVerDoc(f.fatura_pdf_path); return; }
+
+  _fatModal(`<div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0">
+      📄 Fatura ${f.numero ?? ""}</div>
+    <div style="padding:22px;color:#cdd6e0" id="fvf-corpo">
+      <p>Gerando a fatura...</p>
+      <p style="font-size:0.8rem;color:#889;margin-top:8px">O extrato traz um abastecimento por linha,
+      com placa, odômetro e cupom. Fica arquivado na nuvem — na próxima vez abre na hora.</p></div>`);
+
+  const { error } = await sb.from("oct_faturas")
+    .update({ fatura_pdf_pedido_em: new Date().toISOString() }).eq("id", faturaId);
+  if (error) {
+    _fatVfCaixa(/fatura_pdf_pedido_em|column/i.test(error.message || "")
+      ? `<p style="color:#f87171">Falta rodar <code>repo/sql/SQL-FATURA-PDF.sql</code>.</p>`
+      : `<p style="color:#f87171">Erro: ${_fatEsc(error.message)}</p>`);
+    return;
+  }
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data: at } = await sb.from("oct_faturas")
+      .select("fatura_pdf_path,fatura_pdf_pedido_em,envio_erro").eq("id", faturaId).maybeSingle();
+    if (at && at.fatura_pdf_path) {
+      // o botao e' de proposito: abrir sozinho aqui seria pop-up bloqueado
+      _fatVfCaixa(`<p style="color:#7ee2a0">✔ Fatura pronta.</p>
+        <button class="fat-btn azul" style="margin-top:12px;width:100%"
+          onclick="_fatFechaModal();fatVerDoc('${_fatEsc(at.fatura_pdf_path)}')">📄 Abrir a fatura</button>`);
+      return;
+    }
+    if (at && !at.fatura_pdf_pedido_em && at.envio_erro) {
+      _fatVfCaixa(`<p style="color:#f87171">Não consegui gerar:</p>
+        <pre style="text-align:left;background:#0f1520;padding:10px;border-radius:6px;font-size:0.72rem;
+          white-space:pre-wrap;color:#c8d0da;margin-top:8px">${_fatEsc(at.envio_erro)}</pre>`);
+      return;
+    }
+  }
+  _fatVfCaixa(`<p style="color:#f59e0b">A fatura ainda não ficou pronta.</p>
+    <p style="font-size:0.8rem;color:#889;margin-top:8px">O pedido está na fila. Se o worker do gateway
+    (<code>BOLETO_WORKER=1</code> no Railway) não estiver ligado, ele não sai da fila.</p>`);
+}
+
+function _fatVfCaixa(html) {
+  const c = document.getElementById("fvf-corpo");
+  if (c) c.innerHTML = html;
 }
 
 // ---------- modal genérico (self-contained) ----------
@@ -1582,6 +1642,9 @@ async function fatEditarFaturaOk(faturaId) {
   const patch = {
     vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs,
     alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
+    // o PDF guardado virou mentira: some com ele para ser refeito no proximo
+    // "Ver fatura" -- pior que nao ter a fatura e' ter a fatura errada
+    fatura_pdf_path: null,
   };
   let { error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId);
   if (error && /desconto|acrescimo|observacao|alterado_|column/i.test(error.message || "")) {
@@ -1619,7 +1682,7 @@ function _fatStatusCel(f, bol) {
   else if (temNf)            { rot = "Falta o boleto";                    cor = "#f0b45c"; }
   else                       { rot = "Sem NF-e nem boleto";               cor = "#8b93a3"; }
   const erro = f.envio_erro
-    ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ falha no último envio</div>` : "";
+    ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ última tentativa falhou</div>` : "";
   return sel(temNf, "NF", "NF-e anexada à fatura") +
          sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
          sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
@@ -1681,6 +1744,7 @@ async function fatListarFaturas(status) {
     <td class="fat-td" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
+      <button class="fat-abtn" style="background:#b45309" onclick="fatVerFatura('${fatr.id}')">📄 Fatura</button>
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
       <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
