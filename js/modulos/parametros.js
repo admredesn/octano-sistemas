@@ -61,7 +61,8 @@ const PARAM_DEFS = [
   },
   {
     grupo: '📧 Cobrança — envio de fatura',
-    acao: { rot: '✉ Testar envio', fn: 'parTestarEmail()' },
+    acoes: [{ rot: '✍ Textos das mensagens', fn: 'msgAbrirEditor()' },
+            { rot: '✉ Testar envio', fn: 'parTestarEmail()' }],
     itens: [
       { chave: 'cobranca_envio_ativo', rot: 'Enviar fatura ao cliente automaticamente', pad: false,
         desc: 'Libera o botão "Enviar fatura" (NF-e + boleto + fatura) por WhatsApp e e-mail.',
@@ -367,9 +368,9 @@ function parRender() {
     // botao so' onde ha' campo digitado: chave liga/desliga grava no clique e
     // um "Salvar" ali daria a entender que o clique nao valeu
     const temTexto = g.itens.some(i => i.tipo === 'texto' || i.tipo === 'senha');
-    const extra = g.acao ? `<button onclick="${g.acao.fn}"
+    const extra = (g.acoes || []).map(a => `<button onclick="${a.fn}"
           style="background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:8px 14px;
-                 color:#c7d0dc;font-size:0.84rem;cursor:pointer">${_parEsc(g.acao.rot)}</button>` : '';
+                 color:#c7d0dc;font-size:0.84rem;cursor:pointer">${_parEsc(a.rot)}</button>`).join('');
     const rodape = temTexto ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;padding-top:12px">
         <span style="color:#6b7688;font-size:0.72rem">salva sozinho ao sair do campo — o botão é para garantir</span>
         ${extra}
