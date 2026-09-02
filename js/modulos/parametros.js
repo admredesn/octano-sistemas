@@ -77,6 +77,18 @@ const PARAM_DEFS = [
         pad: '', dica: 'financeiro@seudominio.com.br (opcional)',
         desc: 'Cópia oculta de cada cobrança enviada. Deixe vazio para não copiar.',
         depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_smtp_host', tipo: 'texto', rot: 'Servidor de saída (SMTP)',
+        pad: '', dica: 'smtp.gmail.com',
+        desc: 'Gmail: smtp.gmail.com · Outlook/365: smtp.office365.com · Locaweb: email-ssl.com.br',
+        depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_smtp_porta', tipo: 'texto', rot: 'Porta', pad: '', dica: '587',
+        desc: '587 com STARTTLS (o mais comum) ou 465 com SSL.',
+        depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_smtp_senha', tipo: 'senha', rot: 'Senha do e-mail', pad: '',
+        dica: 'digite para trocar',
+        desc: 'No Gmail use SENHA DE APP (a senha normal não funciona com 2FA). '
+            + 'Guardada no banco — restrinja o acesso a esta aba.',
+        depende: 'cobranca_envio_ativo' },
       { chave: 'cobranca_whatsapp', rot: 'Enviar também por WhatsApp', pad: true,
         desc: 'Usa o gateway do WhatsApp. No Florestal, 85 dos 91 clientes têm número e só 13 têm e-mail.',
         depende: 'cobranca_envio_ativo' },
@@ -109,7 +121,7 @@ function parValor(ch) {
 // um filho só vale se o pai estiver ligado
 function _parEhTexto(ch) {
   for (const g of PARAM_DEFS) {
-    for (const i of g.itens) if (i.chave === ch) return i.tipo === 'texto';
+    for (const i of g.itens) if (i.chave === ch) return i.tipo === 'texto' || i.tipo === 'senha';
   }
   return false;
 }
@@ -153,6 +165,10 @@ async function parGravar(ch, ligado) {
 // grava campo de texto ao sair do campo (nao a cada tecla)
 async function parTexto(ch, el) {
   const v = String(el.value || '').trim();
+  // campo de senha em branco = "nao mexi", nao "apague". Sem isso, abrir a tela
+  // e salvar outro campo zeraria a senha sem ninguem perceber.
+  const ehSenha = (PARAM_DEFS.flatMap(g => g.itens).find(i => i.chave === ch) || {}).tipo === 'senha';
+  if (ehSenha && !v) return;
   if (v === (_parAtual[ch] || '')) return;          // nada mudou
   const ok = await parGravar(ch, v);
   if (!ok) { el.value = _parAtual[ch] || ''; return; }
@@ -177,16 +193,23 @@ function parRender() {
   if (!el) return;
   const grupos = PARAM_DEFS.map(g => {
     const linhas = g.itens.map(i => {
-      if (i.tipo === 'texto') {
+      if (i.tipo === 'texto' || i.tipo === 'senha') {
         const bloq = _parBloqueado(i);
-        const v = _parAtual[i.chave] || '';
+        const ehSenha = i.tipo === 'senha';
+        // a senha NAO volta para a tela: so' se diz que existe. Evita que ela
+        // fique no HTML da pagina, ao alcance de qualquer F12.
+        const v = ehSenha ? '' : (_parAtual[i.chave] || '');
+        const salva = ehSenha && !!(_parAtual[i.chave] || '').length;
         return `<div style="padding:10px 0;border-bottom:1px solid #1a1d2e${bloq ? ';opacity:.5' : ''}">
           <div style="color:#e0e0e0;font-size:0.88rem;font-weight:600">${_parEsc(i.rot)}</div>
           <div style="color:#8892a0;font-size:0.76rem;margin:2px 0 6px">${_parEsc(i.desc)}</div>
-          <input type="text" value="${_parEsc(v)}" placeholder="${_parEsc(i.dica || '')}"
-            ${bloq ? 'disabled' : ''} onchange="parTexto('${i.chave}', this)"
+          <input type="${ehSenha ? 'password' : 'text'}" value="${_parEsc(v)}"
+            placeholder="${_parEsc(salva ? '•••••••• (senha salva — digite para trocar)' : (i.dica || ''))}"
+            ${bloq ? 'disabled' : ''} autocomplete="new-password"
+            onchange="parTexto('${i.chave}', this)"
             style="width:100%;max-width:420px;background:#0f1520;border:1px solid #2a2d3e;
                    border-radius:6px;padding:7px 9px;color:#e8eef5;font-size:0.85rem">
+          ${salva ? '<div style="color:#7ee2a0;font-size:0.72rem;margin-top:3px">✔ senha gravada</div>' : ''}
           ${bloq ? `<div style="color:#a63;font-size:0.72rem;margin-top:3px">⤷ depende de "${
             _parEsc((PARAM_DEFS.flatMap(x => x.itens).find(x => x.chave === i.depende) || {}).rot || i.depende)}"</div>` : ''}
         </div>`;
