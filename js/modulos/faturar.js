@@ -1111,6 +1111,123 @@ async function fatVerDoc(path) {
   if (w) w.location = data.signedUrl; else window.open(data.signedUrl, "_blank");
 }
 
+// ---------- ENVIAR FATURA AO CLIENTE (03/09) ----------
+// Mesmo padrao do boleto e do PDF: a tela nao fala com o gateway. Marca o
+// pedido na fatura e espera -- a senha do SMTP e o token do WhatsApp ficam no
+// servidor, longe do navegador.
+async function fatEnviar(faturaId) {
+  const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+  if (!f) { alert("Fatura não encontrada."); return; }
+  const { data: cli } = f.cliente_id
+    ? await sb.from("oct_pessoas").select("nome,email,telefone,whatsapp").eq("id", f.cliente_id).maybeSingle()
+    : { data: null };
+
+  let bol = null;
+  try {
+    const r = await sb.from("oct_boletos").select("nosso_numero,status")
+      .eq("fatura_id", faturaId).order("id", { ascending: false }).limit(1);
+    bol = (r.data || [])[0] || null;
+  } catch (e) { /* sem boletos */ }
+  const temBol = !!(bol && ["registrado", "liquidado"].includes(bol.status));
+
+  const email = (cli && cli.email || "").trim();
+  const zap = (cli && (cli.whatsapp || cli.telefone) || "").trim();
+  const item = (ok, txt, falta) => `<li style="color:${ok ? "#86efac" : "#6b7688"};margin:2px 0">
+      ${ok ? "✔" : "○"} ${txt}${ok ? "" : ` <span style="color:#f0b45c">(${falta})</span>`}</li>`;
+
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>📤 Enviar fatura ${f.numero ?? ""} — ${_fatEsc(f.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0" id="fen-corpo">
+      ${f.enviada_em ? `<p style="color:#f0b45c;font-size:0.82rem;margin:0 0 10px">
+        ⚠ Já foi enviada em ${_fatData(f.enviada_em)} por ${_fatEsc(f.enviada_por || "—")}. Enviar de novo é reenvio.</p>` : ""}
+      <p style="color:#889;font-size:0.8rem;margin:0 0 6px">Vai anexado:</p>
+      <ul style="list-style:none;padding:0;margin:0 0 14px;font-size:0.84rem">
+        ${item(!!f.fatura_pdf_path, "Fatura detalhada (PDF)", "ainda sendo gerada")}
+        ${item(temBol, "Boleto", "sem boleto registrado")}
+        ${item(!!f.nfe_pdf_path, "NF-e em PDF (DANFE)", "não anexada")}
+        ${item(!!f.nfe_xml_path, "NF-e em XML", "não anexada")}
+      </ul>
+      <p style="color:#889;font-size:0.8rem;margin:0 0 6px">Para onde:</p>
+      <ul style="list-style:none;padding:0;margin:0 0 12px;font-size:0.84rem">
+        ${item(!!email, "E-mail: " + (_fatEsc(email) || "—"), "cliente sem e-mail no cadastro")}
+        ${item(!!zap, "WhatsApp: " + (_fatEsc(zap) || "—"), "cliente sem telefone no cadastro")}
+      </ul>
+      <label style="color:#9aa;font-size:0.78rem">Canais</label>
+      <select id="fen-canais" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+        <option value="ambos">E-mail e WhatsApp</option>
+        <option value="email">Só e-mail</option>
+        <option value="whatsapp">Só WhatsApp</option>
+      </select>
+      ${(!email && !zap) ? `<p style="color:#f87171;font-size:0.8rem;margin-top:10px">
+        O cliente não tem e-mail nem telefone no cadastro — não há para onde enviar.</p>` : ""}
+      <div id="fen-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button class="fat-btn azul" style="flex:2" id="fen-ok" ${(!email && !zap) ? "disabled" : ""}
+          onclick="fatEnviarOk('${faturaId}')">📤 Enviar agora</button>
+      </div>
+    </div>`);
+}
+
+async function fatEnviarOk(faturaId) {
+  const canais = document.getElementById("fen-canais").value;
+  const btn = document.getElementById("fen-ok");
+  const msg = document.getElementById("fen-msg");
+  if (btn) btn.disabled = true;
+  msg.style.color = "#9aa"; msg.textContent = "Enviando...";
+
+  const { error } = await sb.from("oct_faturas").update({
+    envio_canais: canais, envio_pedido_em: new Date().toISOString(),
+    enviada_em: null, envio_erro: null,      // reenvio comeca do zero
+  }).eq("id", faturaId);
+  if (error) {
+    msg.style.color = "#f87171";
+    msg.innerHTML = /envio_pedido_em|envio_canais|column/i.test(error.message || "")
+      ? "Falta rodar <code>repo/sql/SQL-ENVIO-FATURA.sql</code>."
+      : "Erro: " + _fatEsc(error.message);
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data: at } = await sb.from("oct_faturas")
+      .select("enviada_em,enviada_por,envio_destino,envio_erro,envio_pedido_em")
+      .eq("id", faturaId).maybeSingle();
+    if (at && at.enviada_em) {
+      _fatEnvCaixa(`<p style="color:#7ee2a0;font-weight:600">✔ Fatura enviada</p>
+        <table style="width:100%;margin-top:10px;font-size:0.84rem;text-align:left">
+          <tr><td style="color:#889;padding:3px 0">Quando</td><td>${new Date(at.enviada_em).toLocaleString("pt-BR")}</td></tr>
+          <tr><td style="color:#889;padding:3px 0">Por</td><td>${_fatEsc(at.enviada_por || "")}</td></tr>
+          <tr><td style="color:#889;padding:3px 0">Para</td><td>${_fatEsc(at.envio_destino || "—")}</td></tr>
+        </table>
+        ${at.envio_erro ? `<p style="color:#f0b45c;font-size:0.78rem;margin-top:10px">
+          Um dos canais falhou: ${_fatEsc(at.envio_erro)}</p>` : ""}
+        <button class="fat-btn azul" style="margin-top:12px;width:100%"
+          onclick="_fatFechaModal();fatListarFaturas('aberta')">Fechar</button>`);
+      return;
+    }
+    if (at && !at.envio_pedido_em && at.envio_erro) {
+      _fatEnvCaixa(`<p style="color:#f87171;font-weight:600">Não consegui enviar</p>
+        <pre style="text-align:left;background:#0f1520;padding:10px;border-radius:6px;font-size:0.74rem;
+          white-space:pre-wrap;color:#c8d0da;margin-top:8px">${_fatEsc(at.envio_erro)}</pre>
+        <button class="fat-btn" style="margin-top:12px;width:100%" onclick="_fatFechaModal()">Fechar</button>`);
+      return;
+    }
+  }
+  _fatEnvCaixa(`<p style="color:#f59e0b">O envio ainda não voltou.</p>
+    <p style="font-size:0.8rem;color:#889;margin-top:8px">O pedido está na fila. Se o worker do gateway
+    (<code>BOLETO_WORKER=1</code> no Railway) não estiver ligado, ele não sai da fila.</p>
+    <button class="fat-btn" style="margin-top:12px;width:100%" onclick="_fatFechaModal()">Fechar</button>`);
+}
+
+function _fatEnvCaixa(html) {
+  const c = document.getElementById("fen-corpo");
+  if (c) c.innerHTML = html;
+}
+
 // ---------- VER A FATURA (o documento que o cliente recebe) ----------
 // A tela nao chama o gateway: marca o pedido na fatura e o worker do
 // octano-sicoob gera o PDF, guarda no bucket e devolve o caminho. E' o MESMO
@@ -1755,7 +1872,8 @@ async function fatListarFaturas(status) {
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
       <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
       <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>
-      <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarFatura('${fatr.id}')">✏ Editar</button>` : ""}
+      <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarFatura('${fatr.id}')">✏ Editar</button>
+      <button class="fat-abtn" style="background:#15803d" onclick="fatEnviar('${fatr.id}')">📤 Enviar</button>` : ""}
     </td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
