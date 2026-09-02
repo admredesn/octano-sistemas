@@ -7,7 +7,14 @@
 
 function _fatEsc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function _fatMoney(v) { return Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function _fatData(v) { return v ? new Date(v).toLocaleDateString("pt-BR") : ""; }
+function _fatData(v) {
+  if (!v) return "";
+  // "AAAA-MM-DD" sem hora: new Date() le como UTC e o Brasil (UTC-3) volta um
+  // dia -- vencimento 31/08 aparecia 30/08. Data pura se formata na mao.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+  if (m) return m[3] + "/" + m[2] + "/" + m[1];
+  return new Date(v).toLocaleDateString("pt-BR");
+}
 // prazo padrão da empresa (dias) — TecnoX define o vencimento no faturamento; aqui
 // estimamos por prazo padrão para mostrar vencimento/atraso do título em aberto.
 function _fatPrazoDias() { return Number(window._fatPrazo || 30); }
