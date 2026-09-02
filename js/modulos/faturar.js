@@ -114,13 +114,13 @@ async function fatListarTitulos() {
   const cliOpts = "<option value=''>Todos os clientes</option>" +
     (cliRes.data || []).map(c => `<option value='${c.id}' ${filtroCli === c.id ? "selected" : ""}>${_fatEsc(c.nome)}</option>`).join("");
 
-  const linhas = titulos.map(t => {
+  const linhas = titulos.map((t, i) => {
     const venc = _fatVencDe(t);
     const atr = _fatAtrasoDias(venc);
     const vencCor = atr > 0 ? "#f87171" : atr >= -3 ? "#fbbf24" : "#9aa";
     const atrTxt = atr == null ? "—" : atr > 0 ? `<b style="color:#f87171">${atr}d</b>` : atr === 0 ? '<span style="color:#fbbf24">hoje</span>' : "—";
-    return `<tr>
-    <td class="fat-td" style="text-align:center"><input type="checkbox" ${window._fatSel.has(t.id) ? "checked" : ""} onchange="fatToggle('${t.id}')"></td>
+    return `<tr id="fat-tr-${t.id}" data-idx="${i}" onclick="_fatCursor(${i})">
+    <td class="fat-td" style="text-align:center"><input type="checkbox" id="fat-chk-${t.id}" ${window._fatSel.has(t.id) ? "checked" : ""} onchange="fatToggle('${t.id}')"></td>
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
     <td class="fat-td" style="color:${vencCor}">${venc ? _fatData(venc) : "—"}</td>
     <td class="fat-td" style="text-align:center">${atrTxt}</td>
@@ -165,25 +165,109 @@ async function fatListarTitulos() {
         <div class="fat-card-qtd">${d.qtd} título(s)${d.id ? ` · <span style="color:#25d366;cursor:pointer" onclick="fatCobrar('${d.id}')">💬 cobrar</span>` : ""}</div></div>`).join("")}
     </div>` : ""}
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px"></th><th>Emissão</th><th>Vencimento</th><th>Atraso</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th><th style="text-align:center">Ações</th></tr></thead>
-      <tbody>${linhas || '<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fat-chk-todos" title="Marcar/desmarcar todos os títulos da lista" onchange="fatSelTodos(this.checked)"></th><th>Emissão</th><th>Vencimento</th><th>Atraso</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th><th style="text-align:center">Ações</th></tr></thead>
+      <tbody id="fat-tbody">${linhas || '<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
     </table></div>
     <div class="fat-rodape">
-      <span>Selecionados: <strong id="fat-selqtd">${window._fatSel.size}</strong> · Total: <strong style="color:#4ade80">R$ <span id="fat-seltot">${_fatMoney(selTotal)}</span></strong></span>
+      <span>Selecionados: <strong id="fat-selqtd">${window._fatSel.size}</strong> · Total: <strong style="color:#4ade80">R$ <span id="fat-seltot">${_fatMoney(selTotal)}</span></strong>
+        <button class="fat-btn mini" style="margin-left:10px" onclick="fatSelTodos(true)">☑ Todos (${titulos.length})</button>
+        <button class="fat-btn mini" onclick="fatSelTodos(false)">☐ Nenhum</button>
+        <span style="color:#5b6474;font-size:11px;margin-left:10px">↑↓ navega · espaço marca · shift+↑↓ marca em sequência</span></span>
       <span style="display:flex;gap:8px">
         <input type="date" id="fat-venc" class="fat-inp" title="Vencimento da fatura">
         <button class="fat-btn azul" onclick="fatGerarFatura()">💠 Gerar Fatura</button>
         <button class="fat-btn" style="background:#0e7490" onclick="fatGerarNfConsolidada()" title="Consolida os cupons selecionados numa NF-e (modelo 55, CFOP 5929) — HOMOLOGAÇÃO">🧾 Gerar NF (consolidada)</button>
       </span>
     </div>`;
+
+  window._fatCur = null;
+  _fatSelSync();
+  if (!window._fatTecladoOn) { document.addEventListener("keydown", _fatTeclado); window._fatTecladoOn = true; }
 }
 
 function fatToggle(id) {
   if (window._fatSel.has(id)) window._fatSel.delete(id); else window._fatSel.add(id);
+  // o toggle agora vem tanto do clique quanto do teclado: quem manda e' o Set,
+  // e o checkbox segue ele (antes o checkbox mandava e o teclado nao existia).
+  const cx = document.getElementById("fat-chk-" + id);
+  if (cx) cx.checked = window._fatSel.has(id);
+  _fatSelSync();
+}
+
+// rodape + checkbox mestre refletindo a selecao atual
+function _fatSelSync() {
   const titulos = window._fatTitulos || [];
-  const selTotal = titulos.filter(t => window._fatSel.has(t.id)).reduce((s, t) => s + Number(t.valor || 0), 0);
+  const marcados = titulos.filter(t => window._fatSel.has(t.id));
+  const selTotal = marcados.reduce((s, t) => s + Number(t.valor || 0), 0);
   const q = document.getElementById("fat-selqtd"); if (q) q.textContent = window._fatSel.size;
   const tt = document.getElementById("fat-seltot"); if (tt) tt.textContent = _fatMoney(selTotal);
+  const mestre = document.getElementById("fat-chk-todos");
+  if (mestre) {
+    mestre.checked = titulos.length > 0 && marcados.length === titulos.length;
+    // meio-termo: o quadradinho cheio diz "tem coisa marcada, mas nao tudo"
+    mestre.indeterminate = marcados.length > 0 && marcados.length < titulos.length;
+  }
+}
+
+// marca/desmarca TUDO o que esta' na lista (respeita o filtro na tela --
+// "todos" quer dizer os que voce esta' vendo, nao os 686 do banco)
+function fatSelTodos(marcar) {
+  const titulos = window._fatTitulos || [];
+  titulos.forEach(t => {
+    if (marcar) window._fatSel.add(t.id); else window._fatSel.delete(t.id);
+    const cx = document.getElementById("fat-chk-" + t.id);
+    if (cx) cx.checked = !!marcar;
+  });
+  _fatSelSync();
+}
+
+// ---------- NAVEGACAO POR TECLADO (02/09) ----------
+// Faturar um cliente com 19 titulos custava 19 cliques em caixinhas de 13px.
+// Agora: seta pra baixo anda, espaco marca, shift+seta marca em sequencia.
+function _fatCursor(i) {
+  const lista = window._fatTitulos || [];
+  if (!lista.length) return;
+  i = Math.max(0, Math.min(lista.length - 1, i));
+  const ant = document.querySelector("#fat-tbody tr.fat-cursor");
+  if (ant) ant.classList.remove("fat-cursor");
+  const tr = document.getElementById("fat-tr-" + lista[i].id);
+  if (tr) { tr.classList.add("fat-cursor"); tr.scrollIntoView({ block: "nearest" }); }
+  window._fatCur = i;
+}
+
+function _fatTeclado(e) {
+  // so' vale na aba de titulos, nunca com modal aberto nem enquanto se digita
+  if (!document.getElementById("fat-tbody")) return;
+  if (document.getElementById("fat-modal") || document.getElementById("fat-receber-modal")) return;
+  const alvo = e.target || {};
+  const tag = String(alvo.tagName || "").toLowerCase();
+  // button tambem: com o foco num botao, o espaco pertence ao botao
+  if (tag === "input" || tag === "select" || tag === "textarea" || tag === "button" || alvo.isContentEditable) return;
+  const lista = window._fatTitulos || [];
+  if (!lista.length) return;
+  const k = e.key;
+
+  if (k === "ArrowDown" || k === "ArrowUp") {
+    e.preventDefault();
+    const passo = (k === "ArrowDown") ? 1 : -1;
+    const i = (window._fatCur == null)
+      ? (passo > 0 ? 0 : lista.length - 1)
+      : Math.max(0, Math.min(lista.length - 1, window._fatCur + passo));
+    // shift arrasta a selecao junto com o cursor, como em lista de arquivos
+    if (e.shiftKey && window._fatCur != null && i !== window._fatCur) fatToggle(lista[i].id);
+    _fatCursor(i);
+    return;
+  }
+  if (k === " " || k === "Spacebar" || k === "Space") {
+    e.preventDefault();                       // senao a pagina rola
+    if (window._fatCur == null) { _fatCursor(0); return; }
+    fatToggle(lista[window._fatCur].id);
+    return;
+  }
+  if (k === "Home") { e.preventDefault(); _fatCursor(0); return; }
+  if (k === "End")  { e.preventDefault(); _fatCursor(lista.length - 1); return; }
+  if ((e.ctrlKey || e.metaKey) && (k === "a" || k === "A")) { e.preventDefault(); fatSelTodos(true); return; }
+  if (k === "Escape" && window._fatSel.size) { e.preventDefault(); fatSelTodos(false); }
 }
 
 // ---------- filtros ----------
@@ -1456,6 +1540,8 @@ function _fatEstilo() {
   .fat-td{padding:6px 8px;border-bottom:1px solid #1c2130}
   .fat-r{text-align:right;font-variant-numeric:tabular-nums}
   .fat-grid tbody tr:nth-child(even){background:#141824}
+  .fat-grid tbody tr.fat-cursor{background:#1f2a3d !important;box-shadow:inset 3px 0 0 #f97316}
+  .fat-grid tbody tr:hover{background:#1a2130}
   .fat-rodape{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:11px 14px;background:#13151f;border-top:2px solid #f97316;position:sticky;bottom:0;z-index:6}
   .fat-btn{background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:7px 12px;font-size:12px;color:#c7d0dc;cursor:pointer}
   .fat-btn:hover{background:#242c3e;color:#fff}
