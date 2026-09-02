@@ -398,15 +398,133 @@ async function fatReimprimirDanfe(chave) {
 }
 
 // ---------- BOLETO (placeholder — pronto p/ integração bancária) ----------
-function fatBoleto(id) {
-  _fatModal(`
-    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+// ---------- BOLETO DA FATURA (01/09) ----------
+// Fluxo: a tela grava 'pendente' em oct_boletos; o worker do gateway Sicoob
+// registra no banco e devolve linha digitavel/codigo de barras. A tela fica
+// olhando ate' sair do 'pendente'.
+const _FAT_BOL_CAMPOS = [
+  ["documento", "CPF/CNPJ"], ["endereco", "endereço"], ["bairro", "bairro"],
+  ["cidade", "cidade"], ["cep", "CEP"], ["uf", "UF"],
+];
+
+function _fatBolFaltando(p) {
+  if (!p) return ["cadastro do cliente não encontrado"];
+  return _FAT_BOL_CAMPOS.filter(([c]) => !String(p[c] || "").trim()).map(([, r]) => r);
+}
+
+async function fatBoleto(id) {
+  _fatModal(`<div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0">
+      🏦 Boleto</div><div style="padding:22px;color:#9aa">Carregando...</div>`);
+  // o botao aparece na lista de TITULOS e na de FATURAS: aceita os dois
+  let fat = null;
+  try {
+    const r = await sb.from("oct_faturas").select("*").eq("id", id).maybeSingle();
+    fat = r.data || null;
+  } catch (e) { /* tabela pode nao existir ainda */ }
+  if (!fat) {
+    _fatBolCaixa(`<p style="color:#f59e0b">Boleto é emitido da <b>fatura</b>, não do título solto.</p>
+      <p style="font-size:0.8rem;color:#889;margin-top:8px">Selecione os títulos do cliente na aba
+      <b>Notas/Títulos em Aberto</b>, clique em <b>Gerar fatura</b> e emita o boleto por lá — assim o
+      boleto cobre tudo o que o cliente deve, num documento só.</p>`);
+    return;
+  }
+
+  // ja' existe boleto para esta fatura?
+  let jaTem = null;
+  try {
+    const r = await sb.from("oct_boletos").select("*").eq("fatura_id", id)
+      .order("id", { ascending: false }).limit(1);
+    jaTem = (r.data || [])[0] || null;
+    if (r.error) throw r.error;
+  } catch (e) {
+    _fatBolCaixa(`<p style="color:#f87171">A tabela de boletos ainda não existe.</p>
+      <p style="font-size:0.8rem;color:#889;margin-top:8px">Rode <code>repo/sql/SQL-BOLETOS.sql</code>
+      no Supabase e tente de novo.</p>`);
+    return;
+  }
+  if (jaTem && ["registrado", "liquidado"].includes(jaTem.status)) {
+    _fatBolMostrar(jaTem);
+    return;
+  }
+
+  // cadastro do cliente: o Sicoob recusa sem endereco/CPF. Conferir aqui evita
+  // uma ida ao banco e diz ao operador o que preencher.
+  const { data: pes } = await sb.from("oct_pessoas").select("*").eq("id", fat.cliente_id).maybeSingle();
+  const faltam = _fatBolFaltando(pes);
+  if (faltam.length) {
+    _fatBolCaixa(`<p style="color:#f59e0b">Não dá para emitir: o cadastro de
+      <b>${_fatEsc(fat.cliente_nome || "")}</b> está incompleto.</p>
+      <p style="margin-top:10px">Falta: <b style="color:#f87171">${faltam.join(", ")}</b></p>
+      <p style="font-size:0.8rem;color:#889;margin-top:10px">Complete em <b>Pessoas</b> e volte aqui.
+      O banco recusa o registro sem esses campos.</p>`);
+    return;
+  }
+  if (!fat.vencimento) {
+    _fatBolCaixa(`<p style="color:#f59e0b">A fatura está sem vencimento — o boleto precisa de uma data.</p>`);
+    return;
+  }
+
+  if (!confirm(`Emitir boleto de R$ ${_fatMoney(fat.valor)} para ${fat.cliente_nome}?\n` +
+               `Vencimento: ${_fatData(fat.vencimento)}`)) { _fatFechaModal(); return; }
+
+  // enfileira (o worker do gateway e' quem fala com o Sicoob)
+  const pedido = {
+    empresa_id: fat.empresa_id, fatura_id: fat.id, cliente_id: fat.cliente_id,
+    cliente_nome: fat.cliente_nome, valor: fat.valor, vencimento: fat.vencimento,
+    status: "pendente", criado_por: "retaguarda",
+  };
+  const { data: nova, error } = await sb.from("oct_boletos").insert(pedido).select("id").single();
+  if (error) { _fatBolCaixa(`<p style="color:#f87171">Erro ao enfileirar: ${_fatEsc(error.message)}</p>`); return; }
+
+  _fatBolCaixa(`<p>Registrando no Sicoob...</p>
+    <p style="font-size:0.8rem;color:#889;margin-top:8px">O boleto é registrado no banco antes de
+    existir — sem registro ele não é pago nem baixa.</p>`);
+  const achou = await _fatBolEsperar(nova.id);
+  if (achou) _fatBolMostrar(achou);
+}
+
+// olha a linha ate' sair de 'pendente' (o worker roda a cada ~20s)
+async function _fatBolEsperar(boletoId) {
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data } = await sb.from("oct_boletos").select("*").eq("id", boletoId).maybeSingle();
+    if (data && data.status !== "pendente") return data;
+  }
+  _fatBolCaixa(`<p style="color:#f59e0b">O registro ainda não voltou.</p>
+    <p style="font-size:0.8rem;color:#889;margin-top:8px">O pedido ficou na fila. Se o worker de
+    boletos (<code>BOLETO_WORKER=1</code> no Railway) não estiver ligado, ele não sai de "pendente".</p>`);
+  return null;
+}
+
+function _fatBolMostrar(b) {
+  if (b.status === "erro") {
+    _fatBolCaixa(`<p style="color:#f87171">O banco não registrou o boleto.</p>
+      <pre style="text-align:left;background:#0f1520;padding:10px;border-radius:6px;font-size:0.72rem;
+        white-space:pre-wrap;color:#c8d0da;margin-top:10px">${_fatEsc(b.erro || "sem detalhe")}</pre>`);
+    return;
+  }
+  const linha = b.linha_digitavel || "—";
+  _fatBolCaixa(`
+    <p style="color:#7ee2a0;font-weight:600">✔ Boleto registrado no Sicoob</p>
+    <table style="width:100%;margin-top:12px;font-size:0.85rem;text-align:left">
+      <tr><td style="color:#889;padding:3px 0">Cliente</td><td>${_fatEsc(b.cliente_nome || "")}</td></tr>
+      <tr><td style="color:#889;padding:3px 0">Valor</td><td><b>R$ ${_fatMoney(b.valor)}</b></td></tr>
+      <tr><td style="color:#889;padding:3px 0">Vencimento</td><td>${_fatData(b.vencimento)}</td></tr>
+      <tr><td style="color:#889;padding:3px 0">Nosso número</td><td>${_fatEsc(b.nosso_numero || "—")}</td></tr>
+    </table>
+    <p style="color:#889;font-size:0.75rem;margin:12px 0 4px">Linha digitável</p>
+    <div style="background:#0f1520;padding:10px;border-radius:6px;font-family:monospace;
+      font-size:0.82rem;word-break:break-all;color:#e8eef5">${_fatEsc(linha)}</div>
+    <button class="fat-btn" style="margin-top:12px" onclick="navigator.clipboard.writeText('${_fatEsc(linha)}')">
+      📋 Copiar linha digitável</button>`);
+}
+
+function _fatBolCaixa(html) {
+  _fatModal(`<div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;
+      border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
       <span>🏦 Boleto</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
-    <div style="padding:22px;text-align:center;color:#9aa">
-      <div style="font-size:2rem;margin-bottom:10px">🏦</div>
-      <p style="margin-bottom:6px">A geração de boleto está <b style="color:#f59e0b">pronta para receber a integração bancária</b>.</p>
-      <p style="font-size:0.8rem;color:#667">Quando o convênio de cobrança (ex.: Sicoob) for configurado, este botão passa a gerar o boleto do título/fatura direto aqui — a estrutura já espera por ele.</p>
-      <button class="fat-btn" onclick="_fatFechaModal()" style="margin-top:14px">Fechar</button>
+    <div style="padding:22px;color:#cdd6e0">${html}
+      <div style="margin-top:16px"><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button></div>
     </div>`);
 }
 
