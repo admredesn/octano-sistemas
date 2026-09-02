@@ -1193,7 +1193,9 @@ async function fatEnviarOk(faturaId) {
   const { error } = await sb.from("oct_faturas").update({
     envio_canais: canais, envio_tipo: "fatura",
     envio_pedido_em: new Date().toISOString(),
-    enviada_em: null, envio_erro: null,      // reenvio comeca do zero
+    // enviada_em NAO e' zerado: era so' para driblar o filtro do worker, e
+    // apagava a data do envio anterior antes de o novo dar certo
+    envio_erro: null,
   }).eq("id", faturaId);
   if (error) {
     msg.style.color = "#f87171";
@@ -1209,7 +1211,7 @@ async function fatEnviarOk(faturaId) {
     const { data: at } = await sb.from("oct_faturas")
       .select("enviada_em,enviada_por,envio_destino,envio_erro,envio_pedido_em")
       .eq("id", faturaId).maybeSingle();
-    if (at && at.enviada_em) {
+    if (at && at.enviada_em && !at.envio_pedido_em) {
       _fatEnvCaixa(`<p style="color:#7ee2a0;font-weight:600">✔ Fatura enviada</p>
         <table style="width:100%;margin-top:10px;font-size:0.84rem;text-align:left">
           <tr><td style="color:#889;padding:3px 0">Quando</td><td>${new Date(at.enviada_em).toLocaleString("pt-BR")}</td></tr>
