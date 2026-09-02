@@ -554,13 +554,15 @@ async function fatBoleto(id) {
     return;
   }
 
-  if (!confirm(`Emitir boleto de R$ ${_fatMoney(fat.valor)} para ${fat.cliente_nome}?\n` +
+  // o banco cobra o LIQUIDO: emitir o bruto seria cobrar o desconto de volta
+  const valorCobrar = _fatLiquido(fat);
+  if (!confirm(`Emitir boleto de R$ ${_fatMoney(valorCobrar)} para ${fat.cliente_nome}?\n` +
                `Vencimento: ${_fatData(fat.vencimento)}`)) { _fatFechaModal(); return; }
 
   // enfileira (o worker do gateway e' quem fala com o Sicoob)
   const pedido = {
     empresa_id: fat.empresa_id, fatura_id: fat.id, cliente_id: fat.cliente_id,
-    cliente_nome: fat.cliente_nome, valor: fat.valor, vencimento: fat.vencimento,
+    cliente_nome: fat.cliente_nome, valor: valorCobrar, vencimento: fat.vencimento,
     status: "pendente", criado_por: "retaguarda",
   };
   const { data: nova, error } = await sb.from("oct_boletos").insert(pedido).select("id").single();
@@ -1007,8 +1009,8 @@ function _fatNfeSelXml(input) {
     const avisos = [];
     if (!d.protocolo) avisos.push("este XML <b>não tem protocolo de autorização</b> — é o arquivo enviado, não o autorizado. O que vale para o fisco é o com protocolo.");
     if (d.modelo && d.modelo !== "55") avisos.push(`o modelo é <b>${_fatEsc(d.modelo)}</b>${d.modelo === "65" ? " (NFC-e, cupom)" : ""} — a fatura do cliente costuma ser NF-e modelo 55.`);
-    const dif = Math.abs(Number(d.valor || 0) - Number(fat.valor || 0));
-    if (dif > 0.005) avisos.push(`o valor da nota (<b>R$ ${_fatMoney(d.valor)}</b>) não bate com o da fatura (<b>R$ ${_fatMoney(fat.valor)}</b>) — diferença de R$ ${_fatMoney(dif)}.`);
+    const dif = Math.abs(Number(d.valor || 0) - _fatLiquido(fat));
+    if (dif > 0.005) avisos.push(`o valor da nota (<b>R$ ${_fatMoney(d.valor)}</b>) não bate com o da fatura (<b>R$ ${_fatMoney(_fatLiquido(fat))}</b>) — diferença de R$ ${_fatMoney(dif)}.`);
 
     prev.innerHTML = `
       <table style="width:100%;font-size:0.84rem;text-align:left;background:#13151f;border-radius:8px;padding:6px">
@@ -1477,52 +1479,136 @@ async function fatGerarFaturaOk() {
   fatAba("faturas");
 }
 
-// ---------- CORRIGIR O VENCIMENTO DEPOIS ----------
-// Errar a data nao pode custar excluir e refazer a fatura (refazer desvincula os
-// titulos, e a numeracao ja' foi gasta).
-async function fatEditarVencimento(faturaId) {
+// ---------- VER/EDITAR FATURA (03/09) — desconto, acrescimo, vencimento ----------
+// Equivalente ao "Ver Titulo" do TecnoX: bruto, desconto, acrescimo e liquido na
+// mesma tela. O bruto NAO se edita -- ele e' a soma dos titulos e tem de
+// continuar batendo com os cupons. O desconto entra ao lado.
+function _fatLiquido(f) {
+  if (!f) return 0;
+  // o banco calcula (coluna gerada); a conta local so' vale enquanto o SQL
+  // de desconto nao rodou -- sem ela a tela mostraria o bruto como se fosse tudo
+  if (f.valor_liquido != null) return Number(f.valor_liquido);
+  return +(Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0)).toFixed(2);
+}
+
+async function _fatUsuario() {
+  if (window._fatUser) return window._fatUser;
+  try {
+    const { data } = await sb.auth.getSession();
+    window._fatUser = (data?.session?.user?.email || "").replace("@octano.interno", "") || "retaguarda";
+  } catch (e) { window._fatUser = "retaguarda"; }
+  return window._fatUser;
+}
+
+async function fatEditarFatura(faturaId) {
   const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
   if (!f) { alert("Fatura não encontrada."); return; }
+  const recebido = await _fatRecebidoDa(faturaId);
   let bol = null;
   try {
-    const r = await sb.from("oct_boletos").select("nosso_numero,status,vencimento")
+    const r = await sb.from("oct_boletos").select("nosso_numero,status,vencimento,valor")
       .eq("fatura_id", faturaId).order("id", { ascending: false }).limit(1);
     bol = (r.data || [])[0] || null;
   } catch (e) { /* tabela pode nao existir */ }
   const temBoleto = bol && ["registrado", "liquidado"].includes(bol.status);
+  window._fatEdit = { f, recebido, temBoleto };
+
+  const campo = (id, rot, val, cor) => `
+    <div><label style="color:#9aa;font-size:0.74rem">${rot}</label>
+      <input id="${id}" type="number" step="0.01" min="0" value="${val}" oninput="_fatEditCalc()"
+        style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:${cor};font-weight:700"></div>`;
 
   _fatModal(`
     <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
-      <span>📅 Vencimento — fatura ${f.numero ?? ""} · ${_fatEsc(f.cliente_nome || "")}</span>
+      <span>✏ Fatura ${f.numero ?? ""} — ${_fatEsc(f.cliente_nome || "")}</span>
       <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
     <div style="padding:18px;color:#cdd6e0">
-      <p style="color:#889;font-size:0.82rem;margin:0 0 12px">
-        Valor R$ ${_fatMoney(f.valor)} · emitida em ${_fatData(f.emissao)} ·
-        vencimento atual <b style="color:#f59e0b">${f.vencimento ? _fatData(f.vencimento) : "em branco"}</b></p>
-      <label style="color:#9aa;font-size:0.78rem">Novo vencimento</label>
-      <input type="date" id="fev-venc" value="${f.vencimento ? String(f.vencimento).slice(0, 10) : _fatHojeIso()}"
-        style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.05rem">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label style="color:#9aa;font-size:0.74rem">Valor bruto (soma dos títulos)</label>
+          <div style="padding:9px;background:#13151f;border-radius:6px;color:#cdd6e0;font-weight:700">R$ ${_fatMoney(f.valor)}</div></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Vencimento</label>
+          <input type="date" id="fed-venc" value="${f.vencimento ? String(f.vencimento).slice(0, 10) : _fatHojeIso()}"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        ${campo("fed-desc", "Desconto (R$)", Number(f.desconto || 0).toFixed(2), "#4ade80")}
+        ${campo("fed-acr", "Acréscimo (R$)", Number(f.acrescimo || 0).toFixed(2), "#f0b45c")}
+      </div>
+      <div style="margin-top:12px;background:#13151f;border-radius:8px;padding:11px;display:flex;justify-content:space-between;align-items:center">
+        <span style="color:#9aa;font-size:0.82rem">Valor líquido — é o que se cobra</span>
+        <b id="fed-liq" style="color:#f59e0b;font-size:1.25rem">R$ ${_fatMoney(_fatLiquido(f))}</b></div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:12px">Observação <span style="color:#667">(por que o desconto — fica registrado)</span></label>
+      <input id="fed-obs" value="${_fatEsc(f.observacao || "")}" placeholder="ex.: preço negociado R$ 5,79/L"
+        style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      ${recebido > 0 ? `<p style="color:#889;font-size:0.78rem;margin-top:10px">Já recebido nesta fatura: <b style="color:#4ade80">${_fatBRL(recebido)}</b>.</p>` : ""}
       ${temBoleto ? `<div style="margin-top:12px;background:#2a2010;border:1px solid #63501f;border-radius:8px;padding:10px;font-size:0.78rem;color:#f0c98a">
-        ⚠ Esta fatura já tem o boleto <b>${_fatEsc(bol.nosso_numero || "")}</b> registrado no Sicoob para
-        ${_fatData(bol.vencimento)}. Mudar aqui <b>não muda no banco</b> — o boleto que o cliente tem em mãos
-        continua com a data antiga. Para valer no banco é preciso alterar o título lá.</div>` : ""}
-      <div id="fev-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+        ⚠ Já existe o boleto <b>${_fatEsc(bol.nosso_numero || "")}</b> registrado no Sicoob
+        (R$ ${_fatMoney(bol.valor)}, vence ${_fatData(bol.vencimento)}). Alterar aqui <b>não altera no banco</b> —
+        o boleto que o cliente tem continua com o valor e a data antigos. Para valer, o título tem de ser
+        alterado no Sicoob.</div>` : ""}
+      <div id="fed-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
-        <button class="fat-btn azul" style="flex:2" onclick="fatEditarVencimentoOk('${faturaId}')">Salvar vencimento</button>
+        <button class="fat-btn azul" style="flex:2" onclick="fatEditarFaturaOk('${faturaId}')">Salvar</button>
       </div>
     </div>`);
+  _fatEditCalc();
 }
 
-async function fatEditarVencimentoOk(faturaId) {
-  const v = document.getElementById("fev-venc").value || "";
-  const msg = document.getElementById("fev-msg");
-  if (!v) { msg.textContent = "Informe a data."; return; }
+function _fatEditCalc() {
+  const st = window._fatEdit; if (!st) return;
+  const d = Number(document.getElementById("fed-desc")?.value || 0);
+  const a = Number(document.getElementById("fed-acr")?.value || 0);
+  const liq = +(Number(st.f.valor || 0) - d + a).toFixed(2);
+  const el = document.getElementById("fed-liq");
+  if (el) { el.textContent = "R$ " + _fatMoney(liq); el.style.color = liq < 0 ? "#f87171" : "#f59e0b"; }
+  const msg = document.getElementById("fed-msg");
+  if (!msg) return;
+  if (liq < 0) msg.textContent = "O desconto é maior que a fatura — o líquido ficaria negativo.";
+  else if (st.recebido > liq + 0.005) msg.textContent = `Atenção: já foram recebidos ${_fatBRL(st.recebido)}, mais que o líquido. Sobraria crédito para o cliente.`;
+  else msg.textContent = "";
+}
+
+async function fatEditarFaturaOk(faturaId) {
+  const st = window._fatEdit; if (!st) return;
+  const msg = document.getElementById("fed-msg");
+  const venc = document.getElementById("fed-venc").value || null;
+  const desc = +Number(document.getElementById("fed-desc").value || 0).toFixed(2);
+  const acr = +Number(document.getElementById("fed-acr").value || 0).toFixed(2);
+  const obs = (document.getElementById("fed-obs").value || "").trim() || null;
+  const liq = +(Number(st.f.valor || 0) - desc + acr).toFixed(2);
+  if (liq < 0) { msg.textContent = "O desconto é maior que a fatura."; return; }
+  if (desc > 0 && !obs && !confirm("Salvar o desconto sem escrever o motivo?")) return;
+
   msg.style.color = "#9aa"; msg.textContent = "Salvando...";
-  const { error } = await sb.from("oct_faturas").update({ vencimento: v }).eq("id", faturaId);
+  const patch = {
+    vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs,
+    alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
+  };
+  let { error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId);
+  if (error && /desconto|acrescimo|observacao|alterado_|column/i.test(error.message || "")) {
+    // sem o SQL de desconto ainda da' para corrigir a data, que ja' funcionava
+    const r2 = await sb.from("oct_faturas").update({ vencimento: venc }).eq("id", faturaId);
+    if (!r2.error) {
+      _fatFechaModal();
+      alert("Vencimento salvo. O desconto NÃO foi salvo: falta rodar repo/sql/SQL-DESCONTO-FATURA.sql.");
+      fatListarFaturas(st.f.status || "aberta");
+      return;
+    }
+    error = r2.error;
+  }
   if (error) { msg.style.color = "#f87171"; msg.textContent = "Erro: " + error.message; return; }
   _fatFechaModal();
-  fatListarFaturas("aberta");
+  fatListarFaturas(st.f.status || "aberta");
+}
+
+// o numero grande e' o que se cobra; o bruto so' aparece quando ha' abatimento,
+// senao a coluna viraria duas linhas em toda fatura sem desconto
+function _fatValorCel(f) {
+  const liq = _fatLiquido(f);
+  const d = Number(f.desconto || 0), a = Number(f.acrescimo || 0);
+  if (!d && !a) return _fatMoney(liq);
+  const det = (d ? `<span style="color:#4ade80">-${_fatMoney(d)}</span>` : "") +
+              (a ? `<span style="color:#f0b45c"> +${_fatMoney(a)}</span>` : "");
+  return `${_fatMoney(liq)}<br><span style="font-size:10px;color:#6b7688">${_fatMoney(f.valor)} ${det}</span>`;
 }
 
 // o que ja' esta' arquivado na nuvem desta fatura. Enquanto o campo estiver
@@ -1554,7 +1640,7 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
-    <td class="fat-td fat-r">${_fatMoney(fatr.valor)}</td>
+    <td class="fat-td fat-r">${_fatValorCel(fatr)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
     <td class="fat-td" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
@@ -1563,10 +1649,10 @@ async function fatListarFaturas(status) {
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
       <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
       <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>
-      <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarVencimento('${fatr.id}')">📅 Vencimento</button>` : ""}
+      <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarFatura('${fatr.id}')">✏ Editar</button>` : ""}
     </td>
   </tr>`).join("");
-  const total = faturas.reduce((s, fr) => s + Number(fr.valor || 0), 0);
+  const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Docs</th><th>Ações</th></tr></thead>
@@ -1579,7 +1665,7 @@ async function fatListarFaturas(status) {
     const el = document.getElementById("fat-saldo-" + fr.id);
     if (!el) return;
     if (rec <= 0) { el.textContent = "—"; return; }
-    const saldo = Number(fr.valor || 0) - rec;
+    const saldo = _fatLiquido(fr) - rec;
     el.innerHTML = `<span style="color:#4ade80">${_fatBRL(rec)}</span>` +
       (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "");
   });
@@ -1594,7 +1680,7 @@ async function fatLiquidar(id) {
   const { data: f } = await sb.from("oct_faturas").select("*").eq("id", id).single();
   if (!f) { alert("Fatura não encontrada."); return; }
   const jaRecebido = await _fatRecebidoDa(id);
-  const saldo = +(Number(f.valor || 0) - jaRecebido).toFixed(2);
+  const saldo = +(_fatLiquido(f) - jaRecebido).toFixed(2);
   const hoje = new Date().toISOString().slice(0, 10);
   const venc = f.vencimento ? String(f.vencimento).slice(0, 10) : null;
   const diasAtraso = venc && hoje > venc
@@ -1608,7 +1694,7 @@ async function fatLiquidar(id) {
     <div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;max-width:480px;width:92%;color:#dbe2ea">
       <h2 style="color:#f97316;margin:0 0 4px">Receber título</h2>
       <p style="color:#9aa;font-size:0.84rem;margin:0 0 14px">
-        ${f.cliente_nome || "cliente"} · fatura de ${_fatBRL(f.valor)}
+        ${f.cliente_nome || "cliente"} · fatura de ${_fatBRL(_fatLiquido(f))}${Number(f.desconto || 0) ? ` <span style="color:#4ade80">(bruto ${_fatBRL(f.valor)} − desconto ${_fatBRL(f.desconto)})</span>` : ""}
         ${jaRecebido > 0 ? `· já recebido ${_fatBRL(jaRecebido)}` : ""}
         ${diasAtraso > 0 ? `<br><span style="color:#f59e0b">⚠ ${diasAtraso} dia(s) em atraso</span>` : ""}
       </p>
@@ -1683,16 +1769,16 @@ async function fatConfirmarRecebimento(faturaId) {
     return;
   }
   // a fatura só fecha quando a soma dos recebimentos quita o valor
-  const { data: f } = await sb.from("oct_faturas").select("valor").eq("id", faturaId).single();
+  const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).single();
   const recebido = await _fatRecebidoDa(faturaId);
-  const quitou = recebido + 0.005 >= Number(f?.valor || 0);
+  const quitou = recebido + 0.005 >= _fatLiquido(f);
   if (quitou) {
     await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: new Date().toISOString() }).eq("id", faturaId);
   }
   document.getElementById("fat-receber-modal")?.remove();
   alert(quitou
     ? `Título quitado! Recebido ${_fatBRL(recebido)}.`
-    : `Recebimento parcial registrado. Saldo: ${_fatBRL(Number(f?.valor || 0) - recebido)}.`);
+    : `Recebimento parcial registrado. Saldo: ${_fatBRL(_fatLiquido(f) - recebido)}.`);
   fatListarFaturas("aberta");
 }
 
