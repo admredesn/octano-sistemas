@@ -345,20 +345,26 @@ function fatCobrarCopiar() {
 // Só funciona para cupons DO OCTANO (chave real + itens em oct_pdv_vendas).
 // ============================================================
 const _FAT_SEFAZ = (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://octano-sefaz-production-66d4.up.railway.app";
-async function fatGerarNfConsolidada(ids, titulosArg) {
+async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
+  // no lote quem manda no que aparece na tela e' a barra de progresso
+  const recusa = (motivo) => {
+    if (silencioso) return { ok: false, erro: motivo };
+    alert(motivo);
+    return { ok: false, erro: motivo };
+  };
   let titulos;
   if (titulosArg && titulosArg.length) titulos = titulosArg;
   else {
     const alvo = (ids && ids.length) ? new Set(ids) : window._fatSel;
     titulos = (window._fatTitulos || []).filter(t => alvo.has(t.id));
   }
-  if (!titulos.length) { alert("Selecione os títulos (cupons) a consolidar."); return; }
+  if (!titulos.length) return recusa("Selecione os títulos (cupons) a consolidar.");
   const clis = new Set(titulos.map(t => t.cliente_id));
-  if (clis.size !== 1 || !titulos[0].cliente_id) { alert("Selecione títulos de UM mesmo cliente com cadastro (uma NF-e por cliente)."); return; }
+  if (clis.size !== 1 || !titulos[0].cliente_id) return recusa("Selecione títulos de UM mesmo cliente com cadastro (uma NF-e por cliente).");
   const chaves = Array.from(new Set(titulos.map(t => t.chave_nfe).filter(c => /^\d{44}$/.test(String(c || "")))));
-  if (!chaves.length) { alert("Nenhum título selecionado tem NFC-e do Octano (chave de 44 dígitos). Cupons do TecnoX ainda não podem ser consolidados."); return; }
+  if (!chaves.length) return recusa("Nenhum cupom do Octano (chave de 44 dígitos). Cupom do TecnoX ainda não pode ser consolidado.");
 
-  _fatModal(`<div style="padding:26px;text-align:center;color:#9aa"><div style="font-size:1.6rem">📡</div><p style="margin-top:8px">Montando a NF-e consolidada em <b style="color:#f59e0b">HOMOLOGAÇÃO</b>...</p><div id="fnf-msg" style="margin-top:10px;font-size:0.85rem"></div></div>`);
+  if (!silencioso) _fatModal(`<div style="padding:26px;text-align:center;color:#9aa"><div style="font-size:1.6rem">📡</div><p style="margin-top:8px">Montando a NF-e consolidada em <b style="color:#f59e0b">HOMOLOGAÇÃO</b>...</p><div id="fnf-msg" style="margin-top:10px;font-size:0.85rem"></div></div>`);
   const msg = () => document.getElementById("fnf-msg");
   try {
     const eid = window._fatEid;
@@ -448,15 +454,18 @@ async function fatGerarNfConsolidada(ids, titulosArg) {
         });
       } catch (e) { /* não bloqueia a impressão */ }
       const btnDanfe = r.nfe_proc ? `<button class="fat-btn" onclick="fatImprimirDanfe()" style="background:#2a5a8a;margin-right:8px">📄 Imprimir DANFE</button>` : "";
+      if (silencioso) return { ok: true, chave: r.chave, numero };
       if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br>${btnDanfe}<button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
     } else {
       // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
       const cstat = r.cstat_nfe || r.cstat_lote || "";
       const xsd = r.aviso_xsd ? (Array.isArray(r.aviso_xsd) ? r.aviso_xsd.join(" · ") : r.aviso_xsd) : "";
       const motivo = xsd || r.xmotivo || r.erro || r.motivo || JSON.stringify(r).slice(0, 300);
+      if (silencioso) return { ok: false, erro: (cstat ? cstat + ": " : "") + motivo };
       if (msg()) msg().innerHTML = `<span style="color:#f87171;word-break:break-word;display:block">❌ Rejeitada${cstat ? " (" + _fatEsc(cstat) + ")" : ""}:<br>${_fatEsc(motivo)}</span><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
     }
   } catch (e) {
+    if (silencioso) return { ok: false, erro: String(e.message || e) };
     if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
   }
 }
@@ -1814,6 +1823,261 @@ function _fatAutoAtualizar(temPendente, status) {
   }, 10000);
 }
 
+// ============================================================
+// AÇÃO EM MASSA nas faturas (03/09)
+// ------------------------------------------------------------
+// Faturar dez clientes custava trinta cliques em botões de 11px, um por linha,
+// sem nenhuma noção de quanto falta. Agora: marca as faturas e manda a ação uma
+// vez, com barra de progresso e o resultado de CADA uma no fim.
+//
+// Regra que vale para as três ações: o que já está pronto é PULADO, não refeito.
+// Reemitir boleto de quem já tem seria um segundo título no banco; reenviar para
+// quem já recebeu é cobrança em duplicidade.
+// ============================================================
+function _fatSelF() {
+  if (!window._fatSelFat) window._fatSelFat = new Set();
+  return window._fatSelFat;
+}
+
+function fatToggleF(id) {
+  const s = _fatSelF();
+  if (s.has(id)) s.delete(id); else s.add(id);
+  const cx = document.getElementById("fatf-chk-" + id);
+  if (cx) cx.checked = s.has(id);
+  _fatSelFSync();
+}
+
+function fatSelTodasF(marcar) {
+  const s = _fatSelF();
+  (window._fatFaturas || []).forEach(f => {
+    if (marcar) s.add(f.id); else s.delete(f.id);
+    const cx = document.getElementById("fatf-chk-" + f.id);
+    if (cx) cx.checked = !!marcar;
+  });
+  _fatSelFSync();
+}
+
+function _fatSelFSync() {
+  const s = _fatSelF();
+  const lista = window._fatFaturas || [];
+  const marcadas = lista.filter(f => s.has(f.id));
+  const tot = marcadas.reduce((a, f) => a + _fatLiquido(f), 0);
+  const el = document.getElementById("fatf-selinfo");
+  if (el) {
+    el.innerHTML = marcadas.length
+      ? `<b style="color:#4ade80">${marcadas.length}</b> selecionada(s) · <b style="color:#f59e0b">R$ ${_fatMoney(tot)}</b>`
+      : `<span style="color:#6b7688">nenhuma selecionada</span>`;
+  }
+  ["fatf-btn-boleto", "fatf-btn-nf", "fatf-btn-enviar"].forEach(b => {
+    const x = document.getElementById(b);
+    if (x) x.disabled = !marcadas.length;
+  });
+  const mestre = document.getElementById("fatf-chk-todas");
+  if (mestre) {
+    mestre.checked = lista.length > 0 && marcadas.length === lista.length;
+    mestre.indeterminate = marcadas.length > 0 && marcadas.length < lista.length;
+  }
+}
+
+function _fatBarraLote(faturas, status) {
+  const b = (id, cor, rot, fn) =>
+    `<button id="${id}" disabled onclick="${fn}" style="background:${cor};border:none;border-radius:6px;
+      padding:7px 13px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;margin-left:6px"
+      class="fat-lote">${rot}</button>`;
+  return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 14px;
+      background:#141824;border-bottom:1px solid #2a2d3e">
+    <button class="fat-btn mini" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
+    <button class="fat-btn mini" onclick="fatSelTodasF(false)">☐ Desmarcar</button>
+    <span id="fatf-selinfo" style="margin-left:10px;font-size:12px;color:#9aa"></span>
+    <span style="margin-left:auto">
+      ${status === "aberta" ? b("fatf-btn-nf", "#0e7490", "🧾 Gerar NF", "fatLoteNf()") +
+        b("fatf-btn-boleto", "#334155", "🏦 Gerar boletos", "fatLoteBoleto()") +
+        b("fatf-btn-enviar", "#15803d", "📤 Enviar faturas", "fatLoteEnviar()") : ""}
+    </span></div>`;
+}
+
+// ---------- barra de progresso ----------
+function _fatProgAbrir(titulo, total) {
+  window._fatProg = { total, feitos: 0, linhas: [], cancelar: false };
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:700;border-radius:12px 12px 0 0">
+      ${titulo}</div>
+    <div style="padding:18px;color:#cdd6e0">
+      <div style="display:flex;justify-content:space-between;font-size:0.84rem;margin-bottom:6px">
+        <span id="fatp-atual">Começando...</span>
+        <span id="fatp-cont" style="color:#9aa">0 de ${total}</span></div>
+      <div style="height:12px;background:#0b0d14;border-radius:8px;overflow:hidden;border:1px solid #2a2d3e">
+        <div id="fatp-barra" style="height:100%;width:0%;background:linear-gradient(90deg,#f97316,#fbbf24);
+          transition:width .25s"></div></div>
+      <div id="fatp-lista" style="margin-top:12px;max-height:240px;overflow:auto;font-size:0.8rem"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="fat-btn" style="flex:1" onclick="_fatProgCancelar()" id="fatp-cancelar">Parar depois desta</button>
+        <button class="fat-btn azul" style="flex:1;display:none" id="fatp-fechar"
+          onclick="_fatFechaModal();_fatRecarregar()">Fechar</button>
+      </div>
+    </div>`);
+}
+
+function _fatProgCancelar() {
+  if (window._fatProg) window._fatProg.cancelar = true;
+  const b = document.getElementById("fatp-cancelar");
+  if (b) { b.disabled = true; b.textContent = "Parando..."; }
+}
+
+function _fatProgPasso(nome, resultado, detalhe) {
+  const p = window._fatProg; if (!p) return;
+  p.feitos++;
+  const pct = Math.round((p.feitos / p.total) * 100);
+  const barra = document.getElementById("fatp-barra");
+  if (barra) barra.style.width = pct + "%";
+  const cont = document.getElementById("fatp-cont");
+  if (cont) cont.textContent = `${p.feitos} de ${p.total} · ${pct}%`;
+  const cor = resultado === "ok" ? "#7ee2a0" : resultado === "pulou" ? "#8b93a3" : "#f87171";
+  const icone = resultado === "ok" ? "✔" : resultado === "pulou" ? "○" : "✕";
+  const lista = document.getElementById("fatp-lista");
+  if (lista) {
+    lista.insertAdjacentHTML("beforeend",
+      `<div style="padding:3px 0;border-bottom:1px solid #1c2130;color:${cor}">
+        ${icone} ${_fatEsc(nome)}${detalhe ? ` <span style="color:#6b7688">— ${_fatEsc(detalhe)}</span>` : ""}</div>`);
+    lista.scrollTop = lista.scrollHeight;
+  }
+}
+
+function _fatProgAgora(nome) {
+  const el = document.getElementById("fatp-atual");
+  if (el) el.textContent = nome;
+}
+
+function _fatProgFim() {
+  const p = window._fatProg || {};
+  _fatProgAgora(p.cancelar ? "Parado pelo operador." : "Concluído.");
+  const c = document.getElementById("fatp-cancelar");
+  if (c) c.style.display = "none";
+  const f = document.getElementById("fatp-fechar");
+  if (f) f.style.display = "";
+}
+
+function _fatSelecionadas() {
+  const s = _fatSelF();
+  return (window._fatFaturas || []).filter(f => s.has(f.id));
+}
+
+// ---------- LOTE: gerar NF-e ----------
+async function fatLoteNf() {
+  const alvo = _fatSelecionadas();
+  if (!alvo.length) return;
+  if (!confirm(`Emitir NF-e de ${alvo.length} fatura(s), em HOMOLOGAÇÃO?\n\n` +
+               `Faturas que já têm NF-e anexada serão puladas.`)) return;
+  _fatProgAbrir("🧾 Emitindo NF-e", alvo.length);
+  for (const f of alvo) {
+    if (window._fatProg.cancelar) { _fatProgPasso(f.cliente_nome || "", "pulou", "cancelado"); continue; }
+    _fatProgAgora(`${f.cliente_nome || ""} — fatura ${f.numero ?? ""}`);
+    if (f.nfe_chave) { _fatProgPasso(f.cliente_nome || "", "pulou", "já tem NF-e"); continue; }
+    const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
+      .eq("empresa_id", window._fatEid).eq("fatura_id", f.id);
+    if (!ts || !ts.length) { _fatProgPasso(f.cliente_nome || "", "erro", "fatura sem títulos"); continue; }
+    const r = await fatGerarNfConsolidada(null, ts, true) || {};
+    _fatProgPasso(f.cliente_nome || "", r.ok ? "ok" : "erro",
+                  r.ok ? ("NF-e " + (r.numero || "")) : (r.erro || "falhou"));
+  }
+  _fatProgFim();
+}
+
+// ---------- LOTE: boletos ----------
+// Enfileira TODOS e depois acompanha. Um a um seria 20s de espera vezes o número
+// de faturas -- o worker do gateway processa a fila em paralelo com a espera.
+async function fatLoteBoleto() {
+  const alvo = _fatSelecionadas();
+  if (!alvo.length) return;
+  const semVenc = alvo.filter(f => !f.vencimento);
+  if (semVenc.length) {
+    alert(`${semVenc.length} fatura(s) sem vencimento. O banco recusa boleto sem data — ` +
+          `ajuste pelo ✏ Editar antes.`);
+    return;
+  }
+  if (!confirm(`Emitir boleto de ${alvo.length} fatura(s) no Sicoob?\n\n` +
+               `Faturas que já têm boleto registrado serão puladas.`)) return;
+  _fatProgAbrir("🏦 Registrando boletos no Sicoob", alvo.length);
+
+  const naFila = [];
+  for (const f of alvo) {
+    _fatProgAgora(`${f.cliente_nome || ""} — enfileirando`);
+    const { data: ja } = await sb.from("oct_boletos").select("id,status")
+      .eq("fatura_id", f.id).in("status", ["registrado", "liquidado", "pendente"]).limit(1);
+    if (ja && ja.length) { _fatProgPasso(f.cliente_nome || "", "pulou", "já tem boleto"); continue; }
+    const { data: nova, error } = await sb.from("oct_boletos").insert({
+      empresa_id: f.empresa_id, fatura_id: f.id, cliente_id: f.cliente_id,
+      cliente_nome: f.cliente_nome, valor: _fatLiquido(f), vencimento: f.vencimento,
+      status: "pendente", criado_por: "retaguarda-lote",
+    }).select("id").single();
+    if (error) { _fatProgPasso(f.cliente_nome || "", "erro", error.message); continue; }
+    naFila.push({ id: nova.id, nome: f.cliente_nome || "" });
+  }
+  if (!naFila.length) { _fatProgFim(); return; }
+
+  _fatProgAgora(`Aguardando o banco registrar ${naFila.length}...`);
+  const pendentes = new Map(naFila.map(x => [x.id, x.nome]));
+  for (let volta = 0; volta < 40 && pendentes.size; volta++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data } = await sb.from("oct_boletos").select("id,status,nosso_numero,erro")
+      .in("id", [...pendentes.keys()]);
+    (data || []).forEach(b => {
+      if (b.status === "pendente") return;
+      const nome = pendentes.get(b.id);
+      pendentes.delete(b.id);
+      _fatProgPasso(nome, b.status === "registrado" ? "ok" : "erro",
+                    b.status === "registrado" ? ("nosso nº " + b.nosso_numero) : (b.erro || b.status));
+    });
+  }
+  pendentes.forEach(nome => _fatProgPasso(nome, "erro", "o banco não respondeu a tempo (segue na fila)"));
+  _fatProgFim();
+}
+
+// ---------- LOTE: enviar ----------
+async function fatLoteEnviar() {
+  const alvo = _fatSelecionadas();
+  if (!alvo.length) return;
+  const jaEnviadas = alvo.filter(f => f.enviada_em).length;
+  const semDoc = alvo.filter(f => !f.fatura_pdf_path).length;
+  if (!confirm(
+      `Enviar ${alvo.length} fatura(s) AO CLIENTE por e-mail e WhatsApp?\n\n` +
+      (jaEnviadas ? `${jaEnviadas} já foram enviadas antes e serão PULADAS.\n` : "") +
+      (semDoc ? `${semDoc} ainda estão sem a fatura em PDF e serão puladas.\n` : "") +
+      `\nIsto manda mensagem de verdade para os clientes.`)) return;
+  _fatProgAbrir("📤 Enviando faturas", alvo.length);
+
+  const naFila = [];
+  for (const f of alvo) {
+    if (f.enviada_em) { _fatProgPasso(f.cliente_nome || "", "pulou", "já enviada"); continue; }
+    if (!f.fatura_pdf_path) { _fatProgPasso(f.cliente_nome || "", "pulou", "sem fatura em PDF"); continue; }
+    const { error } = await sb.from("oct_faturas").update({
+      envio_canais: "ambos", envio_pedido_em: new Date().toISOString(), envio_erro: null,
+    }).eq("id", f.id);
+    if (error) { _fatProgPasso(f.cliente_nome || "", "erro", error.message); continue; }
+    naFila.push({ id: f.id, nome: f.cliente_nome || "" });
+  }
+  if (!naFila.length) { _fatProgFim(); return; }
+
+  _fatProgAgora(`Aguardando o posto enviar ${naFila.length}...`);
+  const pendentes = new Map(naFila.map(x => [x.id, x.nome]));
+  for (let volta = 0; volta < 60 && pendentes.size; volta++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const { data } = await sb.from("oct_faturas")
+      .select("id,enviada_em,enviada_por,envio_pedido_em,envio_erro").in("id", [...pendentes.keys()]);
+    (data || []).forEach(f => {
+      if (f.enviada_em) {
+        _fatProgPasso(pendentes.get(f.id), "ok", "por " + (f.enviada_por || ""));
+        pendentes.delete(f.id);
+      } else if (!f.envio_pedido_em && f.envio_erro) {
+        _fatProgPasso(pendentes.get(f.id), "erro", f.envio_erro);
+        pendentes.delete(f.id);
+      }
+    });
+  }
+  pendentes.forEach(nome => _fatProgPasso(nome, "erro", "não voltou a tempo (o posto pode estar desligado)"));
+  _fatProgFim();
+}
+
 // STATUS do ciclo da fatura: gerada -> NF-e -> boleto -> enviada.
 // Nao e' um campo guardado: e' lido do que existe. Se o boleto for cancelado no
 // banco ou o XML trocado, a etiqueta acompanha sem ninguem ter de "corrigir o
@@ -1875,6 +2139,10 @@ async function fatListarFaturas(status) {
     return;
   }
   const faturas = data || [];
+  window._fatFaturas = faturas;
+  // a selecao vale para a lista que esta' na tela: ids de outra aba viram lixo
+  const idsAqui = new Set(faturas.map(x => x.id));
+  [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
   // um boleto por fatura numa consulta so' -- 20 faturas nao podem virar 20 idas
   const bolPorFat = {};
   if (faturas.length) {
@@ -1885,6 +2153,8 @@ async function fatListarFaturas(status) {
     } catch (e) { /* tabela de boletos pode nao existir */ }
   }
   const linhas = faturas.map(fatr => `<tr>
+    <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
+      ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
     <td class="fat-td">${fatr.numero ?? "—"}</td>
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
@@ -1906,11 +2176,14 @@ async function fatListarFaturas(status) {
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
+    ${_fatBarraLote(faturas, status)}
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
+  _fatSelFSync();
+
   // algo ainda em andamento no gateway? entao a tela se reconfere sozinha
   const emAndamento = faturas.some(fr =>
     fr.fatura_pdf_pedido_em || fr.envio_pedido_em) ||
@@ -2067,6 +2340,9 @@ function _fatEstilo() {
   .fat-btn:hover{background:#242c3e;color:#fff}
   .fat-btn.azul{background:#f97316;color:#fff;border-color:#f97316}.fat-btn.azul:hover{background:#ea6a0c}
   .fat-btn.mini{padding:4px 9px;font-size:11px}
+  .fat-btn:disabled,.fat-grid button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
+  .fat-lote:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
+  .fat-grid thead th:first-child input,.fat-td input[type=checkbox]{cursor:pointer}
   .fat-abtn{border:none;border-radius:5px;padding:5px 8px;font-size:10.5px;color:#fff;cursor:pointer;margin:1px 2px;white-space:nowrap;font-weight:600}
   .fat-abtn:hover{filter:brightness(1.15)}
   </style>`;
