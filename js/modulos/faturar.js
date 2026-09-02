@@ -497,6 +497,16 @@ async function _fatBolEsperar(boletoId) {
 }
 
 function _fatBolMostrar(b) {
+  if (b.status === "simulado") {
+    const p = (b.resposta && b.resposta.payload) || {};
+    _fatBolCaixa(`<p style="color:#f0b45c;font-weight:600">🧪 Simulação (COBRANCA_DRY_RUN ligado)</p>
+      <p style="font-size:0.8rem;color:#889;margin-top:6px">Nada foi enviado ao banco. Este é o
+      conteúdo exato que o Sicoob receberia:</p>
+      <pre style="text-align:left;background:#0f1520;padding:10px;border-radius:6px;font-size:0.7rem;
+        white-space:pre-wrap;color:#c8d0da;margin-top:10px;max-height:300px;overflow:auto">${
+        _fatEsc(JSON.stringify(p, null, 2))}</pre>`);
+    return;
+  }
   if (b.status === "erro") {
     _fatBolCaixa(`<p style="color:#f87171">O banco não registrou o boleto.</p>
       <pre style="text-align:left;background:#0f1520;padding:10px;border-radius:6px;font-size:0.72rem;
