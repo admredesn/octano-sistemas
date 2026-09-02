@@ -58,6 +58,7 @@ async function moduloFaturar() {
 
 function fatAba(aba) {
   window._fatAba = aba;
+  clearTimeout(_fatAutoTimer);      // troca de aba cancela a reconferencia
   ["abertos", "faturas", "liquidadas"].forEach(a => {
     const el = document.getElementById("fat-aba-" + a);
     if (el) el.classList.toggle("ativa", a === aba);
@@ -573,6 +574,7 @@ async function fatBoleto(id) {
     existir — sem registro ele não é pago nem baixa.</p>`);
   const achou = await _fatBolEsperar(nova.id);
   if (achou) _fatBolMostrar(achou);
+  _fatRecarregar();          // o status da linha muda no ato, sem F5
 }
 
 // olha a linha ate' sair de 'pendente' (o worker roda a cada ~20s)
@@ -1093,7 +1095,7 @@ async function fatAnexarNfeConfirmar() {
   }
   _fatFechaModal();
   alert(`NF-e ${d.numero} anexada e arquivada na nuvem.`);
-  fatListarFaturas(fat.status || "aberta");
+  _fatRecarregar();
 }
 
 // link assinado e temporario: documento fiscal nao fica em URL publica eterna
@@ -1206,7 +1208,7 @@ async function fatEnviarOk(faturaId) {
         ${at.envio_erro ? `<p style="color:#f0b45c;font-size:0.78rem;margin-top:10px">
           Um dos canais falhou: ${_fatEsc(at.envio_erro)}</p>` : ""}
         <button class="fat-btn azul" style="margin-top:12px;width:100%"
-          onclick="_fatFechaModal();fatListarFaturas('aberta')">Fechar</button>`);
+          onclick="_fatFechaModal();_fatRecarregar()">Fechar</button>`);
       return;
     }
     if (at && !at.envio_pedido_em && at.envio_erro) {
@@ -1261,6 +1263,7 @@ async function fatVerFatura(faturaId) {
       .select("fatura_pdf_path,fatura_pdf_pedido_em,envio_erro").eq("id", faturaId).maybeSingle();
     if (at && at.fatura_pdf_path) {
       // o botao e' de proposito: abrir sozinho aqui seria pop-up bloqueado
+      _fatRecarregar();
       _fatVfCaixa(`<p style="color:#7ee2a0">✔ Fatura pronta.</p>
         <button class="fat-btn azul" style="margin-top:12px;width:100%"
           onclick="_fatFechaModal();fatVerDoc('${_fatEsc(at.fatura_pdf_path)}')">📄 Abrir a fatura</button>`);
@@ -1783,7 +1786,32 @@ async function fatEditarFaturaOk(faturaId) {
   }
   if (error) { msg.style.color = "#f87171"; msg.textContent = "Erro: " + error.message; return; }
   _fatFechaModal();
-  fatListarFaturas(st.f.status || "aberta");
+  _fatRecarregar();
+}
+
+// redesenha a aba que esta' aberta (sem F5, sem perder o lugar)
+function _fatRecarregar() {
+  if (!document.getElementById("fat-corpo")) return;   // saiu da tela
+  if (window._fatAba === "abertos") fatListarTitulos();
+  else fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
+}
+
+// enquanto o gateway estiver trabalhando em alguma linha, a lista se reconfere
+// sozinha. Um timer so' -- cada render cancela o anterior.
+let _fatAutoTimer = null;
+function _fatAutoAtualizar(temPendente, status) {
+  clearTimeout(_fatAutoTimer);
+  if (!temPendente) return;
+  _fatAutoTimer = setTimeout(() => {
+    // nao redesenha por baixo de um modal aberto: tenta de novo depois
+    if (document.getElementById("fat-modal") || document.getElementById("fat-receber-modal")) {
+      _fatAutoAtualizar(true, status);
+      return;
+    }
+    if (window._fatAba !== "faturas" && window._fatAba !== "liquidadas") return;
+    if (!document.getElementById("fat-corpo")) return;
+    fatListarFaturas(status);
+  }, 10000);
 }
 
 // STATUS do ciclo da fatura: gerada -> NF-e -> boleto -> enviada.
@@ -1883,6 +1911,12 @@ async function fatListarFaturas(status) {
       <tbody>${linhas || `<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
+  // algo ainda em andamento no gateway? entao a tela se reconfere sozinha
+  const emAndamento = faturas.some(fr =>
+    fr.fatura_pdf_pedido_em || fr.envio_pedido_em) ||
+    Object.values(bolPorFat).some(b => b && b.status === "pendente");
+  _fatAutoAtualizar(emAndamento, status);
+
   // saldo por fatura (recebimentos parciais) — assíncrono, não trava a lista
   faturas.forEach(async fr => {
     const rec = await _fatRecebidoDa(fr.id);
