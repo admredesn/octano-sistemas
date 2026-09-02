@@ -96,6 +96,7 @@ async function fatListarTitulos() {
     if (F.busca) { const b = F.busca.toLowerCase(); const alvo = ((t.cliente_nome || "") + " " + (t.numero_nfe || "")).toLowerCase(); if (alvo.indexOf(b) < 0) return false; }
     return true;
   });
+  titulos = _fatOrdenar(titulos, window._fatOrdT, _FAT_ORD_T);
   window._fatTitulos = titulos;
   const filtroCli = F.cli;
   // formas distintas p/ o seletor
@@ -166,7 +167,7 @@ async function fatListarTitulos() {
         <div class="fat-card-qtd">${d.qtd} título(s)${d.id ? ` · <span style="color:#25d366;cursor:pointer" onclick="fatCobrar('${d.id}')">💬 cobrar</span>` : ""}</div></div>`).join("")}
     </div>` : ""}
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fat-chk-todos" title="Marcar/desmarcar todos os títulos da lista" onchange="fatSelTodos(this.checked)"></th><th>Emissão</th><th>Vencimento</th><th>Atraso</th><th>Cliente</th><th>NFC-e</th><th>Forma</th><th class="fat-r">Valor</th><th style="text-align:center">Ações</th></tr></thead>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fat-chk-todos" title="Marcar/desmarcar todos os títulos da lista" onchange="fatSelTodos(this.checked)"></th>${_fatTh("Emissão","emissao",window._fatOrdT,"fatOrdenarT")}${_fatTh("Vencimento","vencimento",window._fatOrdT,"fatOrdenarT")}${_fatTh("Atraso","atraso",window._fatOrdT,"fatOrdenarT",'style="text-align:center"')}${_fatTh("Cliente","cliente",window._fatOrdT,"fatOrdenarT")}${_fatTh("NFC-e","nfce",window._fatOrdT,"fatOrdenarT")}${_fatTh("Forma","forma",window._fatOrdT,"fatOrdenarT")}${_fatTh("Valor","valor",window._fatOrdT,"fatOrdenarT",'class="fat-r"')}<th style="text-align:center">Ações</th></tr></thead>
       <tbody id="fat-tbody">${linhas || '<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
     </table></div>
     <div class="fat-rodape">
@@ -1823,6 +1824,76 @@ function _fatAutoAtualizar(temPendente, status) {
   }, 10000);
 }
 
+// ---------- ORDENAÇÃO das listas (03/09) ----------
+// Clicar no cabecalho ordena; clicar de novo inverte. Vazio vai sempre para o
+// FIM, nos dois sentidos: uma fatura sem vencimento no topo esconderia as que
+// vencem amanha, que e' justamente o que se procura ao ordenar por vencimento.
+function _fatCmp(a, b) {
+  const va = (a === null || a === undefined || a === "");
+  const vb = (b === null || b === undefined || b === "");
+  if (va && vb) return 0;
+  if (va) return 1;          // vazio depois, independente da direcao
+  if (vb) return -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b), "pt-BR", { numeric: true, sensitivity: "base" });
+}
+
+function _fatOrdenar(lista, ord, campos) {
+  if (!ord || !ord.campo || !campos[ord.campo]) return lista;
+  const val = campos[ord.campo];
+  const sinal = ord.dir === "asc" ? 1 : -1;
+  return lista.slice().sort((x, y) => {
+    const c = _fatCmp(val(x), val(y));
+    return c === 0 ? 0 : c * sinal;   // o "vazio por ultimo" ja' saiu do _fatCmp
+  });
+}
+
+// cabecalho clicavel, com a seta de quem esta' mandando na ordem
+function _fatTh(rot, campo, ord, fn, extra) {
+  const ativo = ord && ord.campo === campo;
+  const seta = ativo ? (ord.dir === "asc" ? " ▲" : " ▼") : "";
+  return `<th ${extra || ""} onclick="${fn}('${campo}')" title="Ordenar por ${rot}"
+    style="cursor:pointer;user-select:none;${ativo ? "color:#f97316" : ""}">${rot}${seta}</th>`;
+}
+
+// ---- faturas ----
+const _FAT_ORD_F = {
+  numero:     f => Number(f.numero || 0),
+  cliente:    f => f.cliente_nome || "",
+  emissao:    f => String(f.emissao || f.criado_em || "").slice(0, 10),
+  vencimento: f => String(f.vencimento || "").slice(0, 10),
+  valor:      f => _fatLiquido(f),
+};
+
+function fatOrdenarF(campo) {
+  const o = window._fatOrdF || {};
+  // mesma coluna inverte; coluna nova comeca decrescente em numero/valor/data,
+  // crescente em texto -- e' o que a pessoa espera em cada caso
+  window._fatOrdF = (o.campo === campo)
+    ? { campo, dir: o.dir === "asc" ? "desc" : "asc" }
+    : { campo, dir: campo === "cliente" ? "asc" : "desc" };
+  fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
+}
+
+// ---- titulos ----
+const _FAT_ORD_T = {
+  emissao:    t => String(t.registrado_em || t.criado_em || "").slice(0, 10),
+  vencimento: t => { const v = _fatVencDe(t); return v ? v.toISOString().slice(0, 10) : ""; },
+  atraso:     t => { const a = _fatAtrasoDias(_fatVencDe(t)); return a == null ? null : Number(a); },
+  cliente:    t => t.cliente_nome || "",
+  nfce:       t => Number(String(t.numero_nfe || "").replace(/\D/g, "")) || null,
+  forma:      t => t.forma_nome || "",
+  valor:      t => Number(t.valor || 0),
+};
+
+function fatOrdenarT(campo) {
+  const o = window._fatOrdT || {};
+  window._fatOrdT = (o.campo === campo)
+    ? { campo, dir: o.dir === "asc" ? "desc" : "asc" }
+    : { campo, dir: (campo === "cliente" || campo === "forma") ? "asc" : "desc" };
+  fatListarTitulos();
+}
+
 // ============================================================
 // AÇÃO EM MASSA nas faturas (03/09)
 // ------------------------------------------------------------
@@ -2138,7 +2209,7 @@ async function fatListarFaturas(status) {
       <p style="color:#666;font-size:0.85rem">Rode a migração SQL (oct_faturas) no Supabase para ativar o faturamento. A aba "Títulos em Aberto" já funciona.</p></div>`;
     return;
   }
-  const faturas = data || [];
+  const faturas = _fatOrdenar(data || [], window._fatOrdF, _FAT_ORD_F);
   window._fatFaturas = faturas;
   // a selecao vale para a lista que esta' na tela: ids de outra aba viram lixo
   const idsAqui = new Set(faturas.map(x => x.id));
@@ -2178,7 +2249,7 @@ async function fatListarFaturas(status) {
   corpo.innerHTML = `
     ${_fatBarraLote(faturas, status)}
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
@@ -2330,6 +2401,7 @@ function _fatEstilo() {
   .fat-gridwrap{overflow:auto;max-height:52vh;background:#0f1119}
   .fat-grid{width:100%;border-collapse:collapse;font-size:12px;color:#cdd6e0}
   .fat-grid th{background:#1a1d2e;color:#9fb0c4;text-align:left;padding:8px;border-bottom:1px solid #2a2d3e;position:sticky;top:0}
+  .fat-grid th[onclick]:hover{background:#232840;color:#fff}
   .fat-td{padding:6px 8px;border-bottom:1px solid #1c2130}
   .fat-r{text-align:right;font-variant-numeric:tabular-nums}
   .fat-grid tbody tr:nth-child(even){background:#141824}
