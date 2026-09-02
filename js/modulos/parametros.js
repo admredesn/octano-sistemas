@@ -60,6 +60,29 @@ const PARAM_DEFS = [
     ],
   },
   {
+    grupo: '📧 Cobrança — envio de fatura',
+    itens: [
+      { chave: 'cobranca_envio_ativo', rot: 'Enviar fatura ao cliente automaticamente', pad: false,
+        desc: 'Libera o botão "Enviar fatura" (NF-e + boleto + fatura) por WhatsApp e e-mail.',
+        pai: true },
+      { chave: 'cobranca_email_remetente', tipo: 'texto', rot: 'E-mail que envia a cobrança',
+        pad: '', dica: 'cobranca@seudominio.com.br',
+        desc: 'Conta própria de cobrança. A SENHA não fica aqui — vai no Railway, porque esta tela é lida pelo navegador.',
+        depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_email_nome', tipo: 'texto', rot: 'Nome que aparece no e-mail',
+        pad: '', dica: 'Posto Florestal — Cobrança',
+        desc: 'O que o cliente vê como remetente.',
+        depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_email_copia', tipo: 'texto', rot: 'Enviar cópia para',
+        pad: '', dica: 'financeiro@seudominio.com.br (opcional)',
+        desc: 'Cópia oculta de cada cobrança enviada. Deixe vazio para não copiar.',
+        depende: 'cobranca_envio_ativo' },
+      { chave: 'cobranca_whatsapp', rot: 'Enviar também por WhatsApp', pad: true,
+        desc: 'Usa o gateway do WhatsApp. No Florestal, 85 dos 91 clientes têm número e só 13 têm e-mail.',
+        depende: 'cobranca_envio_ativo' },
+    ],
+  },
+  {
     grupo: '🎁 Cashback',
     itens: [
       { chave: 'cashback', rot: 'Cashback ativo', pad: false,
@@ -84,6 +107,13 @@ function parValor(ch) {
 }
 
 // um filho só vale se o pai estiver ligado
+function _parEhTexto(ch) {
+  for (const g of PARAM_DEFS) {
+    for (const i of g.itens) if (i.chave === ch) return i.tipo === 'texto';
+  }
+  return false;
+}
+
 function _parBloqueado(item) {
   return !!(item.depende && !parValor(item.depende));
 }
@@ -94,7 +124,12 @@ async function parCarregar(empresaId) {
   try {
     const { data } = await sb.from('oct_parametros')
       .select('chave,valor').eq('empresa_id', empresaId);
-    (data || []).forEach(r => { _parAtual[r.chave] = (r.valor === true || r.valor === 'true'); });
+    (data || []).forEach(r => {
+      // parametro de TEXTO guarda a string; o de liga/desliga vira booleano
+      _parAtual[r.chave] = _parEhTexto(r.chave)
+        ? (r.valor == null ? '' : String(r.valor).replace(/^"|"$/g, ''))
+        : (r.valor === true || r.valor === 'true');
+    });
   } catch (e) { /* tabela ainda não criada: tudo no default */ }
 }
 
@@ -115,6 +150,16 @@ async function parGravar(ch, ligado) {
   return true;
 }
 
+// grava campo de texto ao sair do campo (nao a cada tecla)
+async function parTexto(ch, el) {
+  const v = String(el.value || '').trim();
+  if (v === (_parAtual[ch] || '')) return;          // nada mudou
+  const ok = await parGravar(ch, v);
+  if (!ok) { el.value = _parAtual[ch] || ''; return; }
+  el.style.borderColor = '#22c55e';
+  setTimeout(() => { el.style.borderColor = '#2a2d3e'; }, 1200);
+}
+
 async function parToggle(ch, el) {
   const ligado = !!el.checked;
   const ok = await parGravar(ch, ligado);
@@ -132,6 +177,20 @@ function parRender() {
   if (!el) return;
   const grupos = PARAM_DEFS.map(g => {
     const linhas = g.itens.map(i => {
+      if (i.tipo === 'texto') {
+        const bloq = _parBloqueado(i);
+        const v = _parAtual[i.chave] || '';
+        return `<div style="padding:10px 0;border-bottom:1px solid #1a1d2e${bloq ? ';opacity:.5' : ''}">
+          <div style="color:#e0e0e0;font-size:0.88rem;font-weight:600">${_parEsc(i.rot)}</div>
+          <div style="color:#8892a0;font-size:0.76rem;margin:2px 0 6px">${_parEsc(i.desc)}</div>
+          <input type="text" value="${_parEsc(v)}" placeholder="${_parEsc(i.dica || '')}"
+            ${bloq ? 'disabled' : ''} onchange="parTexto('${i.chave}', this)"
+            style="width:100%;max-width:420px;background:#0f1520;border:1px solid #2a2d3e;
+                   border-radius:6px;padding:7px 9px;color:#e8eef5;font-size:0.85rem">
+          ${bloq ? `<div style="color:#a63;font-size:0.72rem;margin-top:3px">⤷ depende de "${
+            _parEsc((PARAM_DEFS.flatMap(x => x.itens).find(x => x.chave === i.depende) || {}).rot || i.depende)}"</div>` : ''}
+        </div>`;
+      }
       // PENDENTE = a tela oferece, mas o PDV ainda nao consulta esta chave.
       // Deixar clicavel seria pior que nao ter: o operador desligaria achando
       // que surtiu efeito. Some quando o ponto de aplicacao existir.
