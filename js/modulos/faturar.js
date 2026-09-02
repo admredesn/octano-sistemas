@@ -1823,8 +1823,52 @@ function _fatAutoAtualizar(temPendente, status) {
     }
     if (window._fatAba !== "faturas" && window._fatAba !== "liquidadas") return;
     if (!document.getElementById("fat-corpo")) return;
-    fatListarFaturas(status);
+    _fatReconferir(status);
   }, 10000);
+}
+
+// Reconferencia sem piscar: busca os dados e troca so' o que mudou. Trocar o
+// innerHTML da tabela inteira a cada 10s fazia a tela tremer, perder a rolagem
+// e reabrir os selects -- o operador achava que o sistema estava com defeito.
+async function _fatReconferir(status) {
+  const corpo = document.getElementById("fat-corpo");
+  if (!corpo) return;
+  const { data, error } = await sb.from("oct_faturas").select("*")
+    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false });
+  if (error) return;
+
+  const antes = window._fatFaturas || [];
+  const novas = _fatOrdenar(data || [], window._fatOrdF, _FAT_ORD_F);
+  // a lista mudou de composicao? ai' redesenhar e' o certo -- linha nova nao
+  // nasce de uma troca de celula
+  const mesmas = antes.length === novas.length &&
+                 antes.every((f, i) => f.id === novas[i].id);
+  if (!mesmas) { fatListarFaturas(status); return; }
+
+  let bolPorFat = {};
+  try {
+    const r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status")
+      .in("fatura_id", novas.map(x => x.id));
+    (r.data || []).forEach(b => { bolPorFat[b.fatura_id] = b; });
+  } catch (e) { /* segue sem */ }
+
+  window._fatFaturas = novas;
+  novas.forEach(f => {
+    _fatTrocaCel("fatf-st-" + f.id, _fatStatusCel(f, bolPorFat[f.id]));
+    _fatTrocaCel("fatf-dc-" + f.id, _fatDocsCol(f));
+    _fatTrocaCel("fatf-vl-" + f.id, _fatValorCel(f));
+  });
+  _fatSelFSync();
+
+  const emAndamento = novas.some(fr => fr.fatura_pdf_pedido_em || fr.envio_pedido_em) ||
+    Object.values(bolPorFat).some(b => b && b.status === "pendente");
+  _fatAutoAtualizar(emAndamento, status);
+}
+
+// so' escreve se mudou: escrever igual pisca do mesmo jeito
+function _fatTrocaCel(id, html) {
+  const el = document.getElementById(id);
+  if (el && el.innerHTML !== html) el.innerHTML = html;
 }
 
 // ---------- ORDENAÇÃO das listas (03/09) ----------
@@ -2304,10 +2348,10 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
-    <td class="fat-td fat-r">${_fatValorCel(fatr)}</td>
+    <td class="fat-td fat-r" id="fatf-vl-${fatr.id}">${_fatValorCel(fatr)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
-    <td class="fat-td">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
-    <td class="fat-td" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
+    <td class="fat-td" id="fatf-st-${fatr.id}">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
+    <td class="fat-td" id="fatf-dc-${fatr.id}" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
       <button class="fat-abtn" style="background:#b45309" onclick="fatVerFatura('${fatr.id}')">📄 Fatura</button>
