@@ -67,7 +67,7 @@ const PARAM_DEFS = [
         pai: true },
       { chave: 'cobranca_email_remetente', tipo: 'texto', rot: 'E-mail que envia a cobrança',
         pad: '', dica: 'cobranca@seudominio.com.br',
-        desc: 'Conta própria de cobrança. A SENHA não fica aqui — vai no Railway, porque esta tela é lida pelo navegador.',
+        desc: 'Conta própria de cobrança do posto. É o remetente que o cliente vê e também o usuário do SMTP.',
         depende: 'cobranca_envio_ativo' },
       { chave: 'cobranca_email_nome', tipo: 'texto', rot: 'Nome que aparece no e-mail',
         pad: '', dica: 'Posto Florestal — Cobrança',
@@ -183,6 +183,53 @@ async function parToggle(ch, el) {
   parRender();   // redesenha: desligar um "pai" trava os filhos
 }
 
+// Enter no campo = sair do campo = grava (o onchange faz o resto)
+function _parEnter(ev, el) {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  el.blur();
+}
+
+// aviso que sobrevive ao redesenho da tela (o parRender apaga tudo que e' filho
+// do #conteudo; este fica no body)
+function _parToast(msg, cor) {
+  let t = document.getElementById('par-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'par-toast';
+    t.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:99999;padding:11px 16px;' +
+      'border-radius:8px;font-size:0.86rem;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.5)';
+    document.body.appendChild(t);
+  }
+  t.style.background = cor === 'erro' ? '#7f1d1d' : '#14532d';
+  t.style.color = cor === 'erro' ? '#fecaca' : '#bbf7d0';
+  t.textContent = msg;
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => { if (t) t.remove(); }, 4000);
+}
+
+// salva de uma vez os campos de texto/senha do grupo
+async function parSalvarGrupo(gi) {
+  const g = PARAM_DEFS[gi];
+  if (!g) return;
+  const campos = g.itens.filter(i => i.tipo === 'texto' || i.tipo === 'senha');
+  let n = 0, erro = null;
+  for (const i of campos) {
+    const el = document.getElementById('par-in-' + i.chave);
+    if (!el || el.disabled) continue;
+    const v = String(el.value || '').trim();
+    // senha em branco = "nao mexi", nao "apague"
+    if (i.tipo === 'senha' && !v) continue;
+    if (v === (_parAtual[i.chave] || '')) continue;
+    const ok = await parGravar(i.chave, v);
+    if (!ok) { erro = i.rot; break; }
+    n++;
+  }
+  if (erro) { _parToast('Não salvou: ' + erro, 'erro'); return; }
+  _parToast(n ? `✔ ${n} campo(s) salvo(s)` : '✔ nada mudou — já estava salvo');
+  if (n) parRender();
+}
+
 function _parEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -191,7 +238,7 @@ function _parEsc(s) {
 function parRender() {
   const el = document.getElementById('conteudo');
   if (!el) return;
-  const grupos = PARAM_DEFS.map(g => {
+  const grupos = PARAM_DEFS.map((g, gi) => {
     const linhas = g.itens.map(i => {
       if (i.tipo === 'texto' || i.tipo === 'senha') {
         const bloq = _parBloqueado(i);
@@ -205,8 +252,9 @@ function parRender() {
           <div style="color:#8892a0;font-size:0.76rem;margin:2px 0 6px">${_parEsc(i.desc)}</div>
           <input type="${ehSenha ? 'password' : 'text'}" value="${_parEsc(v)}"
             placeholder="${_parEsc(salva ? '•••••••• (senha salva — digite para trocar)' : (i.dica || ''))}"
-            ${bloq ? 'disabled' : ''} autocomplete="new-password"
+            ${bloq ? 'disabled' : ''} autocomplete="new-password" id="par-in-${i.chave}"
             onchange="parTexto('${i.chave}', this)"
+            onkeydown="_parEnter(event, this)"
             style="width:100%;max-width:420px;background:#0f1520;border:1px solid #2a2d3e;
                    border-radius:6px;padding:7px 9px;color:#e8eef5;font-size:0.85rem">
           ${salva ? '<div style="color:#7ee2a0;font-size:0.72rem;margin-top:3px">✔ senha gravada</div>' : ''}
@@ -237,8 +285,17 @@ function parRender() {
           ${i.pendente ? 'em obra' : (bloq ? 'indisponível' : (on ? 'LIGADO' : 'desligado'))}
         </div></div>`;
     }).join('');
+    // botao so' onde ha' campo digitado: chave liga/desliga grava no clique e
+    // um "Salvar" ali daria a entender que o clique nao valeu
+    const temTexto = g.itens.some(i => i.tipo === 'texto' || i.tipo === 'senha');
+    const rodape = temTexto ? `<div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;padding-top:12px">
+        <span style="color:#6b7688;font-size:0.72rem">salva sozinho ao sair do campo — o botão é para garantir</span>
+        <button onclick="parSalvarGrupo(${gi})"
+          style="background:#f97316;border:none;border-radius:6px;padding:8px 16px;color:#fff;
+                 font-weight:700;font-size:0.84rem;cursor:pointer">💾 Salvar alterações</button>
+      </div>` : '';
     return `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:14px;margin-bottom:12px">
-      <div style="font-weight:700;color:#f97316;margin-bottom:6px">${_parEsc(g.grupo)}</div>${linhas}</div>`;
+      <div style="font-weight:700;color:#f97316;margin-bottom:6px">${_parEsc(g.grupo)}</div>${linhas}${rodape}</div>`;
   }).join('');
 
   el.innerHTML = `
