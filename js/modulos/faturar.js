@@ -804,6 +804,214 @@ async function fatGerarNfFatura(faturaId) {
   fatGerarNfConsolidada(null, ts);
 }
 
+// ================= ANEXAR NF-e (arquivo na nuvem) — 02/09 =================
+// Enquanto a emissao propria nao liga, a NF-e da fatura e' a que o TecnoX emitiu.
+// O operador anexa o XML aqui; o sistema NAO pede os dados digitados -- le' tudo
+// do proprio arquivo (chave, numero, serie, emissao, valor). Digitar abriria a
+// porta para a fatura dizer um numero e o arquivo dizer outro.
+//
+// O arquivo vai para o bucket octano-documentos (privado). Isso resolve o achado
+// que motivou tudo: das 800 notas do Florestal so' 49 tem xml_autorizado -- 94%
+// dos documentos fiscais so' existem no disco do posto, e a guarda legal e' 5 anos.
+//
+// Quando a emissao passar a ser nossa, os mesmos campos recebem o documento que o
+// Octano gerar (nfe_origem = 'octano'): a tela e o envio nao mudam.
+const _FAT_BUCKET = "octano-documentos";
+
+function _fatNfeLerXml(txt) {
+  let doc;
+  try { doc = new DOMParser().parseFromString(txt, "application/xml"); }
+  catch (e) { return { erro: "não consegui abrir o arquivo como XML" }; }
+  if (doc.getElementsByTagName("parsererror").length) return { erro: "o arquivo não é um XML válido" };
+
+  const infs = doc.getElementsByTagName("infNFe");
+  if (!infs.length) return { erro: "não é um XML de nota fiscal (não encontrei infNFe)" };
+  if (infs.length > 1) return { erro: `o arquivo tem ${infs.length} notas (lote). Anexe uma nota por fatura.` };
+  const inf = infs[0];
+  const T = (pai, tag) => {
+    if (!pai) return "";
+    const e = pai.getElementsByTagName(tag)[0];
+    return e ? String(e.textContent || "").trim() : "";
+  };
+  const chave = String(inf.getAttribute("Id") || "").replace(/\D/g, "");
+  if (chave.length !== 44) return { erro: "a chave da nota não tem 44 dígitos" };
+
+  const ide  = inf.getElementsByTagName("ide")[0];
+  const emit = inf.getElementsByTagName("emit")[0];
+  const dest = inf.getElementsByTagName("dest")[0];
+  const tot  = inf.getElementsByTagName("ICMSTot")[0];
+  const dh   = T(ide, "dhEmi") || T(ide, "dEmi");
+
+  return {
+    chave,
+    numero:  T(ide, "nNF"),
+    serie:   T(ide, "serie"),
+    modelo:  T(ide, "mod"),
+    emissao: dh ? dh.slice(0, 10) : "",
+    valor:   Number(T(tot, "vNF") || 0),
+    emit_doc:  T(emit, "CNPJ") || T(emit, "CPF"),
+    emit_nome: T(emit, "xNome"),
+    dest_doc:  T(dest, "CNPJ") || T(dest, "CPF"),
+    dest_nome: T(dest, "xNome"),
+    // sem protNFe/nProt o arquivo e' o que foi ENVIADO, nao o AUTORIZADO --
+    // guardar esse nao cumpre a obrigacao fiscal.
+    protocolo: T(doc.documentElement, "nProt"),
+  };
+}
+
+function _fatSoDig(v) { return String(v || "").replace(/\D/g, ""); }
+
+async function fatAnexarNfe(faturaId) {
+  const { data: fat } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+  if (!fat) { alert("Fatura não encontrada."); return; }
+  window._fatNfe = { fatura: fat, dados: null, xml: null, pdf: null };
+  const jaTem = fat.nfe_chave
+    ? `<p style="color:#f59e0b;font-size:0.8rem;margin:0 0 10px">
+         ⚠ Esta fatura já tem a NF-e ${_fatEsc(fat.nfe_numero || "")} anexada. Anexar de novo substitui.</p>` : "";
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>📎 Anexar NF-e — fatura ${fat.numero ?? ""} · ${_fatEsc(fat.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0">
+      ${jaTem}
+      <p style="font-size:0.8rem;color:#889;margin:0 0 14px">Anexe o XML <b>autorizado</b> da nota emitida
+        no TecnoX. Os dados são lidos do arquivo — nada é digitado.</p>
+      <label style="color:#9aa;font-size:0.76rem">XML da NF-e (obrigatório)</label>
+      <input type="file" accept=".xml,text/xml,application/xml" onchange="_fatNfeSelXml(this)"
+        style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#ccc;margin-bottom:12px">
+      <label style="color:#9aa;font-size:0.76rem">DANFE em PDF (opcional — é o que o cliente lê)</label>
+      <input type="file" accept=".pdf,application/pdf" onchange="_fatNfeSelPdf(this)"
+        style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#ccc">
+      <div id="fat-nfe-prev" style="margin-top:14px"></div>
+      <div id="fat-nfe-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button class="fat-btn azul" style="flex:2" id="fat-nfe-ok" disabled
+          onclick="fatAnexarNfeConfirmar()">Anexar e arquivar na nuvem</button>
+      </div>
+    </div>`);
+}
+
+function _fatNfeSelPdf(input) {
+  window._fatNfe.pdf = (input.files || [])[0] || null;
+}
+
+function _fatNfeSelXml(input) {
+  const f = (input.files || [])[0];
+  const prev = document.getElementById("fat-nfe-prev");
+  const btn = document.getElementById("fat-nfe-ok");
+  window._fatNfe.dados = null; window._fatNfe.xml = null;
+  if (btn) btn.disabled = true;
+  if (!f) { if (prev) prev.innerHTML = ""; return; }
+  const rd = new FileReader();
+  rd.onload = () => {
+    const txt = String(rd.result || "");
+    const d = _fatNfeLerXml(txt);
+    if (d.erro) {
+      prev.innerHTML = `<p style="color:#f87171">❌ ${_fatEsc(d.erro)}</p>`;
+      return;
+    }
+    window._fatNfe.dados = d; window._fatNfe.xml = txt;
+
+    const fat = window._fatNfe.fatura;
+    const avisos = [];
+    if (!d.protocolo) avisos.push("este XML <b>não tem protocolo de autorização</b> — é o arquivo enviado, não o autorizado. O que vale para o fisco é o com protocolo.");
+    if (d.modelo && d.modelo !== "55") avisos.push(`o modelo é <b>${_fatEsc(d.modelo)}</b>${d.modelo === "65" ? " (NFC-e, cupom)" : ""} — a fatura do cliente costuma ser NF-e modelo 55.`);
+    const dif = Math.abs(Number(d.valor || 0) - Number(fat.valor || 0));
+    if (dif > 0.005) avisos.push(`o valor da nota (<b>R$ ${_fatMoney(d.valor)}</b>) não bate com o da fatura (<b>R$ ${_fatMoney(fat.valor)}</b>) — diferença de R$ ${_fatMoney(dif)}.`);
+
+    prev.innerHTML = `
+      <table style="width:100%;font-size:0.84rem;text-align:left;background:#13151f;border-radius:8px;padding:6px">
+        <tr><td style="color:#889;padding:3px 8px">Nota</td><td style="padding:3px 8px"><b>nº ${_fatEsc(d.numero)}</b> · série ${_fatEsc(d.serie)} · modelo ${_fatEsc(d.modelo)}</td></tr>
+        <tr><td style="color:#889;padding:3px 8px">Emissão</td><td style="padding:3px 8px">${_fatData(d.emissao)}</td></tr>
+        <tr><td style="color:#889;padding:3px 8px">Valor</td><td style="padding:3px 8px;color:#f59e0b;font-weight:700">R$ ${_fatMoney(d.valor)}</td></tr>
+        <tr><td style="color:#889;padding:3px 8px">Destinatário</td><td style="padding:3px 8px">${_fatEsc(d.dest_nome || "—")}</td></tr>
+        <tr><td style="color:#889;padding:3px 8px;vertical-align:top">Chave</td><td style="padding:3px 8px;font-family:monospace;font-size:0.72rem;word-break:break-all">${_fatEsc(d.chave)}</td></tr>
+      </table>
+      ${avisos.length ? `<div style="margin-top:10px;background:#2a2010;border:1px solid #63501f;border-radius:8px;padding:10px;font-size:0.78rem;color:#f0c98a">
+         ⚠ ${avisos.join("<br>⚠ ")}<br><span style="color:#998">Dá para anexar assim mesmo — confira antes.</span></div>` : ""}`;
+    if (btn) btn.disabled = false;
+  };
+  rd.onerror = () => { prev.innerHTML = `<p style="color:#f87171">Não consegui ler o arquivo.</p>`; };
+  rd.readAsText(f, "UTF-8");
+}
+
+// caminho no bucket: <empresa>/<ano>/<mes>/nfe-<chave>.<ext>
+function _fatDocPath(empresaId, dataIso, nome) {
+  const d = String(dataIso || "").slice(0, 10);
+  const ano = d.slice(0, 4) || String(new Date().getFullYear());
+  const mes = d.slice(5, 7) || String(new Date().getMonth() + 1).padStart(2, "0");
+  return `${empresaId}/${ano}/${mes}/${nome}`;
+}
+
+async function fatAnexarNfeConfirmar() {
+  const st = window._fatNfe || {};
+  const d = st.dados, fat = st.fatura;
+  const msg = document.getElementById("fat-nfe-msg");
+  const btn = document.getElementById("fat-nfe-ok");
+  if (!d || !st.xml) { return; }
+
+  // a mesma nota em duas faturas seria a mesma receita cobrada duas vezes
+  const { data: outra } = await sb.from("oct_faturas").select("id,numero")
+    .eq("nfe_chave", d.chave).neq("id", fat.id).limit(1);
+  if (outra && outra.length) {
+    msg.style.color = "#f87171";
+    msg.innerHTML = `Esta NF-e já está anexada à fatura ${outra[0].numero ?? outra[0].id}. Uma nota não cobre duas faturas.`;
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  msg.style.color = "#9aa"; msg.textContent = "Enviando para a nuvem...";
+
+  const xmlPath = _fatDocPath(fat.empresa_id, d.emissao, `nfe-${d.chave}.xml`);
+  const pdfPath = st.pdf ? _fatDocPath(fat.empresa_id, d.emissao, `nfe-${d.chave}.pdf`) : null;
+  try {
+    const up1 = await sb.storage.from(_FAT_BUCKET).upload(
+      xmlPath, new Blob([st.xml], { type: "application/xml" }),
+      { upsert: true, contentType: "application/xml" });
+    if (up1.error) throw up1.error;
+    if (pdfPath) {
+      const up2 = await sb.storage.from(_FAT_BUCKET).upload(
+        pdfPath, st.pdf, { upsert: true, contentType: "application/pdf" });
+      if (up2.error) throw up2.error;
+    }
+  } catch (e) {
+    msg.style.color = "#f87171";
+    const m = String(e.message || e);
+    msg.innerHTML = /not found|does not exist|Bucket/i.test(m)
+      ? `O bucket <code>${_FAT_BUCKET}</code> não existe ou não está liberado para gravar.`
+      : "Erro ao enviar: " + _fatEsc(m);
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  msg.textContent = "Gravando na fatura...";
+  const { error } = await sb.from("oct_faturas").update({
+    nfe_chave: d.chave, nfe_numero: d.numero, nfe_serie: d.serie,
+    nfe_emissao: d.emissao || null, nfe_valor: d.valor || null,
+    nfe_origem: "tecnox", nfe_xml_path: xmlPath, nfe_pdf_path: pdfPath,
+  }).eq("id", fat.id);
+  if (error) {
+    msg.style.color = "#f87171";
+    msg.innerHTML = /nfe_chave|column/i.test(error.message || "")
+      ? "Faltam as colunas da NF-e — rode <code>repo/sql/SQL-DOCUMENTOS-FATURA.sql</code>."
+      : "Erro ao gravar: " + _fatEsc(error.message);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  _fatFechaModal();
+  alert(`NF-e ${d.numero} anexada e arquivada na nuvem.`);
+  fatListarFaturas(fat.status || "aberta");
+}
+
+// link assinado e temporario: documento fiscal nao fica em URL publica eterna
+async function fatVerDoc(path) {
+  if (!path) return;
+  const { data, error } = await sb.storage.from(_FAT_BUCKET).createSignedUrl(path, 600);
+  if (error || !data) { alert("Não consegui abrir o arquivo: " + (error?.message || "sem link")); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
 // ---------- modal genérico (self-contained) ----------
 function _fatModal(html) {
   let m = document.getElementById("fat-modal");
@@ -1051,6 +1259,18 @@ async function fatGerarFatura() {
 }
 
 // ---------- Abas: Faturas em Aberto / Liquidadas ----------
+// o que ja' esta' arquivado na nuvem desta fatura. Enquanto o campo estiver
+// vazio o documento so' existe no disco do posto -- que e' exatamente o que
+// estamos deixando de aceitar.
+function _fatDocsCol(f) {
+  const ic = [];
+  if (f.nfe_xml_path) ic.push(`<span title="XML da NF-e ${_fatEsc(f.nfe_numero || "")}" style="cursor:pointer" onclick="fatVerDoc('${_fatEsc(f.nfe_xml_path)}')">🧾</span>`);
+  if (f.nfe_pdf_path) ic.push(`<span title="DANFE em PDF" style="cursor:pointer" onclick="fatVerDoc('${_fatEsc(f.nfe_pdf_path)}')">📄</span>`);
+  if (f.boleto_pdf_path) ic.push(`<span title="Boleto" style="cursor:pointer" onclick="fatVerDoc('${_fatEsc(f.boleto_pdf_path)}')">🏦</span>`);
+  if (f.fatura_pdf_path) ic.push(`<span title="Fatura detalhada" style="cursor:pointer" onclick="fatVerDoc('${_fatEsc(f.fatura_pdf_path)}')">📑</span>`);
+  return ic.length ? ic.join(" ") : '<span style="color:#4a5160">—</span>';
+}
+
 async function fatListarFaturas(status) {
   const corpo = document.getElementById("fat-corpo");
   corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando faturas...</p>";
@@ -1070,18 +1290,20 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     <td class="fat-td fat-r">${_fatMoney(fatr.valor)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
+    <td class="fat-td" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
-      <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>` : ""}
+      <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
+      <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>` : ""}
     </td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + Number(fr.valor || 0), 0);
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="7" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th>Nº</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th class="fat-r">Valor</th><th>Recebido/Saldo</th><th>Docs</th><th>Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="8" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
   // saldo por fatura (recebimentos parciais) — assíncrono, não trava a lista
