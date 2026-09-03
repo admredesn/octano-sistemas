@@ -93,9 +93,17 @@ async function getSession(){
 }
 
 async function init(){
-  // MODO TV (link ?tv=1 ou #tv): monitor de tanques em tela cheia, SEM login.
+  // MODO TV (link ?tv=1 ou #tv): monitor de tanques em tela cheia.
+  // EXIGE sessao desde 03/09/2026: o painel mostra faturamento, lucro e margem
+  // dos quatro postos, e a URL e' o endereco do sistema com ?tv=1 no fim --
+  // quem viu o link uma vez veria o resultado da rede de qualquer lugar.
+  // Na maquina do painel se loga UMA VEZ; o Chrome guarda a sessao no perfil do
+  // atalho de quiosque e o token se renova sozinho.
   const _params = new URLSearchParams(location.search);
-  if((_params.get('tv') === '1' || location.hash === '#tv') && typeof monitorTvBoot === 'function'){
+  const _ehTv = (_params.get('tv') === '1' || location.hash === '#tv');
+  if(_ehTv && typeof monitorTvBoot === 'function'){
+    const _s = await getSession();
+    if(!_s){ _tvPedeLogin(); return; }
     monitorTvBoot();
     return;
   }
@@ -110,6 +118,20 @@ async function init(){
     _moduloAtual = primeiro.id;
   }
   navegarPara(_moduloAtual);
+}
+
+// login do PAINEL: mesma tela, com o aviso de que e' uma vez so'. Sem isso, quem
+// liga a TV e ve' pedir senha acha que o painel quebrou.
+function _tvPedeLogin(){
+  renderLogin();
+  const box = document.querySelector('.login-box');
+  if(!box) return;
+  const p = document.createElement('p');
+  p.style.cssText = 'color:#8892a0;font-size:0.78rem;margin-top:12px;text-align:center;line-height:1.4';
+  p.innerHTML = '<b style="color:#f97316">Painel de tanques</b><br>' +
+    'Entre uma vez nesta máquina — a sessão fica salva e o painel volta sozinho ' +
+    'nas próximas vezes.';
+  box.appendChild(p);
 }
 
 function renderLogin(){
