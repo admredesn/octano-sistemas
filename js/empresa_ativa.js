@@ -25,11 +25,22 @@ async function empresaCarregarContexto(session) {
   // 1) perfil do usuario logado
   const { data: perfil } = await sb
     .from('oct_perfis')
-    .select('empresa_id, master')
+    .select('empresa_id, master, acessa_gerencial, papel_gerencial, modulos_mais, modulos_menos')
     .eq('id', session.user.id).single();
 
   EMPRESA.perfilEmpresaId = perfil?.empresa_id || null;
   EMPRESA.ehMaster = perfil?.master === true;
+
+  // acesso as telas do gerencial. Sem linha em oct_perfis (logins antigos, como
+  // o gerente@octano.interno) segue vendo tudo: cortar acesso de quem ja' usa,
+  // sem aviso, seria pior que a falta de controle que estamos consertando.
+  if (typeof _acesso !== 'undefined') {
+    _acesso.master = !perfil || perfil.master === true;
+    _acesso.papel  = perfil?.papel_gerencial || null;
+    _acesso.mais   = perfil?.modulos_mais || [];
+    _acesso.menos  = perfil?.modulos_menos || [];
+    _acesso.carregado = true;
+  }
 
   // 2) lista de empresas que o usuario pode ver
   if (EMPRESA.ehMaster) {

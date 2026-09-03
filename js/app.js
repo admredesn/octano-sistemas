@@ -35,6 +35,56 @@ const MODULOS = [
   { id: 'whatsapp',      label: '📱 WhatsApp',    breve: false },
 ];
 
+// ── PAPEIS do gerencial ─────────────────────────────────────────────────────
+// O papel define o conjunto de telas; oct_perfis.modulos_mais/menos ajusta por
+// pessoa. Mudar um papel aqui vale para todo mundo que o usa -- que e' o motivo
+// de existir papel em vez de marcar 31 caixinhas por usuario.
+//
+// ATENCAO: isto organiza, NAO protege. Esconder o menu evita o engano honesto;
+// com RLS desligado e a chave anon no navegador, quem souber usar o F12 le'
+// qualquer tabela. A trava de verdade e' RLS por empresa, que segue pendente.
+const PAPEIS = {
+  gerente: { rot: 'Gerente — tudo', modulos: '*' },
+  financeiro: {
+    rot: 'Financeiro — faturar, pagar, conciliar',
+    modulos: ['faturar', 'contas_pagar', 'conc_banco', 'fcaixa', 'notas_prazo',
+              'pessoas', 'relatorios', 'bi', 'comissoes', 'cashback'],
+  },
+  fiscal: {
+    rot: 'Fiscal — notas e livros',
+    modulos: ['nfe', 'nfce', 'manifestacao', 'lmc', 'importar_sped', 'contabilidade',
+              'config_fiscal', 'produtos', 'pessoas', 'relatorios'],
+  },
+  pista: {
+    rot: 'Pista — tanques, aferição, monitor',
+    modulos: ['afericoes', 'tanques', 'monitor', 'prontidao', 'ponto', 'servicos',
+              'produtos', 'relatorios'],
+  },
+  consulta: {
+    rot: 'Consulta — só olhar',
+    modulos: ['bi', 'monitor', 'relatorios', 'notas_prazo'],
+  },
+};
+
+// perfil do usuario logado (preenchido por empresaCarregarContexto)
+let _acesso = { master: false, papel: null, mais: [], menos: [], carregado: false };
+
+function podeVer(idModulo) {
+  // enquanto o perfil nao chegou, nao esconde nada: piscar o menu e' pior que
+  // mostrar por um instante o que a pessoa ja' via ontem
+  if (!_acesso.carregado) return true;
+  if (_acesso.master) return true;
+  if (_acesso.menos.includes(idModulo)) return false;
+  if (_acesso.mais.includes(idModulo)) return true;
+  const p = PAPEIS[_acesso.papel || ''];
+  if (!p) return false;                    // sem papel definido = sem acesso
+  return p.modulos === '*' || p.modulos.includes(idModulo);
+}
+
+function modulosPermitidos() {
+  return MODULOS.filter(m => podeVer(m.id));
+}
+
 let _moduloAtual = 'nfe';
 
 async function getSession(){
@@ -51,7 +101,14 @@ async function init(){
   }
   const session = await getSession();
   if(!session){ renderLogin(); return; }
-  renderApp(session);
+  await renderApp(session);
+  // abrir numa tela que a pessoa nao pode ver daria "modulo nao encontrado"
+  // logo no login; cai na primeira permitida
+  if (!podeVer(_moduloAtual)) {
+    const primeiro = modulosPermitidos().find(m => !m.breve);
+    if (!primeiro) { _semAcesso(); return; }
+    _moduloAtual = primeiro.id;
+  }
   navegarPara(_moduloAtual);
 }
 
@@ -103,10 +160,23 @@ async function renderApp(session){
   }
 }
 
+// quem entra sem nenhuma tela liberada nao pode ficar olhando um vazio sem
+// explicacao -- ele nao sabe se e' erro do sistema ou falta de permissao
+function _semAcesso() {
+  const c = document.getElementById('conteudo');
+  if (!c) return;
+  c.innerHTML = '<div style="padding:60px;text-align:center;color:#9aa">' +
+    '<div style="font-size:2rem">🔒</div>' +
+    '<h2 style="color:#f97316;margin:10px 0">Sem telas liberadas</h2>' +
+    '<p>Seu usuário entrou, mas ainda não tem nenhum módulo liberado.</p>' +
+    '<p style="font-size:0.85rem;color:#667">Peça ao administrador para definir o seu papel em Operadores.</p>' +
+    '</div>';
+}
+
 function renderToolbar(){
   const tb = document.getElementById('toolbar');
   if(!tb) return;
-  tb.innerHTML = MODULOS.map(m =>
+  tb.innerHTML = modulosPermitidos().map(m =>
     '<div class="toolbar-item ' + (m.id===_moduloAtual?'ativo':'') + ' ' + (m.breve?'breve':'') + '" ' +
     'id="tab-' + m.id + '" onclick="' + (m.breve ? '' : 'navegarPara_' + m.id + '()') + '">' +
     m.label + (m.breve ? ' <small>BREVE</small>' : '') +
