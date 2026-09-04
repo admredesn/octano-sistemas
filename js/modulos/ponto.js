@@ -60,7 +60,8 @@ async function moduloPonto() {
           <div><label style="display:block;color:#888;font-size:0.72rem;margin-bottom:3px">Até</label>
             <input id="pt-f-fim" type="date" value="${fmtInput(hoje)}" style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
           <button onclick="pontoFiltrar()" style="padding:9px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">Filtrar</button>
-          <button onclick="pontoExportarCSV()" style="padding:9px 16px;border-radius:6px;border:1px solid #16a34a;background:transparent;color:#16a34a;font-weight:600;cursor:pointer">⬇ Exportar CSV</button>
+          <button onclick="pontoExportarCSV()" style="padding:9px 16px;border-radius:6px;border:1px solid #16a34a;background:transparent;color:#16a34a;font-weight:600;cursor:pointer">⬇ Cartão de ponto</button>
+          <button onclick="pontoExportarEventosCSV()" title="Uma linha por batida, com o link da foto — para auditoria" style="padding:9px 16px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;font-weight:600;cursor:pointer">⬇ Log de batidas</button>
         </div>
       </div>
 
@@ -146,34 +147,178 @@ async function pontoFiltrar() {
     <p style="color:#666;font-size:0.76rem;margin-top:8px">${data.length} registro(s) no período.</p>`;
 }
 
+// ---------------------------------------------------------------------------
+// EXPORTAR — cartao de ponto (uma linha por funcionario/dia)
+// ---------------------------------------------------------------------------
+// Antes saia uma linha por batida: para conferir a jornada de alguem era preciso
+// garimpar a planilha inteira. Agora e' o formato que o RH usa.
+function _pontoPares(regs) {
+  // agrupa por funcionario e casa entrada->saida na ordem do relogio.
+  // A JORNADA ATRAVESSA A MEIA-NOITE: posto trabalha de madrugada (entrou 23:00,
+  // saiu 00:59). Fechar o dia a meia-noite deixaria um dia com entrada sem saida
+  // e outro com saida sem entrada, e as horas sumiriam das duas pontas.
+  const porFunc = {};
+  regs.forEach(r => {
+    const nome = r.funcionario || '—';
+    (porFunc[nome] = porFunc[nome] || []).push(r);
+  });
+
+  const saida = {};
+  Object.keys(porFunc).forEach(nome => {
+    const lista = porFunc[nome]
+      .slice()
+      .sort((a, b) => new Date(a.registrado_em) - new Date(b.registrado_em));
+    const dias = {};
+    let aberta = null;                       // entrada esperando a saida
+    let primeira = true;                     // ainda nao vimos batida nenhuma
+    const alerta = (chave, txt) => {
+      dias[chave] = dias[chave] || { pares: [], avisos: [] };
+      if (dias[chave].avisos.indexOf(txt) < 0) dias[chave].avisos.push(txt);
+    };
+    lista.forEach((r, idx) => {
+      const d = new Date(r.registrado_em);
+      const chave = _pontoDiaChave(d);
+      dias[chave] = dias[chave] || { pares: [], avisos: [] };
+      if (r.tipo === 'saida') {
+        if (!aberta) {
+          // primeira batida do periodo sendo saida nao e' erro: a entrada ficou
+          // no dia anterior, fora do filtro. Avisar como falha faria o RH cacar
+          // problema que nao existe
+          alerta(chave, primeira ? 'entrada antes do período' : 'saída sem entrada');
+          primeira = false;
+          return;
+        }
+        primeira = false;
+        const cd = _pontoDiaChave(aberta);
+        dias[cd] = dias[cd] || { pares: [], avisos: [] };
+        dias[cd].pares.push({ ent: aberta, sai: d });
+        if (cd !== chave) alerta(cd, 'saiu no dia seguinte');
+        aberta = null;
+      } else {
+        // entrada com outra entrada aberta = alguem esqueceu de bater a saida
+        if (aberta) alerta(_pontoDiaChave(aberta), 'entrada sem saída');
+        aberta = d;
+        primeira = false;
+      }
+    });
+    if (aberta) {
+      // ultima batida sendo entrada de HOJE = a pessoa esta' no turno agora,
+      // nao esqueceu de bater
+      const hoje = _pontoDiaChave(new Date());
+      const cd = _pontoDiaChave(aberta);
+      alerta(cd, cd === hoje ? 'ainda em serviço' : 'entrada sem saída');
+    }
+    saida[nome] = dias;
+  });
+  return saida;
+}
+
+function _pontoDiaChave(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+         String(d.getDate()).padStart(2, '0');
+}
+function _pontoDiaBr(chave) {
+  const p = chave.split('-');
+  return p[2] + '/' + p[1] + '/' + p[0];
+}
+function _pontoHora(d) {
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+// horas em h:mm — decimal (7,58) confunde quem confere folha de pagamento
+function _pontoDur(min) {
+  const m = Math.max(0, Math.round(min));
+  return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
+}
+
 function pontoExportarCSV() {
   const regs = window._pontoRegistros || [];
   if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
-  const fmtDH = (iso) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR');
-  };
+
+  const porFunc = _pontoPares(regs);
+  // quantas colunas de marcacao? o maior numero de pares do periodo manda --
+  // fixar em 2 cortaria a jornada de quem bateu mais vezes, e o cartao mentiria
+  let maxPares = 1;
+  Object.values(porFunc).forEach(dias => Object.values(dias)
+    .forEach(d => { if (d.pares.length > maxPares) maxPares = d.pares.length; }));
+
   const sep = ';';
+  const cel = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+  const cab = ['Funcionario', 'Data', 'Dia'];
+  for (let i = 1; i <= maxPares; i++) { cab.push('Entrada ' + i); cab.push('Saida ' + i); }
+  cab.push('Horas do dia', 'Marcacoes', 'Observacao');
+
+  const linhas = [];
+  Object.keys(porFunc).sort((a, b) => a.localeCompare(b, 'pt-BR')).forEach(nome => {
+    const dias = porFunc[nome];
+    let totalFunc = 0;
+    Object.keys(dias).sort().forEach(chave => {
+      const dia = dias[chave];
+      let minutos = 0;
+      const cols = [];
+      for (let i = 0; i < maxPares; i++) {
+        const p = dia.pares[i];
+        if (p) {
+          cols.push(_pontoHora(p.ent), _pontoHora(p.sai));
+          minutos += (p.sai - p.ent) / 60000;
+        } else {
+          cols.push('', '');
+        }
+      }
+      totalFunc += minutos;
+      const dt = new Date(chave + 'T12:00:00');
+      linhas.push([
+        cel(nome), cel(_pontoDiaBr(chave)), cel(SEMANA[dt.getDay()]),
+        ...cols.map(cel),
+        cel(dia.pares.length ? _pontoDur(minutos) : ''),
+        cel(dia.pares.length * 2 + (dia.avisos.length ? 1 : 0)),
+        cel(dia.avisos.join(' · ')),
+      ].join(sep));
+    });
+    // total do funcionario logo abaixo dos dias dele: quem confere folha soma
+    // por pessoa, e somar 30 linhas na mao e' onde nasce a divergencia
+    const vazias = new Array(maxPares * 2).fill('').map(cel);
+    linhas.push([cel(nome), cel('TOTAL'), cel(''), ...vazias,
+                 cel(_pontoDur(totalFunc)), cel(''), cel('')].join(sep));
+    linhas.push('');
+  });
+
+  const txt = '\uFEFF' + [cab.join(sep), ...linhas].join('\r\n');
+  const blob = new Blob([txt], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cartao_ponto_' + (window._pontoEmpresaNome || 'empresa').replace(/\W+/g, '_') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// O log evento a evento continua exportavel: e' o que tem a FOTO de cada batida,
+// que e' a prova. O cartao e' para conferir jornada; o log, para auditar.
+function pontoExportarEventosCSV() {
+  const regs = window._pontoRegistros || [];
+  if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
+  const sep = ';';
+  const cel = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
   const cab = ['Funcionario', 'Tipo', 'Data', 'Hora', 'Observacao', 'Foto (URL)'].join(sep);
   const linhas = regs.map(r => {
     const d = new Date(r.registrado_em);
-    const csvCell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
     return [
-      csvCell(r.funcionario),
-      csvCell(r.tipo === 'saida' ? 'Saida' : 'Entrada'),
-      csvCell(d.toLocaleDateString('pt-BR')),
-      csvCell(d.toLocaleTimeString('pt-BR')),
-      csvCell(r.observacao || ''),
-      csvCell(r.foto_url || ''),
+      cel(r.funcionario),
+      cel(r.tipo === 'saida' ? 'Saida' : 'Entrada'),
+      cel(d.toLocaleDateString('pt-BR')),
+      cel(d.toLocaleTimeString('pt-BR')),
+      cel(r.observacao || ''),
+      cel(r.foto_url || ''),
     ].join(sep);
   });
-  // BOM para o Excel abrir acentos corretamente
   const txt = '\uFEFF' + [cab, ...linhas].join('\r\n');
   const blob = new Blob([txt], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'ponto_' + (window._pontoEmpresaNome || 'empresa').replace(/\W+/g, '_') + '.csv';
+  a.download = 'ponto_eventos_' + (window._pontoEmpresaNome || 'empresa').replace(/\W+/g, '_') + '.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
