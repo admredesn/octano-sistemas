@@ -60,7 +60,8 @@ async function moduloPonto() {
           <div><label style="display:block;color:#888;font-size:0.72rem;margin-bottom:3px">Até</label>
             <input id="pt-f-fim" type="date" value="${fmtInput(hoje)}" style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
           <button onclick="pontoFiltrar()" style="padding:9px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">Filtrar</button>
-          <button onclick="pontoExportarCSV()" style="padding:9px 16px;border-radius:6px;border:1px solid #16a34a;background:transparent;color:#16a34a;font-weight:600;cursor:pointer">⬇ Cartão de ponto</button>
+          <button onclick="pontoExportarXLSX()" title="Excel com uma aba por funcionário" style="padding:9px 16px;border-radius:6px;border:1px solid #16a34a;background:transparent;color:#16a34a;font-weight:600;cursor:pointer">⬇ Cartão de ponto (Excel)</button>
+          <button onclick="pontoExportarCSV()" title="Tudo numa planilha só" style="padding:9px 16px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;font-weight:600;cursor:pointer">⬇ Cartão em CSV</button>
           <button onclick="pontoExportarEventosCSV()" title="Uma linha por batida, com o link da foto — para auditoria" style="padding:9px 16px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;font-weight:600;cursor:pointer">⬇ Log de batidas</button>
         </div>
       </div>
@@ -191,8 +192,13 @@ function _pontoPares(regs) {
         primeira = false;
         const cd = _pontoDiaChave(aberta);
         dias[cd] = dias[cd] || { pares: [], avisos: [] };
-        dias[cd].pares.push({ ent: aberta, sai: d });
-        if (cd !== chave) alerta(cd, 'saiu no dia seguinte');
+        // jornada de mais de 16h quase sempre e' saida esquecida e batida dias
+        // depois. O par aparece marcado, mas NAO entra no total: somar 100h numa
+        // folha de pagamento por engano do relogio e' pior que faltar a linha.
+        const horas = (d - aberta) / 3600000;
+        dias[cd].pares.push({ ent: aberta, sai: d, suspeito: horas > 16 });
+        if (horas > 16) alerta(cd, 'jornada de ' + Math.round(horas) + 'h — confira, não somei');
+        else if (cd !== chave) alerta(cd, 'saiu no dia seguinte');
         aberta = null;
       } else {
         // entrada com outra entrada aberta = alguem esqueceu de bater a saida
@@ -230,6 +236,117 @@ function _pontoDur(min) {
   return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
 }
 
+// ---------------------------------------------------------------------------
+// EXPORTAR — Excel com UMA ABA POR FUNCIONARIO
+// ---------------------------------------------------------------------------
+// CSV nao tem aba. Para separar por pessoa e' preciso xlsx de verdade, entao a
+// biblioteca entra SOB DEMANDA (so' ao clicar): carregar 900 KB em toda abertura
+// da tela para um botao que se usa uma vez por mes nao se paga.
+function _pontoCarregarXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (window._pontoXlsxCarregando) return window._pontoXlsxCarregando;
+  window._pontoXlsxCarregando = new Promise((ok, falha) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload = () => ok(window.XLSX);
+    s.onerror = () => falha(new Error('não consegui baixar a biblioteca do Excel (sem internet?)'));
+    document.head.appendChild(s);
+  });
+  return window._pontoXlsxCarregando;
+}
+
+// nome de aba do Excel: 31 caracteres, sem : \ / ? * [ ] -- e nao pode repetir
+function _pontoNomeAba(nome, usados) {
+  let n = String(nome || 'SEM NOME').replace(/[:\\\/?*\[\]]/g, ' ').trim().slice(0, 31) || 'SEM NOME';
+  if (usados[n]) {
+    const base = n.slice(0, 28);
+    let i = 2;
+    while (usados[base + ' ' + i]) i++;
+    n = base + ' ' + i;
+  }
+  usados[n] = true;
+  return n;
+}
+
+async function pontoExportarXLSX() {
+  const regs = window._pontoRegistros || [];
+  if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
+
+  let XLSX;
+  try { XLSX = await _pontoCarregarXLSX(); }
+  catch (e) { alert(e.message); return; }
+
+  const porFunc = _pontoPares(regs);
+  const SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const wb = XLSX.utils.book_new();
+  const usados = {};
+  const resumo = [['Funcionário', 'Dias com marcação', 'Horas no período', 'Horas (decimal)', 'Dias com pendência']];
+
+  const nomes = Object.keys(porFunc).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  nomes.forEach(nome => {
+    const dias = porFunc[nome];
+    const chaves = Object.keys(dias).sort();
+
+    // colunas de marcacao pela maior jornada DESTA pessoa: cada aba fica no
+    // tamanho dela, em vez de herdar as colunas vazias do colega que bate mais
+    let maxPares = 1;
+    chaves.forEach(c => { if (dias[c].pares.length > maxPares) maxPares = dias[c].pares.length; });
+
+    const cab = ['Data', 'Dia'];
+    for (let i = 1; i <= maxPares; i++) { cab.push('Entrada ' + i); cab.push('Saída ' + i); }
+    cab.push('Horas do dia', 'Horas (decimal)', 'Observação');
+
+    const linhas = [cab];
+    let totalMin = 0, diasComMarca = 0, diasPendentes = 0;
+    chaves.forEach(chave => {
+      const dia = dias[chave];
+      let min = 0;
+      const cols = [];
+      for (let i = 0; i < maxPares; i++) {
+        const p = dia.pares[i];
+        if (p) {
+          cols.push(_pontoHora(new Date(p.ent)), _pontoHora(new Date(p.sai)));
+          if (!p.suspeito) min += (new Date(p.sai) - new Date(p.ent)) / 60000;
+        }
+        else { cols.push('', ''); }
+      }
+      totalMin += min;
+      if (dia.pares.length) diasComMarca++;
+      const avisos = dia.avisos.slice();
+      if (min > 16 * 60) avisos.push(_pontoDur(min) + ' no dia — confira');
+      if (avisos.length) diasPendentes++;
+      const dt = new Date(chave + 'T12:00:00');
+      linhas.push([
+        _pontoDiaBr(chave), SEMANA[dt.getDay()], ...cols,
+        dia.pares.length ? _pontoDur(min) : '',
+        dia.pares.length ? Math.round(min / 0.6) / 100 : '',
+        avisos.join(' · '),
+      ]);
+    });
+    linhas.push([]);
+    linhas.push(['TOTAL', '', ...new Array(maxPares * 2).fill(''),
+                 _pontoDur(totalMin), Math.round(totalMin / 0.6) / 100, '']);
+
+    const ws = XLSX.utils.aoa_to_sheet(linhas);
+    ws['!cols'] = [{ wch: 12 }, { wch: 9 }]
+      .concat(new Array(maxPares * 2).fill({ wch: 10 }))
+      .concat([{ wch: 12 }, { wch: 14 }, { wch: 34 }]);
+    XLSX.utils.book_append_sheet(wb, ws, _pontoNomeAba(nome, usados));
+
+    resumo.push([nome, diasComMarca, _pontoDur(totalMin), Math.round(totalMin / 0.6) / 100, diasPendentes]);
+  });
+
+  // Resumo na FRENTE: quem abre o arquivo quer primeiro o total de cada um, e
+  // so' depois desce no detalhe de quem chamou a atencao
+  const wsR = XLSX.utils.aoa_to_sheet(resumo);
+  wsR['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 17 }, { wch: 16 }, { wch: 19 }];
+  XLSX.utils.book_append_sheet(wb, wsR, 'Resumo');
+  wb.SheetNames.unshift(wb.SheetNames.pop());
+
+  const nomeArq = 'cartao_ponto_' + (window._pontoEmpresaNome || 'empresa').replace(/\W+/g, '_') + '.xlsx';
+  XLSX.writeFile(wb, nomeArq);
+}
+
 function pontoExportarCSV() {
   const regs = window._pontoRegistros || [];
   if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
@@ -261,19 +378,21 @@ function pontoExportarCSV() {
         const p = dia.pares[i];
         if (p) {
           cols.push(_pontoHora(p.ent), _pontoHora(p.sai));
-          minutos += (p.sai - p.ent) / 60000;
+          if (!p.suspeito) minutos += (p.sai - p.ent) / 60000;
         } else {
           cols.push('', '');
         }
       }
       totalFunc += minutos;
+      const avisos = dia.avisos.slice();
+      if (minutos > 16 * 60) avisos.push(_pontoDur(minutos) + ' no dia — confira');
       const dt = new Date(chave + 'T12:00:00');
       linhas.push([
         cel(nome), cel(_pontoDiaBr(chave)), cel(SEMANA[dt.getDay()]),
         ...cols.map(cel),
         cel(dia.pares.length ? _pontoDur(minutos) : ''),
-        cel(dia.pares.length * 2 + (dia.avisos.length ? 1 : 0)),
-        cel(dia.avisos.join(' · ')),
+        cel(dia.pares.length * 2 + (avisos.length ? 1 : 0)),
+        cel(avisos.join(' · ')),
       ].join(sep));
     });
     // total do funcionario logo abaixo dos dias dele: quem confere folha soma
