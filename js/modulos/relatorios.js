@@ -287,8 +287,24 @@ async function relatorioEstoqueCarregar() {
   }
 
   if (!movs.length) {
-    box.innerHTML = `<p style="color:#fbbf24">Nenhum movimento de estoque até ${_estDataBr(dia)}.</p>
-      <p style="color:#8a8f98;font-size:.82rem;max-width:640px;line-height:1.5">O saldo aqui é a soma do movimento (inventário + entradas − vendas), não o campo <code>estoque</code> do cadastro. Se este posto ainda não teve o inventário de abertura importado, não há de onde partir — e inventar um número seria pior que não ter relatório.</p>`;
+    // saber se o posto NUNCA teve movimento ou se so' nao tinha ate' esta data
+    // muda o que a pessoa precisa fazer -- entao pergunta em vez de supor
+    const { count } = await sb.from('oct_estoque_mov')
+      .select('id', { count: 'exact', head: true }).eq('empresa_id', eid);
+    const nunca = !count;
+    box.innerHTML = `
+      <div style="background:#2a1f0a;border:1px solid #7c5e18;border-radius:8px;padding:14px 18px;max-width:680px">
+        <div style="color:#fbbf24;font-weight:700;margin-bottom:8px">
+          ${nunca ? 'Este posto ainda não tem inventário de abertura.' : 'Nenhum movimento até ' + _estDataBr(dia) + '.'}
+        </div>
+        <p style="color:#c8b88a;font-size:.84rem;line-height:1.55;margin:0">
+          O saldo aqui é a soma do movimento — inventário de abertura + entradas − vendas —, não o campo
+          <code>estoque</code> do cadastro, que só é somado pela nota e nunca baixado pela venda.
+          ${nunca
+            ? 'Sem um ponto de partida não há de onde contar, e inventar um número seria pior que não ter relatório. Gere no TecnoX o <strong>Saldo de estoque sintético com preço</strong> deste posto e peça a importação.'
+            : 'Escolha uma data a partir do inventário de abertura.'}
+        </p>
+      </div>`;
     return;
   }
 
@@ -398,9 +414,10 @@ async function relatorioEstoqueCarregar() {
   });
   corpo += fechaGrupo();
 
-  const avisoData = inventarioEm && dia < String(inventarioEm).slice(0, 10)
+  const diaInv = _estDiaLocal(inventarioEm);
+  const avisoData = diaInv && dia < diaInv
     ? `<div style="background:#2a1f0a;border:1px solid #7c5e18;border-radius:8px;padding:10px 14px;margin-bottom:12px;color:#fbbf24;font-size:.82rem">
-         A data pedida é <strong>anterior ao inventário de abertura</strong> (${_estDataBr(String(inventarioEm).slice(0, 10))}).
+         A data pedida é <strong>anterior ao inventário de abertura</strong> (${_estDataBr(diaInv)}).
          Antes dele o Octano só enxerga o movimento que ele mesmo registrou — o número abaixo está incompleto.
        </div>` : '';
 
@@ -422,6 +439,16 @@ async function relatorioEstoqueCarregar() {
         <tbody>${corpo}</tbody>
       </table>
     </div>`;
+}
+
+// O banco guarda timestamptz e devolve em UTC. O inventario carimbado em
+// 03/09 23:59:59-03:00 volta como 04/09T02:59:59Z: comparar a string crua
+// atrasa/adianta o dia em um. Aqui vira o dia LOCAL, que e' o que o operador
+// tem na cabeca quando digita a data.
+function _estDiaLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso).slice(0, 10) : d.toLocaleDateString('sv-SE');
 }
 
 function _estDataBr(d) {
