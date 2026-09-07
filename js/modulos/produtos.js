@@ -15,6 +15,9 @@ async function moduloProdutos() {
     .order('nome');
 
   window._todosProdutos = produtos || [];
+  // categorias reais em uso (vem do TecnoX agora), p/ o filtro e o form
+  window._produtosCategorias = [...new Set((produtos || []).map(p => p.categoria).filter(Boolean))]
+    .sort((x, y) => x.localeCompare(y, 'pt-BR'));
 
   // containers: janela do grid + areas para form/detalhe que ficam acima
   conteudo.innerHTML = `
@@ -43,7 +46,7 @@ async function moduloProdutos() {
     colunas: [
       { campo: 'nome', titulo: 'Nome', largura: '220px' },
       { campo: 'codigo', titulo: 'Código', largura: '110px', render: (v)=> v||'—' },
-      { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v), filtroOpcoes: ['combustivel','lubrificante','filtro','aditivo','mercadoria','material','servico'] },
+      { titulo: 'Categoria', largura: '110px', valor: (p)=> p.categoria||'', render: (v)=> badge(v), filtroOpcoes: window._produtosCategorias },
       { campo: 'unidade', titulo: 'Un', largura: '60px', render: (v)=> v||'un' },
       { campo: 'preco_custo', titulo: 'Custo', align: 'right', largura: '110px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:4}) },
       { campo: 'preco_venda_a', titulo: 'Venda', align: 'right', largura: '100px', render: (v)=> 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) },
@@ -185,6 +188,22 @@ async function prodHistoricoPreco(produtoId) {
         </div>`}`;
 }
 
+// opcoes de categoria do form: as reais em uso + as classicas + a do proprio
+// produto (para editar nunca zerar a categoria de quem ja' tem uma).
+function _fpCategoriaOpcoes(atual) {
+  const base = ['COMBUSTIVEIS', 'LUBRIFICANTES', 'FILTROS', 'ADITIVOS', 'FLUIDOS',
+                'PALHETA', 'PECAS', 'DIVERSOS', 'GRAXA', 'GELO', 'MERCADORIA',
+                'MATERIAL', 'SERVICO'];
+  const set = [];
+  const push = c => { if (c && set.indexOf(c) < 0) set.push(c); };
+  (window._produtosCategorias || []).forEach(push);
+  base.forEach(push);
+  if (atual) push(atual);
+  set.sort((x, y) => x.localeCompare(y, 'pt-BR'));
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return set.map(c => `<option value="${esc(c)}"${c === atual ? ' selected' : ''}>${esc(c)}</option>`).join('');
+}
+
 async function abrirFormProduto(id, empresaId) {
   const div = document.getElementById('form-produto');
   div.style.display = 'block';
@@ -211,13 +230,7 @@ async function abrirFormProduto(id, empresaId) {
         <div class="form-group"><label>Código de barras (EAN)</label><input id="fp-ean" type="text" value="${p?.ean||''}" placeholder="leitor / código de barras" /></div>
         <div class="form-group">
           <label>Categoria</label>
-          <select id="fp-categoria">
-            <option value="combustivel" ${p?.categoria==='combustivel'?'selected':''}>Combustível</option>
-            <option value="lubrificante" ${p?.categoria==='lubrificante'?'selected':''}>Lubrificante</option>
-            <option value="mercadoria" ${p?.categoria==='mercadoria'?'selected':''}>Mercadoria</option>
-            <option value="material" ${p?.categoria==='material'?'selected':''}>Material</option>
-            <option value="servico" ${p?.categoria==='servico'?'selected':''}>Serviço</option>
-          </select>
+          <select id="fp-categoria">${_fpCategoriaOpcoes(p?.categoria)}</select>
         </div>
         <div class="form-group">
           <label>Unidade</label>
