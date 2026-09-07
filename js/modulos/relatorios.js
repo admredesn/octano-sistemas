@@ -235,7 +235,7 @@ async function relatorioEstoque() {
       <button onclick="relatorioEstoqueCarregar()" style="padding:8px 16px;border-radius:7px;border:none;background:#f97316;color:#fff;cursor:pointer;font-weight:600">Buscar</button>
       <button onclick="relatorioEstoqueXLSX()" style="padding:8px 14px;border-radius:7px;border:1px solid #16a34a;background:transparent;color:#16a34a;cursor:pointer;font-weight:600">⬇ Excel</button>
       <button onclick="relatorioEstoqueCSV()" style="padding:8px 14px;border-radius:7px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;cursor:pointer;font-weight:600">⬇ CSV</button>
-      <button onclick="window.print()" style="padding:8px 14px;border-radius:7px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;cursor:pointer;font-weight:600">🖨 Imprimir</button>
+      <button onclick="relatorioEstoqueImprimir()" style="padding:8px 14px;border-radius:7px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;cursor:pointer;font-weight:600">🖨 Imprimir</button>
     </div>
     <div style="margin-bottom:12px">
       <span style="color:#8a8f98;font-size:.75rem;margin-right:4px">Colunas:</span>${chks}
@@ -532,4 +532,121 @@ async function relatorioEstoqueXLSX() {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Estoque ' + _estDataBr(window._estDia || ''));
   XLSX.writeFile(wb, 'estoque_' + (window._estDia || '') + '.xlsx');
+}
+
+// impressão em documento próprio: window.print() sozinho fotografa a tela dark
+// inteira (menu, filtros, chips) — vira "print de tela", não relatório. Aqui
+// monto um HTML limpo numa janela nova, no formato do relatório do TecnoX:
+// cabeçalho com posto/data, tabela agrupada por categoria com subtotais, total
+// geral e numeração de página. Independe do tema da tela.
+function relatorioEstoqueImprimir() {
+  const linhas = window._estLinhas || [];
+  if (!linhas.length) { alert('Nada para imprimir. Gere o relatório primeiro.'); return; }
+  const cols = _estColsAtivas();
+  const info = (typeof empresaAtivaInfo === 'function') ? empresaAtivaInfo() : null;
+  const empresa = info ? (info.nome_fantasia || info.nome || 'Empresa') : 'Empresa';
+  const cnpj = info && info.cnpj ? info.cnpj : '';
+  const dia = _estDataBr(window._estDia || '');
+  const agora = new Date().toLocaleString('pt-BR');
+
+  const num = (v, c) => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: c, maximumFractionDigits: c });
+  const brl = v => 'R$ ' + num(v, 2);
+
+  // colunas: [rótulo, alinhamento, função-da-célula]
+  const defs = [['Descrição', 'l', l => esc(l.nome)]];
+  if (cols.ean) defs.push(['Cód. barras', 'l', l => esc(l.ean)]);
+  defs.push(['Código', 'l', l => esc(l.codigo)]);
+  if (cols.unidade) defs.push(['Un', 'l', l => esc(l.unidade)]);
+  defs.push(['Saldo', 'r', l => num(l.saldo, 3)]);
+  if (cols.custo) defs.push(['Custo un.', 'r', l => l.custo ? num(l.custo, 3) : '—']);
+  if (cols.custoTotal) defs.push(['Custo total', 'r', l => brl(l.custoTotal)]);
+  if (cols.venda) defs.push(['Preço venda', 'r', l => l.venda ? num(l.venda, 2) : '—']);
+  if (cols.vendaTotal) defs.push(['Valor venda', 'r', l => brl(l.vendaTotal)]);
+  if (cols.margem) defs.push(['Margem', 'r', l => l.margem === null ? '—' : l.margem + '%']);
+  if (cols.ultimo) defs.push(['Últ. mov.', 'r', l => l.ultimo ? new Date(l.ultimo).toLocaleDateString('pt-BR') : '—']);
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+  const nc = defs.length;
+  let corpo = '', cat = null, gQtd = 0, gCusto = 0, gVenda = 0, gN = 0;
+  let tQtd = 0, tCusto = 0, tVenda = 0;
+  const subtotal = () => cat === null ? '' :
+    `<tr class="sub"><td colspan="${nc - (cols.custoTotal ? 1 : 0) - (cols.vendaTotal ? 1 : 0)}">${gN} item(ns) — subtotal ${cat}</td>` +
+    (cols.custoTotal ? `<td class="r">${brl(gCusto)}</td>` : '') +
+    (cols.venda ? '' : '') +
+    (cols.vendaTotal ? `<td class="r" colspan="${1 + (cols.margem ? 1 : 0) + (cols.ultimo ? 1 : 0)}">${brl(gVenda)}</td>` : '') +
+    `</tr>`;
+
+  linhas.forEach(l => {
+    if (l.categoria !== cat) {
+      corpo += subtotal();
+      cat = l.categoria; gQtd = 0; gCusto = 0; gVenda = 0; gN = 0;
+      corpo += `<tr class="cat"><td colspan="${nc}">${esc((cat || 'SEM CATEGORIA').toUpperCase())}</td></tr>`;
+    }
+    gN++; gQtd += l.saldo; gCusto += l.custoTotal; gVenda += l.vendaTotal;
+    tQtd += l.saldo; tCusto += l.custoTotal; tVenda += l.vendaTotal;
+    corpo += '<tr>' + defs.map(d => `<td class="${d[1] === 'r' ? 'r' : ''}${l.saldo < 0 && d[0] === 'Saldo' ? ' neg' : ''}">${d[2](l)}</td>`).join('') + '</tr>';
+  });
+  corpo += subtotal();
+
+  const cabTh = defs.map(d => `<th class="${d[1] === 'r' ? 'r' : ''}">${d[0]}</th>`).join('');
+  const neg = linhas.filter(l => l.saldo < 0).length;
+
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>Estoque ${empresa} ${dia}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 11px/1.4 Arial, sans-serif; color: #111; margin: 0; padding: 18px 22px; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 4px; }
+  .top h1 { font-size: 16px; margin: 0 0 2px; }
+  .top .sub { color: #444; font-size: 11px; }
+  .top .rt { text-align: right; font-size: 10px; color: #444; }
+  .resumo { display: flex; gap: 22px; margin: 10px 0 12px; font-size: 11px; }
+  .resumo b { font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 3px 6px; border-bottom: 1px solid #ddd; }
+  th { background: #f0f0f0; border-bottom: 1px solid #999; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .3px; }
+  td.r, th.r { text-align: right; white-space: nowrap; }
+  tr.cat td { background: #333; color: #fff; font-weight: bold; text-transform: uppercase; padding: 4px 6px; }
+  tr.sub td { background: #f6f6f6; font-style: italic; border-bottom: 1px solid #999; }
+  td.neg { color: #b00; font-weight: bold; }
+  tfoot td { border-top: 2px solid #111; font-weight: bold; background: #eee; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  @media print { body { padding: 0; } @page { margin: 12mm 10mm; } }
+</style></head><body>
+  <div class="top">
+    <div><h1>${esc(empresa)}</h1><div class="sub">${cnpj ? 'CNPJ ' + esc(cnpj) + ' — ' : ''}Relatório de Estoque</div></div>
+    <div class="rt">Posição em <b>${dia}</b><br>Gerado ${agora}</div>
+  </div>
+  <div class="resumo">
+    <span>Itens: <b>${linhas.length}</b></span>
+    <span>Saldo total: <b>${num(tQtd, 3)}</b></span>
+    <span>Custo total: <b>${brl(tCusto)}</b></span>
+    ${cols.vendaTotal ? `<span>Valor de venda: <b>${brl(tVenda)}</b></span>` : ''}
+    ${neg ? `<span style="color:#b00">Negativos: <b>${neg}</b></span>` : ''}
+  </div>
+  <table>
+    <thead><tr>${cabTh}</tr></thead>
+    <tbody>${corpo}</tbody>
+    <tfoot><tr>
+      <td colspan="${(cols.ean ? 1 : 0) + (cols.unidade ? 1 : 0) + 2}">TOTAL GERAL — ${linhas.length} itens</td>
+      <td class="r">${num(tQtd, 3)}</td>
+      ${cols.custo ? '<td></td>' : ''}
+      ${cols.custoTotal ? `<td class="r">${brl(tCusto)}</td>` : ''}
+      ${cols.venda ? '<td></td>' : ''}
+      ${cols.vendaTotal ? `<td class="r">${brl(tVenda)}</td>` : ''}
+      ${cols.margem ? '<td></td>' : ''}
+      ${cols.ultimo ? '<td></td>' : ''}
+    </tr></tfoot>
+  </table>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('O navegador bloqueou a janela de impressão. Libere o pop-up e tente de novo.'); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  // espera o layout assentar antes de abrir o diálogo de impressão
+  setTimeout(() => w.print(), 400);
 }
