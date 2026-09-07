@@ -270,23 +270,32 @@ async function relatorioEstoqueCarregar() {
   const dia = document.getElementById('est-data')?.value || _relDataHoje();
   box.innerHTML = '<p style="color:#888">Carregando…</p>';
 
-  let movs, prods;
+  let movs, prods, tanques = [], lmc = [];
   try {
     const ate = dia + 'T23:59:59-03:00';
     const r = await Promise.all([
       _estLerMovimento(eid, ate),
-      sb.from('oct_produtos').select('id,codigo,nome,ean,unidade,categoria,preco_custo,preco_venda_a,ativo')
+      sb.from('oct_produtos').select('id,codigo,nome,ean,unidade,categoria,tanque_id,preco_custo,preco_venda_a,ativo')
         .eq('empresa_id', eid).limit(20000),
+      sb.from('oct_tanques').select('id,numero,estoque_atual,volume_sonda').eq('empresa_id', eid),
+      // medicao da sonda por tanque ate' a data: o saldo do combustivel, ja' que
+      // o saldo_final do LMC vem zerado. Ordenado desc p/ pegar a data mais
+      // recente <= pedida como a primeira de cada tanque.
+      sb.from('oct_lmc').select('tanque_id,data,medicao').eq('empresa_id', eid)
+        .lte('data', dia).order('data', { ascending: false }).limit(6000),
     ]);
     movs = r[0];
     if (r[1].error) throw r[1].error;
     prods = r[1].data || [];
+    tanques = r[2].data || [];
+    lmc = r[3].data || [];
   } catch (e) {
     box.innerHTML = `<p style="color:#f87171">Erro: ${e.message || e}</p>`;
     return;
   }
 
-  if (!movs.length) {
+  const temComb = prods.some(p => p.tanque_id) && tanques.length;
+  if (!movs.length && !temComb) {
     // saber se o posto NUNCA teve movimento ou se so' nao tinha ate' esta data
     // muda o que a pessoa precisa fazer -- entao pergunta em vez de supor
     const { count } = await sb.from('oct_estoque_mov')
@@ -320,6 +329,23 @@ async function relatorioEstoqueCarregar() {
     }
   });
 
+  // saldo do combustivel por TANQUE, na data: primeira medicao (ja' vem desc),
+  // e se o tanque nao tiver LMC ainda, cai no estoque atual da sonda
+  const medTanque = {};
+  lmc.forEach(l => {
+    if (medTanque[l.tanque_id] === undefined && Number(l.medicao) > 0) medTanque[l.tanque_id] = Number(l.medicao);
+  });
+  const saldoComb = {};   // produto_id -> litros
+  const dataComb = {};
+  prods.forEach(p => {
+    if (!p.tanque_id) return;
+    const tq = tanques.find(t => t.id === p.tanque_id);
+    let litros = medTanque[p.tanque_id];
+    if (litros === undefined) litros = tq ? Number(tq.estoque_atual || tq.volume_sonda || 0) : 0;
+    saldoComb[p.id] = +Number(litros || 0).toFixed(3);
+    dataComb[p.id] = dia;   // a posicao do tanque e' a da data pedida (sonda)
+  });
+
   const cols = _estColsAtivas();
   const filtro = document.getElementById('est-filtro')?.value || 'saldo';
   const cat = document.getElementById('est-cat')?.value || '';
@@ -328,8 +354,10 @@ async function relatorioEstoqueCarregar() {
   const cats = {};
   const linhas = [];
   prods.forEach(p => {
-    const q = +(saldo[p.id] || 0).toFixed(3);
-    if (!(p.id in saldo) && filtro !== 'tudo') return;
+    const ehComb = !!p.tanque_id;
+    const q = ehComb ? +(saldoComb[p.id] || 0).toFixed(3) : +(saldo[p.id] || 0).toFixed(3);
+    // combustivel sempre entra (tem tanque); loja depende de ter movimento
+    if (!ehComb && !(p.id in saldo) && filtro !== 'tudo') return;
     if (filtro === 'saldo' && q === 0) return;
     if (filtro === 'neg' && q >= 0) return;
     if (filtro === 'zero' && q !== 0) return;
@@ -343,7 +371,9 @@ async function relatorioEstoqueCarregar() {
       unidade: p.unidade || '', saldo: q, custo, custoTotal: +(q * custo).toFixed(2),
       venda, vendaTotal: +(q * venda).toFixed(2),
       margem: custo > 0 && venda > 0 ? +(((venda - custo) / custo) * 100).toFixed(1) : null,
-      ultimo: ultimo[p.id] || null, semInv: !temInv[p.id],
+      ultimo: ehComb ? (dataComb[p.id] || null) : (ultimo[p.id] || null),
+      // combustivel nao depende de inventario de abertura (o saldo e' a sonda)
+      semInv: ehComb ? false : !temInv[p.id],
     });
   });
   linhas.sort((a, b) => a.categoria.localeCompare(b.categoria, 'pt-BR') || a.nome.localeCompare(b.nome, 'pt-BR'));
