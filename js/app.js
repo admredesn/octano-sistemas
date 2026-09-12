@@ -292,8 +292,47 @@ function navegarPara(modulo){
     cashback:      moduloCashback,
     comissoes:     moduloComissoes,
   };
-  if(fns[modulo]) fns[modulo]();
+  if(fns[modulo]) _abrirModulo(modulo, fns[modulo], conteudo);
   else conteudo.innerHTML = '<p style="color:#888;padding:24px">Modulo <strong>' + modulo + '</strong> em breve.</p>';
+}
+
+// POR QUE ISTO EXISTE (12/09/2026)
+// navegarPara chamava `fns[modulo]()` solto. Modulo e' async e os 24 comecam
+// igual:  const session = await getSession();
+//         ... .eq('id', session.user.id)
+// Quando a sessao morre, getSession() devolve NULL e `session.user` estoura um
+// TypeError. Sem ninguem escutando a promise, a rejeicao sumia: a tela ficava
+// no "Carregando...", nenhuma aba abria e so' fechando o navegador resolvia --
+// e ao reabrir vinha a tela de login, que fazia parecer "desloga sozinho".
+// Agora a rejeicao e' ouvida: se a sessao caiu, volta ao login DIZENDO o que
+// houve; se foi outro erro, a tela mostra o erro em vez de congelar.
+function _abrirModulo(modulo, fn, conteudo){
+  Promise.resolve().then(fn).catch(async err => {
+    let viva = false;
+    try { viva = !!(await sb.auth.getSession()).data.session; } catch(e) {}
+    if(!viva){ _sessaoExpirou(); return; }
+    console.error('modulo ' + modulo + ':', err);
+    if(conteudo) conteudo.innerHTML =
+      '<div style="padding:24px;color:#f87171">Erro ao abrir <strong>' + modulo + '</strong>.'
+      + '<div style="color:#8892a0;font-size:0.82rem;margin-top:8px">' + String((err && err.message) || err) + '</div>'
+      + '<button onclick="navegarPara(&quot;' + modulo + '&quot;)" style="margin-top:14px;padding:8px 14px;border-radius:6px;border:none;background:#f97316;color:#fff;cursor:pointer">Tentar de novo</button></div>';
+  });
+}
+
+// sessao caiu: mostra o login UMA vez, com o motivo. Sem o aviso o usuario acha
+// que o sistema perdeu o trabalho dele.
+let _avisouSessao = false;
+function _sessaoExpirou(){
+  if(_avisouSessao) return;
+  _avisouSessao = true;
+  try { octAutoRefreshParar(); } catch(e) {}
+  renderLogin();
+  const box = document.querySelector('.login-box');
+  if(!box) return;
+  const p = document.createElement('p');
+  p.style.cssText = 'color:#fbbf24;font-size:0.8rem;margin-top:12px;text-align:center;line-height:1.4';
+  p.textContent = 'Sua sessao expirou. Entre de novo para continuar.';
+  box.appendChild(p);
 }
 
 MODULOS.forEach(m => {
@@ -301,5 +340,14 @@ MODULOS.forEach(m => {
 });
 
 // moduloFCaixa() agora é implementado em modulos/fechamento_caixa.js
+
+// a sessao pode morrer com a tela parada (token nao renovou, refresh recusado).
+// Sem isto o usuario so' descobre no proximo clique -- que era o clique que
+// travava a tela.
+try {
+  sb.auth.onAuthStateChange((evento, sessao) => {
+    if(!sessao && (evento === 'SIGNED_OUT' || evento === 'TOKEN_REFRESHED')) _sessaoExpirou();
+  });
+} catch(e) {}
 
 init();
