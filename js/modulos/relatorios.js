@@ -16,6 +16,11 @@ const RELATORIOS_REG = [
     descricao: 'Posição do estoque em qualquer data, com custo, código de barras e preço de venda. Colunas escolhidas por você.',
     fn: () => relatorioEstoque(),
   },
+  {
+    id: 'descargas', icone: '🚛', titulo: 'Descargas',
+    descricao: 'Cada descarga medida pela sonda, casada com a nota de compra: litros medidos × nota, descarga sem nota, nota sem descarga e sonda travada.',
+    fn: () => relatorioDescargas(),
+  },
   // >>> novos relatórios entram aqui <<<
 ];
 
