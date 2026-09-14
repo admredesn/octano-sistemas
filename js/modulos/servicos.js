@@ -26,7 +26,7 @@ async function moduloServicos() {
     montarEm: 'grid-servicos',
     titulo: 'Serviços (NFS-e)',
     aoFechar: "navegarPara('empresa')",
-    rodapeDireita: perfil?.oct_empresas?.nome || '',
+    rodapeDireita: (typeof empresaAtivaInfo === 'function' && empresaAtivaInfo() && empresaAtivaInfo().nome) || perfil?.oct_empresas?.nome || '',   // posto SELECIONADO, nao o do perfil
     dados: window._todosServicos,
     acoes: [
       { rotulo: 'Novo Serviço', ico: '＋', onClick: `abrirFormServico(null,'${empresaId}')` },

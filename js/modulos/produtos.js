@@ -36,7 +36,7 @@ async function moduloProdutos() {
     montarEm: 'grid-produtos',
     titulo: 'Produtos',
     aoFechar: "navegarPara('empresa')",
-    rodapeDireita: perfil?.oct_empresas?.nome || '',
+    rodapeDireita: (typeof empresaAtivaInfo === 'function' && empresaAtivaInfo() && empresaAtivaInfo().nome) || perfil?.oct_empresas?.nome || '',   // posto SELECIONADO, nao o do perfil
     dados: window._todosProdutos,
     selecaoMultipla: true,
     aoEditarLote: (selecionados) => abrirEdicaoLote(selecionados, empresaId),

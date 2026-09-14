@@ -51,7 +51,7 @@ async function moduloPessoas() {
     montarEm: 'grid-pessoas',
     titulo: 'Pessoas — Fornecedores e Clientes',
     aoFechar: "navegarPara('empresa')",
-    rodapeDireita: perfil?.oct_empresas?.nome || '',
+    rodapeDireita: (typeof empresaAtivaInfo === 'function' && empresaAtivaInfo() && empresaAtivaInfo().nome) || perfil?.oct_empresas?.nome || '',   // posto SELECIONADO, nao o do perfil
     dados: listaFiltrada,
     acoes: [
       { rotulo: 'Nova Pessoa', ico: '＋', onClick: `abrirFormPessoa(null,'${empresaId}')` },
