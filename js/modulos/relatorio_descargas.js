@@ -620,6 +620,57 @@ function _entCalcular(medicoes, tanques) {
   return out;
 }
 
+// Entregas REGISTRADAS PELO CONSOLE (oct_sonda_entregas, gravadas pelo núcleo via
+// i202) têm prioridade: não somem quando o núcleo fica sem ler a sonda. O
+// cálculo pela subida de volume cobre o período antes do núcleo coletar e
+// serve de conferência. Uma linha calculada que cai dentro de uma entrega do
+// console (mesmo tanque, início até 15 min de diferença ou dentro do intervalo
+// dela) é a MESMA descarga e sai da lista — senão contaria em dobro.
+// O Concept (Tijuco) devolve a altura final nos dois campos: aí a altura
+// inicial vem do cálculo.
+function _entMesclar(calculadas, console, tanques) {
+  const combDe = {};
+  (tanques || []).forEach(t => { combDe[t.numero] = t.combustivel; });
+  const usada = new Set();
+  const out = [];
+  (console || []).forEach(c => {
+    const ini = Date.parse(c.inicio), fim = c.fim ? Date.parse(c.fim) : ini;
+    const num = v => (v == null ? null : Number(v));
+    const e = {
+      tq: Number(c.tanque_numero), comb: combDe[c.tanque_numero] || '', origem: 'console', obs: '',
+      ini, fim, volIni: num(c.vol_ini), volFim: num(c.vol_fim), altIni: num(c.altura_ini), altFim: num(c.altura_fim),
+      tempIni: num(c.temp_ini), tempFim: num(c.temp_fim),
+      entregue: c.entregue != null ? Math.round(Number(c.entregue)) : Math.round(num(c.vol_fim) - num(c.vol_ini)),
+    };
+    let par = null;
+    calculadas.forEach((k, i) => {
+      if (usada.has(i) || k.tq !== e.tq) return;
+      const perto = Math.abs(k.ini - e.ini) <= 15 * 60000;
+      const dentro = k.ini >= e.ini - 60000 && k.ini <= e.fim + 5 * 60000;
+      if (!perto && !dentro) return;
+      usada.add(i);
+      if (!par || Math.abs(k.ini - e.ini) < Math.abs(par.ini - e.ini)) par = k;
+    });
+    if (par && e.altIni != null && e.altIni === e.altFim && par.altIni != null) e.altIni = par.altIni;
+    out.push(e);
+  });
+  calculadas.forEach((k, i) => { if (!usada.has(i)) out.push(Object.assign({ origem: 'sonda' }, k)); });
+  return out;
+}
+
+async function _entLerConsole(eid, de, ate) {
+  const linhas = [];
+  for (let off = 0; off < 20000; off += 1000) {
+    const { data, error } = await sb.from('oct_sonda_entregas').select('*')
+      .eq('empresa_id', eid).gte('inicio', _descUtc(de)).lt('inicio', _descUtc(_descSomaDias(ate, 1)))
+      .order('inicio').order('tanque_numero').range(off, off + 999);
+    if (error) return { linhas, erro: error.message };     // tabela ainda não criada: segue só com o cálculo
+    linhas.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return { linhas, erro: null };
+}
+
 const _ENT_AZUL = '#3a78b5';
 
 async function relatorioEntregas() {
@@ -666,10 +717,14 @@ async function relatorioEntregasCarregar() {
     const med = await _descLerSonda(eid, de, ate, (f, t) => msg(`Lendo a sonda: dia ${f} de ${t}…`),
                                     'tanque_numero,volume,altura,temperatura,medido_em');
     if (token !== window._entToken) return;
-    const entregas = _entCalcular(med, tq).filter(e => { const d = _descDia(e.ini); return d >= ini && d <= fim; });
+    msg('Lendo as entregas registradas pelo console…');
+    const cons = await _entLerConsole(eid, de, ate);
+    if (token !== window._entToken) return;
+    const entregas = _entMesclar(_entCalcular(med, tq), cons.linhas, tq)
+      .filter(e => { const d = _descDia(e.ini); return d >= ini && d <= fim; });
     const info = (typeof empresaAtivaInfo === 'function') ? empresaAtivaInfo() : null;
     window._entDados = {
-      ini, fim, tanques: tq, entregas,
+      ini, fim, tanques: tq, entregas, consoleErro: cons.erro,
       empresa: info ? (info.nome || '') : '', posto: info ? (info.nome_fantasia || info.nome || '') : '', cnpj: info ? (info.cnpj || '') : '',
     };
     const sel = document.getElementById('ent-tq');
@@ -710,7 +765,7 @@ function _entRender() {
     `<span style="display:inline-block;background:#0f1a2a;border:1px solid #2a4a6a;border-radius:20px;padding:4px 10px;margin:3px;color:#cbd5e1;font-size:.78rem">TQ ${g.tq} ${_descEsc(g.produto)}: <strong style="color:#5dca9a">${g.lista.length} · ${_descFmtL(g.total)} L</strong></span>`).join('');
   const blocos = grupos.map(g => {
     const linhas = g.lista.map((e, i) => `<tr style="background:${i % 2 ? '#12151f' : 'transparent'};border-bottom:1px solid #1e2233">
-        <td style="padding:6px 8px;white-space:nowrap;color:#cbd5e1">${_entDataHora(e.ini)}</td>
+        <td style="padding:6px 8px;white-space:nowrap;color:#cbd5e1">${_entDataHora(e.ini)}${e.origem === 'sonda' ? ' <span title="Calculada pela subida de volume da sonda: o console não tem esta entrega registrada" style="color:#fbbf24;cursor:help">*</span>' : ''}</td>
         <td style="padding:6px 8px;white-space:nowrap;color:#cbd5e1">${_entDataHora(e.fim)}</td>
         <td style="padding:6px 8px;text-align:right">${_entN(e.tempIni, 1)}</td>
         <td style="padding:6px 8px;text-align:right">${_entN(e.tempFim, 1)}</td>
@@ -743,16 +798,18 @@ function _entRender() {
         <div style="color:#5dca9a;font-size:1.15rem;font-weight:700;margin-top:2px">${_descFmtL(totalGeral)} L</div></div>
       <div>${resumo}</div>
     </div>
+    <p style="color:#8a8f98;font-size:.76rem;margin:0 0 12px">Entregas registradas pelo console da sonda. <span style="color:#fbbf24">*</span> = calculada pela subida de volume (período em que o console ainda não era lido pelo núcleo ou não tem a entrega).${window._entDados.consoleErro ? ' <span style="color:#f87171">Registro do console indisponível: ' + _descEsc(window._entDados.consoleErro) + '</span>' : ''}</p>
     ${blocos}`;
 }
 
 function _entMatriz() {
-  const m = [['Tanque', 'Produto', 'Data Inicial', 'Data Final', 'Temp. Ini. (°C)', 'Temp. Fin. (°C)', 'Altura Ini. (mm)', 'Volume Ini. (L)', 'Altura Fin. (mm)', 'Volume Fin. (L)', 'Entregue (L)', 'Observação']];
+  const m = [['Tanque', 'Produto', 'Data Inicial', 'Data Final', 'Temp. Ini. (°C)', 'Temp. Fin. (°C)', 'Altura Ini. (mm)', 'Volume Ini. (L)', 'Altura Fin. (mm)', 'Volume Fin. (L)', 'Entregue (L)', 'Origem', 'Observação']];
   const r1 = v => v == null || isNaN(v) ? '' : Math.round(v * 10) / 10;
   const r0 = v => v == null || isNaN(v) ? '' : Math.round(v);
   _entGrupos().forEach(g => g.lista.forEach(e => m.push([
     g.tq, g.produto, _entDataHora(e.ini), _entDataHora(e.fim), r1(e.tempIni), r1(e.tempFim),
-    r0(e.altIni), r0(e.volIni), r0(e.altFim), r0(e.volFim), e.entregue, e.obs || ''])));
+    r0(e.altIni), r0(e.volIni), r0(e.altFim), r0(e.volFim), e.entregue,
+    e.origem === 'sonda' ? 'calculada pela sonda' : 'console', e.obs || ''])));
   return m;
 }
 
@@ -778,7 +835,7 @@ async function relatorioEntregasXLSX() {
   let XLSX;
   try { XLSX = await _relCarregarXLSX(); } catch (e) { alert(e.message); return; }
   const ws = XLSX.utils.aoa_to_sheet(m);
-  ws['!cols'] = m[0].map((h, i) => ({ wch: i === 1 ? 20 : i === 11 ? 40 : Math.max(11, String(h).length + 2) }));
+  ws['!cols'] = m[0].map((h, i) => ({ wch: i === 1 ? 20 : i === 12 ? 40 : Math.max(11, String(h).length + 2) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Entregas');
   XLSX.writeFile(wb, 'entregas_' + window._entDados.ini + '_' + window._entDados.fim + '.xlsx');
@@ -804,9 +861,10 @@ function relatorioEntregasImprimir() {
       </table>
       <table class="dados">
         <thead><tr><th>Data Inicial</th><th>Data Final</th><th class="r">Temp. Ini. (°C)</th><th class="r">Temp. Fin. (°C)</th><th class="r">Altura Ini. (mm)</th><th class="r">Volume Ini. (L)</th><th class="r">Altura Fin. (mm)</th><th class="r">Volume Fin. (L)</th><th class="r">Entregue (L)</th></tr></thead>
-        <tbody>${g.lista.map(e => `<tr><td>${_entDataHora(e.ini)}</td><td>${_entDataHora(e.fim)}</td><td class="r">${_entN(e.tempIni, 1)}</td><td class="r">${_entN(e.tempFim, 1)}</td><td class="r">${_entN(e.altIni, 0)}</td><td class="r">${_entN(e.volIni, 0)}</td><td class="r">${_entN(e.altFim, 0)}</td><td class="r">${_entN(e.volFim, 0)}</td><td class="r b">${_entN(e.entregue, 0)}${e.obs ? '<br><small>' + esc(e.obs) + '</small>' : ''}</td></tr>`).join('')}</tbody>
+        <tbody>${g.lista.map(e => `<tr><td>${_entDataHora(e.ini)}${e.origem === 'sonda' ? ' *' : ''}</td><td>${_entDataHora(e.fim)}</td><td class="r">${_entN(e.tempIni, 1)}</td><td class="r">${_entN(e.tempFim, 1)}</td><td class="r">${_entN(e.altIni, 0)}</td><td class="r">${_entN(e.volIni, 0)}</td><td class="r">${_entN(e.altFim, 0)}</td><td class="r">${_entN(e.volFim, 0)}</td><td class="r b">${_entN(e.entregue, 0)}${e.obs ? '<br><small>' + esc(e.obs) + '</small>' : ''}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="8" class="b">Total :</td><td class="r b">${_descFmtL(g.total)}</td></tr></tfoot>
       </table>
+      ${g.lista.some(e => e.origem === 'sonda') ? '<div class="leg">* calculada pela subida de volume da sonda (sem registro do console)</div>' : ''}
       <div class="rod"><span>Octano Sistemas</span><span>${agora}<br>${idx + 1}/${grupos.length}</span></div>
     </section>`).join('');
   const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Entregas ${esc(D.posto)} ${br(D.ini)} a ${br(D.fim)}</title>
@@ -822,7 +880,7 @@ function relatorioEntregasImprimir() {
   .dados tfoot td { border-top: 1px solid #999; padding-top: 6px; }
   .r { text-align: right; } .b { font-weight: bold; } small { color: #8a5300; font-weight: normal; }
   .rod { margin-top: auto; padding-top: 18px; border-top: 1px solid #ccc; display: flex; justify-content: space-between; align-items: flex-end; color: #333; font-size: 10.5px; }
-  .rod span:last-child { text-align: right; }
+  .rod span:last-child { text-align: right; } .leg { font-size: 10px; color: #555; margin-top: 4px; }
   thead { display: table-header-group; } tr { break-inside: avoid; }
   @media print { * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } @page { size: landscape; margin: 10mm; } }
 </style></head><body>${paginas}</body></html>`;
