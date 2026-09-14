@@ -12,7 +12,7 @@ async function moduloPonto() {
 
   const session = await getSession();
   const { data: perfil } = await sb.from('oct_perfis')
-    .select('empresa_id, oct_empresas(nome)').eq('id', session.user.id).single();
+    .select('empresa_id, nome, oct_empresas(nome)').eq('id', session.user.id).single();
   const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : (perfil?.empresa_id);
   if (!empresaId) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Configure sua empresa primeiro.</p>'; return; }
   window._pontoEmpresaId = empresaId;
@@ -39,6 +39,15 @@ async function moduloPonto() {
     return lista.includes('funcionario');
   });
   window._pontoFuncionarios = funcionarios;
+  window._pontoAutorNome = perfil?.nome || session.user.email || '';
+
+  // QUEM PODE AJUSTAR quem decide e' o BANCO (oct_pode_ajustar_ponto + RLS). Aqui
+  // so' se esconde o botao de quem vai ser barrado de qualquer jeito -- o
+  // frentista loga no Supabase pelo PDV e poderia chamar a API direto.
+  try {
+    const { data: pode } = await sb.rpc('oct_pode_ajustar_ponto', { emp: empresaId });
+    window._pontoPodeAjustar = pode === true;
+  } catch (e) { window._pontoPodeAjustar = false; }
 
   // periodo padrao: mes corrente
   const hoje = new Date();
@@ -60,6 +69,7 @@ async function moduloPonto() {
           <div><label style="display:block;color:#888;font-size:0.72rem;margin-bottom:3px">Até</label>
             <input id="pt-f-fim" type="date" value="${fmtInput(hoje)}" style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
           <button onclick="pontoFiltrar()" style="padding:9px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">Filtrar</button>
+          ${window._pontoPodeAjustar ? `<button onclick="pontoIncluirAbrir()" title="Esqueceu de bater: incluir a marcação com motivo" style="padding:9px 16px;border-radius:6px;border:1px solid #f97316;background:transparent;color:#f97316;font-weight:600;cursor:pointer">+ Incluir marcação</button>` : ''}
           <button onclick="pontoExportarXLSX()" title="Excel com uma aba por funcionário" style="padding:9px 16px;border-radius:6px;border:1px solid #16a34a;background:transparent;color:#16a34a;font-weight:600;cursor:pointer">⬇ Cartão de ponto (Excel)</button>
           <button onclick="pontoExportarCSV()" title="Tudo numa planilha só" style="padding:9px 16px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;font-weight:600;cursor:pointer">⬇ Cartão em CSV</button>
           <button onclick="pontoExportarEventosCSV()" title="Uma linha por batida, com o link da foto — para auditoria" style="padding:9px 16px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;font-weight:600;cursor:pointer">⬇ Log de batidas</button>
@@ -92,19 +102,74 @@ async function pontoFiltrar() {
   const funcId = document.getElementById('pt-f-func')?.value || '';
   const ini = document.getElementById('pt-f-ini')?.value;
   const fim = document.getElementById('pt-f-fim')?.value;
+  // FUSO: mandar "2026-09-14T23:59:59" sem fuso fazia o banco ler como UTC, e
+  // quem saia depois das 21h do ultimo dia ficava FORA do cartao de ponto. A
+  // data do filtro e' a do posto: converte a hora local para instante absoluto.
+  const iniISO = ini ? new Date(ini + 'T00:00:00').toISOString() : null;
+  const fimISO = fim ? new Date(fim + 'T23:59:59.999').toISOString() : null;
+  const filtrar = (q) => {
+    q = q.eq('empresa_id', empresaId);
+    if (funcId) q = q.eq('pessoa_id', funcId);
+    if (iniISO) q = q.gte('registrado_em', iniISO);
+    if (fimISO) q = q.lte('registrado_em', fimISO);
+    return q;
+  };
+  // PAGINADO: o PostgREST corta em 1000 linhas, e o Tijuco passa disso em pouco
+  // mais de um mes -- o cartao de ponto saia cortado sem aviso nenhum.
+  const paginar = async (montar) => {
+    const tudo = [];
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await montar().range(de, de + 999);
+      if (error) return { error };
+      tudo.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return { data: tudo };
+  };
 
-  let q = sb.from('oct_pdv_ponto').select('*')
-    .eq('empresa_id', empresaId)
-    .order('registrado_em', { ascending: false });
-  if (funcId) q = q.eq('pessoa_id', funcId);
-  if (ini) q = q.gte('registrado_em', ini + 'T00:00:00');
-  if (fim) q = q.lte('registrado_em', fim + 'T23:59:59');
+  // EFETIVAS = o que vale (view no banco: originais nao desconsideradas + incluidas).
+  // Cartao de ponto, total de horas e CSV usam SO' isto, via _pontoRegistros.
+  const [ef, aj] = await Promise.all([
+    paginar(() => filtrar(sb.from('oct_pdv_ponto_efetivo').select('*')).order('registrado_em', { ascending: false })),
+    paginar(() => sb.from('oct_pdv_ponto_ajustes').select('*').eq('empresa_id', empresaId).order('criado_em')),
+  ]);
+  if (ef.error) { cont.innerHTML = '<p style="color:#f44">Erro: ' + pontoEsc(ef.error.message) + '</p>'; return; }
 
-  const { data, error } = await q;
-  if (error) { cont.innerHTML = '<p style="color:#f44">Erro: ' + pontoEsc(error.message) + '</p>'; return; }
-  window._pontoRegistros = data || [];
+  const ajustes = aj.data || [];
+  const anulados = new Set(ajustes.filter(a => a.acao === 'anular').map(a => a.anula_ajuste_id));
+  const vivos = ajustes.filter(a => a.acao !== 'anular' && !anulados.has(a.id));
+  const ajPorId = {};
+  vivos.forEach(a => { ajPorId[a.id] = a; });
+  const descPorPonto = {};
+  vivos.filter(a => a.acao === 'desconsiderar').forEach(a => { descPorPonto[a.ponto_id] = a; });
 
-  if (!data || !data.length) {
+  // as desconsideradas NAO estao na view -- busca as originais so' para mostrar
+  // riscadas (auditoria: quem ve' o ajuste tem de ver o que foi ajustado)
+  const riscadas = [];
+  const ids = Object.keys(descPorPonto);
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await filtrar(sb.from('oct_pdv_ponto').select('*')).in('id', ids.slice(i, i + 200));
+    riscadas.push(...(data || []));
+  }
+
+  const efetivos = (ef.data || []).map(r => r.origem === 'incluida'
+    ? Object.assign({}, r, { observacao: 'Incluída: ' + (r.ajuste_motivo || '') })
+    : r);
+  window._pontoRegistros = efetivos;
+
+  const log = efetivos.map(r => Object.assign({}, r, {
+      _situacao: r.origem === 'incluida' ? 'Incluída' : 'Original',
+      _aj: r.origem === 'incluida' ? ajPorId[r.ajuste_id] : null,
+    }))
+    .concat(riscadas.map(r => Object.assign({}, r, {
+      origem: 'desconsiderada', _situacao: 'Desconsiderada', _aj: descPorPonto[r.id],
+    })))
+    .sort((a, b) => new Date(b.registrado_em) - new Date(a.registrado_em));
+  window._pontoLog = log;
+  window._pontoPorId = {};
+  log.forEach(r => { window._pontoPorId[r.id] = r; });
+
+  if (!log.length) {
     cont.innerHTML = '<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:30px;text-align:center;color:#666">Nenhum registro de ponto no período.</div>';
     return;
   }
@@ -118,9 +183,26 @@ async function pontoFiltrar() {
     const txt = t === 'saida' ? '◀ Saída' : '▶ Entrada';
     return `<span style="background:#1e2235;color:${cor};padding:3px 9px;border-radius:5px;font-size:0.74rem;font-weight:600">${txt}</span>`;
   };
+  const selo = (r) => r.origem === 'incluida'
+    ? '<span style="margin-left:6px;background:#3a2a10;color:#fbbf24;padding:2px 7px;border-radius:5px;font-size:0.68rem;font-weight:600">incluída</span>'
+    : r.origem === 'desconsiderada'
+      ? '<span style="margin-left:6px;background:#3a1414;color:#f87171;padding:2px 7px;border-radius:5px;font-size:0.68rem;font-weight:600">desconsiderada</span>'
+      : '';
+  const obs = (r) => {
+    if (!r._aj) return pontoEsc(r.observacao) || '—';
+    const quem = [r._aj.autor_nome, r._aj.criado_em ? fmtDH(r._aj.criado_em) : ''].filter(Boolean).join(' · ');
+    return `<span style="color:#cbd5e1">${pontoEsc(r._aj.motivo)}</span><br><span style="color:#666;font-size:0.72rem">${pontoEsc(quem)}</span>`;
+  };
+  const acao = (r) => {
+    if (!window._pontoPodeAjustar) return '';
+    const txt = r.origem === 'desconsiderada' ? 'Desfazer' : 'Ajustar';
+    return `<button data-id="${pontoEsc(r.id)}" onclick="pontoAjustarAbrir(this.dataset.id)"
+      style="padding:5px 10px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#cbd5e1;font-size:0.76rem;cursor:pointer">${txt}</button>`;
+  };
+  const nAj = log.filter(r => r.origem !== 'original').length;
 
   cont.innerHTML = `
-    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;font-size:0.84rem">
         <thead><tr style="background:#0f1119;color:#888;text-align:left">
           <th style="padding:10px 12px">Foto</th>
@@ -128,10 +210,13 @@ async function pontoFiltrar() {
           <th style="padding:10px 12px">Tipo</th>
           <th style="padding:10px 12px">Data / Hora</th>
           <th style="padding:10px 12px">Observação</th>
+          ${window._pontoPodeAjustar ? '<th style="padding:10px 12px"></th>' : ''}
         </tr></thead>
         <tbody>
-          ${data.map(r => `
-            <tr style="border-top:1px solid #1c1f2e;color:#ddd">
+          ${log.map(r => {
+            const risca = r.origem === 'desconsiderada';
+            return `
+            <tr style="border-top:1px solid #1c1f2e;color:#ddd;${risca ? 'opacity:.55' : ''}">
               <td style="padding:8px 12px">
                 ${r.foto_url
                   ? `<img src="${pontoEsc(r.foto_url)}" data-foto="${pontoEsc(r.foto_url)}"
@@ -140,15 +225,193 @@ async function pontoFiltrar() {
                        style="width:46px;height:46px;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid #2a2d3e" title="Ver foto">`
                   : '<span style="color:#555">—</span>'}
               </td>
-              <td style="padding:8px 12px;font-weight:600">${pontoEsc(r.funcionario)}</td>
-              <td style="padding:8px 12px">${badgeTipo(r.tipo)}</td>
-              <td style="padding:8px 12px">${fmtDH(r.registrado_em)}</td>
-              <td style="padding:8px 12px;color:#999">${pontoEsc(r.observacao) || '—'}</td>
-            </tr>`).join('')}
+              <td style="padding:8px 12px;font-weight:600;${risca ? 'text-decoration:line-through' : ''}">${pontoEsc(r.funcionario)}</td>
+              <td style="padding:8px 12px;white-space:nowrap">${badgeTipo(r.tipo)}${selo(r)}</td>
+              <td style="padding:8px 12px;white-space:nowrap;${risca ? 'text-decoration:line-through' : ''}">${fmtDH(r.registrado_em)}</td>
+              <td style="padding:8px 12px;color:#999">${obs(r)}</td>
+              ${window._pontoPodeAjustar ? `<td style="padding:8px 12px;text-align:right">${acao(r)}</td>` : ''}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
-    <p style="color:#666;font-size:0.76rem;margin-top:8px">${data.length} registro(s) no período.</p>`;
+    <p style="color:#666;font-size:0.76rem;margin-top:8px">${efetivos.length} marcação(ões) valendo no período${nAj ? ` · ${nAj} com ajuste` : ''}.</p>`;
+}
+
+// ---------------------------------------------------------------------------
+// AJUSTE DE PONTO (tratamento) — 14/09/2026
+// ---------------------------------------------------------------------------
+// A marcacao ORIGINAL nunca e' alterada (Portaria 671/2021): tudo vira linha em
+// oct_pdv_ponto_ajustes, que so' aceita INSERT. "Corrigir" = desconsiderar a
+// original + incluir a certa no mesmo lote; "desfazer" = anular o ajuste.
+// Motivo obrigatorio. Quem pode: o banco decide (oct_pode_ajustar_ponto).
+function _pontoModal(html) {
+  _pontoModalFechar();
+  const ov = document.createElement('div');
+  ov.id = 'pt-modal';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:2500;background:rgba(6,7,12,.75);display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:12px;width:100%;max-width:460px;max-height:90vh;overflow:auto;padding:20px;color:#ddd">${html}</div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov) _pontoModalFechar(); });
+  document.addEventListener('keydown', _pontoModalTecla);
+  document.body.appendChild(ov);
+  return ov.firstElementChild;
+}
+function _pontoModalTecla(e) { if (e.key === 'Escape') _pontoModalFechar(); }
+function _pontoModalFechar() {
+  const ov = document.getElementById('pt-modal');
+  if (ov) ov.remove();
+  document.removeEventListener('keydown', _pontoModalTecla);
+}
+
+function _pontoLocalInput(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  const z = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+
+// campos de uma marcacao (funcionario, tipo, data/hora) -- inclusao e correcao
+function _pontoCampos(base) {
+  const funcs = window._pontoFuncionarios || [];
+  const lab = 'display:block;color:#8892a0;font-size:0.74rem;margin:10px 0 4px';
+  const inp = 'width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;box-sizing:border-box';
+  return `
+    <label style="${lab}">Funcionário</label>
+    <select id="pt-aj-func" style="${inp}">
+      ${funcs.map(f => `<option value="${pontoEsc(f.id)}" ${base && base.pessoa_id === f.id ? 'selected' : ''}>${pontoEsc(f.nome)}</option>`).join('')}
+    </select>
+    <label style="${lab}">Tipo</label>
+    <select id="pt-aj-tipo" style="${inp}">
+      <option value="entrada" ${base && base.tipo === 'saida' ? '' : 'selected'}>▶ Entrada</option>
+      <option value="saida" ${base && base.tipo === 'saida' ? 'selected' : ''}>◀ Saída</option>
+    </select>
+    <label style="${lab}">Data e hora</label>
+    <input id="pt-aj-dh" type="datetime-local" value="${_pontoLocalInput(base && base.registrado_em)}" style="${inp}">`;
+}
+
+function _pontoRodape(rotuloSalvar) {
+  return `
+    <label style="display:block;color:#8892a0;font-size:0.74rem;margin:14px 0 4px">Motivo <span style="color:#f97316">*</span></label>
+    <textarea id="pt-aj-motivo" rows="2" placeholder="ex.: esqueceu de bater a saída — confirmado com o gerente do turno"
+      style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;box-sizing:border-box;resize:vertical"></textarea>
+    <p id="pt-aj-msg" style="min-height:18px;font-size:0.8rem;margin:8px 0 0"></p>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button type="button" onclick="_pontoModalFechar()" style="flex:1;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:transparent;color:#cbd5e1;cursor:pointer">Cancelar</button>
+      <button type="button" id="pt-aj-salvar" style="flex:2;padding:10px;border-radius:6px;border:none;background:#f97316;color:#fff;font-weight:600;cursor:pointer">${rotuloSalvar}</button>
+    </div>`;
+}
+
+// le os campos da marcacao; devolve {erro} ou os campos de uma linha 'incluir'
+function _pontoLerCampos() {
+  const sel = document.getElementById('pt-aj-func');
+  const dh = document.getElementById('pt-aj-dh').value;
+  if (!sel || !sel.value) return { erro: 'Escolha o funcionário.' };
+  if (!dh) return { erro: 'Informe a data e a hora.' };
+  const quando = new Date(dh);
+  if (isNaN(quando)) return { erro: 'Data e hora inválidas.' };
+  if (quando.getTime() > Date.now() + 5 * 60000) return { erro: 'A marcação não pode ficar no futuro.' };
+  return {
+    pessoa_id: sel.value,
+    funcionario: sel.options[sel.selectedIndex].text,
+    tipo: document.getElementById('pt-aj-tipo').value,
+    data_ponto: quando.toISOString(),
+  };
+}
+
+async function _pontoGravar(linhas) {
+  const msg = document.getElementById('pt-aj-msg');
+  const btn = document.getElementById('pt-aj-salvar');
+  const motivo = (document.getElementById('pt-aj-motivo').value || '').trim();
+  if (motivo.length < 5) { msg.style.color = '#f87171'; msg.textContent = 'Escreva o motivo do ajuste (mínimo 5 letras).'; return; }
+  const lote = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : null;
+  const corpo = linhas.map(l => Object.assign(
+    { empresa_id: window._pontoEmpresaId, motivo, autor_nome: window._pontoAutorNome || null },
+    lote ? { lote } : {},
+    l));
+  btn.disabled = true; msg.style.color = '#8892a0'; msg.textContent = 'Gravando…';
+  // um INSERT so' com todas as linhas: "corrigir" nunca fica pela metade
+  const { error } = await sb.from('oct_pdv_ponto_ajustes').insert(corpo);
+  if (error) {
+    btn.disabled = false; msg.style.color = '#f87171';
+    msg.textContent = /row-level security|42501/i.test(error.message || '')
+      ? 'Sem permissão para ajustar o ponto desta empresa.'
+      : 'Erro ao gravar: ' + error.message;
+    return;
+  }
+  _pontoModalFechar();
+  pontoFiltrar();
+}
+
+function pontoIncluirAbrir() {
+  const box = _pontoModal(`
+    <h3 style="color:#f97316;font-size:1rem;margin:0 0 2px">Incluir marcação</h3>
+    <p style="color:#8892a0;font-size:0.78rem;margin:0">Para quem esqueceu de bater. Fica marcada como <b style="color:#fbbf24">incluída</b> no cartão de ponto.</p>
+    ${_pontoCampos(null)}
+    ${_pontoRodape('Incluir marcação')}`);
+  box.querySelector('#pt-aj-salvar').addEventListener('click', () => {
+    const c = _pontoLerCampos();
+    const msg = document.getElementById('pt-aj-msg');
+    if (c.erro) { msg.style.color = '#f87171'; msg.textContent = c.erro; return; }
+    _pontoGravar([Object.assign({ acao: 'incluir' }, c)]);
+  });
+}
+
+function pontoAjustarAbrir(id) {
+  const r = (window._pontoPorId || {})[id];
+  if (!r) return;
+  const fmt = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  };
+  const resumo = `${pontoEsc(r.funcionario)} · ${r.tipo === 'saida' ? 'Saída' : 'Entrada'} · ${fmt(r.registrado_em)}`;
+
+  // desconsiderada: a unica acao e' desfazer (anular a desconsideracao)
+  if (r.origem === 'desconsiderada') {
+    const box = _pontoModal(`
+      <h3 style="color:#f97316;font-size:1rem;margin:0 0 2px">Desfazer desconsideração</h3>
+      <p style="color:#8892a0;font-size:0.78rem;margin:0 0 6px">${resumo}</p>
+      <p style="color:#cbd5e1;font-size:0.8rem;margin:0">A marcação volta a valer no cartão de ponto. O histórico do ajuste continua registrado.</p>
+      ${_pontoRodape('Desfazer')}`);
+    box.querySelector('#pt-aj-salvar').addEventListener('click', () =>
+      _pontoGravar([{ acao: 'anular', anula_ajuste_id: r._aj.id }]));
+    return;
+  }
+
+  const ehIncluida = r.origem === 'incluida';
+  const box = _pontoModal(`
+    <h3 style="color:#f97316;font-size:1rem;margin:0 0 2px">Ajustar marcação</h3>
+    <p style="color:#8892a0;font-size:0.78rem;margin:0">${resumo}${ehIncluida ? ' · <span style="color:#fbbf24">incluída</span>' : ''}</p>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <label style="flex:1;display:flex;gap:6px;align-items:center;padding:9px;border:1px solid #2a2d3e;border-radius:6px;cursor:pointer;font-size:0.82rem">
+        <input type="radio" name="pt-aj-modo" value="corrigir" checked> Corrigir</label>
+      <label style="flex:1;display:flex;gap:6px;align-items:center;padding:9px;border:1px solid #2a2d3e;border-radius:6px;cursor:pointer;font-size:0.82rem">
+        <input type="radio" name="pt-aj-modo" value="tirar"> ${ehIncluida ? 'Desfazer inclusão' : 'Desconsiderar'}</label>
+    </div>
+    <div id="pt-aj-corrigir">
+      <p style="color:#666;font-size:0.72rem;margin:8px 0 0">Funcionário, tipo ou horário errado. A original fica guardada; a certa entra no lugar.</p>
+      ${_pontoCampos(r)}
+    </div>
+    <p id="pt-aj-tirar" style="display:none;color:#cbd5e1;font-size:0.8rem;margin:10px 0 0">
+      ${ehIncluida ? 'A marcação incluída deixa de valer.' : 'Batida duplicada ou errada: sai do cálculo, mas continua visível, riscada.'}</p>
+    ${_pontoRodape('Salvar ajuste')}`);
+  const modo = () => box.querySelector('input[name="pt-aj-modo"]:checked').value;
+  box.querySelectorAll('input[name="pt-aj-modo"]').forEach(el => el.addEventListener('change', () => {
+    box.querySelector('#pt-aj-corrigir').style.display = modo() === 'corrigir' ? 'block' : 'none';
+    box.querySelector('#pt-aj-tirar').style.display = modo() === 'tirar' ? 'block' : 'none';
+  }));
+  box.querySelector('#pt-aj-salvar').addEventListener('click', () => {
+    // tirar a original = desconsiderar; tirar uma incluida = anular a inclusao
+    const tirar = ehIncluida
+      ? { acao: 'anular', anula_ajuste_id: r.ajuste_id }
+      : { acao: 'desconsiderar', ponto_id: r.id };
+    if (modo() === 'tirar') { _pontoGravar([tirar]); return; }
+    const c = _pontoLerCampos();
+    const msg = document.getElementById('pt-aj-msg');
+    if (c.erro) { msg.style.color = '#f87171'; msg.textContent = c.erro; return; }
+    const igual = c.pessoa_id === r.pessoa_id && c.tipo === r.tipo &&
+      Math.abs(new Date(c.data_ponto) - new Date(r.registrado_em)) < 60000;
+    if (igual) { msg.style.color = '#f87171'; msg.textContent = 'Nada mudou: altere o funcionário, o tipo ou o horário.'; return; }
+    _pontoGravar([tirar, Object.assign({ acao: 'incluir' }, c)]);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -419,19 +682,29 @@ function pontoExportarCSV() {
 // O log evento a evento continua exportavel: e' o que tem a FOTO de cada batida,
 // que e' a prova. O cartao e' para conferir jornada; o log, para auditar.
 function pontoExportarEventosCSV() {
-  const regs = window._pontoRegistros || [];
+  // AUDITORIA: todas as batidas -- originais, INCLUIDAS e DESCONSIDERADAS --
+  // com quem ajustou, quando e por que. O cartao de ponto usa so' as que valem;
+  // este log mostra tambem o que foi tratado, que e' o que um fiscal pede.
+  const regs = window._pontoLog || window._pontoRegistros || [];
   if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
   const sep = ';';
   const cel = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const cab = ['Funcionario', 'Tipo', 'Data', 'Hora', 'Observacao', 'Foto (URL)'].join(sep);
+  const cab = ['Funcionario', 'Tipo', 'Data', 'Hora', 'Situacao', 'Observacao', 'Motivo do ajuste',
+               'Ajustado por', 'Ajustado em', 'Foto (URL)'].join(sep);
   const linhas = regs.map(r => {
     const d = new Date(r.registrado_em);
+    const aj = r._aj || null;
+    const em = aj && aj.criado_em ? new Date(aj.criado_em) : null;
     return [
       cel(r.funcionario),
       cel(r.tipo === 'saida' ? 'Saida' : 'Entrada'),
       cel(d.toLocaleDateString('pt-BR')),
       cel(d.toLocaleTimeString('pt-BR')),
-      cel(r.observacao || ''),
+      cel(r._situacao || 'Original'),
+      cel(r.origem === 'incluida' ? '' : (r.observacao || '')),
+      cel(aj ? aj.motivo : ''),
+      cel(aj ? (aj.autor_nome || '') : ''),
+      cel(em ? em.toLocaleString('pt-BR') : ''),
       cel(r.foto_url || ''),
     ].join(sep);
   });
