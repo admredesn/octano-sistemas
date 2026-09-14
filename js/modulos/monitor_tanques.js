@@ -246,7 +246,20 @@ async function _monVendas(empIds) {
   const desde6 = _monDiaStr(ini6);            // data_abast é ISO local do núcleo
   const hojeStr = _monDiaStr(new Date());
   // custo/nome (p/ lucro e p/ trocar a descrição fiscal feia pelo nome do produto)
-  const pCusto = sb.from('oct_produtos').select('id,nome,preco_custo,tanque_id').in('empresa_id', empIds);
+  // PAGINADO (14/09/2026): mesma consulta do B.I, mesmo corte de 1000 -- os
+  // produtos dos postos somam 1.112 e a gasolina aditivada do Tijuco ficava fora
+  // do lucro. Ordem fixa por id, senao a pagina muda a cada carga.
+  const pCusto = (async () => {
+    const tudo = [];
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await sb.from('oct_produtos').select('id,nome,preco_custo,tanque_id')
+        .in('empresa_id', empIds).order('id').range(de, de + 999);
+      if (error) return { data: tudo, error };
+      tudo.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return { data: tudo };
+  })();
   const pVendas = Promise.all(empIds.map(eid =>
     sb.from('oct_pdv_vendas')
       .select('valor_total,data_venda,pagamentos,status,itens')

@@ -146,7 +146,13 @@ async function _biRender() {
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,status').eq('status', 'aberto')),
     sb.from('oct_faturas').select('empresa_id,valor,status'),
     sb.from('oct_tanques').select('id,empresa_id,combustivel,estoque_atual,volume_sonda,medido_em').eq('ativo', true),
-    sb.from('oct_produtos').select('id,tanque_id,empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true),
+    // PAGINADO (14/09/2026): os produtos ativos dos postos somam 1.112 e o
+    // PostgREST corta em 1000 -- a GASOLINA ADT do Tijuco (custo 5,5473 no
+    // cadastro) ficava fora: "sem custo cadastrado", 1.262 L fora do estoque e o
+    // lucro dela sem custo. Ordem fixa por id: sem ela, QUAL produto cai muda a
+    // cada carga.
+    _biTudo(() => sb.from('oct_produtos').select('id,tanque_id,empresa_id,nome,preco_custo,preco_venda_a,estoque,ind_combustivel,cod_anp').eq('ativo', true).order('id'))
+      .then(d => ({ data: d, error: null })),
     filaProm,
     pistaProm,
     bicosProm,
