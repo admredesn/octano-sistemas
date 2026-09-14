@@ -319,6 +319,102 @@ function _abrirModulo(modulo, fn, conteudo){
   });
 }
 
+// ============================================================
+// VER FOTO sem sair do sistema (14/09/2026, pedido do Ronan)
+// ------------------------------------------------------------
+// Ponto e Notas a Prazo abriam a foto com window.open: uma aba nova por foto,
+// e para conferir dez pontos eram dez abas. Agora abre por cima da tela.
+// Clique na foto amplia para o tamanho real (conferir rosto, assinatura);
+// Esc, o X ou clique no fundo fecham. "Abrir em nova aba" continua ali para
+// quem quiser baixar.
+// Tudo montado com textContent/src, nunca innerHTML: a URL e a legenda (nome
+// de cliente, de funcionario) nao passam por HTML nem por string de JS.
+// ============================================================
+function verFoto(url, legenda) {
+  if (!url) return;
+  fecharFoto();
+  const ov = document.createElement('div');
+  ov.id = 'oct-foto';
+  ov.setAttribute('role', 'dialog');
+  ov.setAttribute('aria-modal', 'true');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(6,7,12,.92);display:flex;flex-direction:column';
+
+  const topo = document.createElement('div');
+  topo.style.cssText = 'display:flex;align-items:center;gap:14px;padding:12px 16px;flex:0 0 auto';
+  const leg = document.createElement('div');
+  leg.style.cssText = 'flex:1;min-width:0;color:#ddd;font-size:0.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  leg.textContent = legenda || '';
+  const aba = document.createElement('a');
+  aba.href = url; aba.target = '_blank'; aba.rel = 'noopener';
+  aba.textContent = 'Abrir em nova aba ↗';
+  aba.style.cssText = 'color:#8892a0;font-size:0.78rem;text-decoration:none;white-space:nowrap';
+  const x = document.createElement('button');
+  x.type = 'button'; x.textContent = '✕'; x.title = 'Fechar (Esc)';
+  x.setAttribute('aria-label', 'Fechar foto');
+  x.style.cssText = 'flex:0 0 auto;width:36px;height:36px;border-radius:8px;border:1px solid #2a2d3e;background:#13151f;color:#ddd;font-size:1rem;cursor:pointer';
+  topo.append(leg, aba, x);
+
+  const palco = document.createElement('div');
+  palco.style.cssText = 'flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:0 16px 16px';
+  const msg = document.createElement('div');
+  msg.style.cssText = 'color:#8892a0;font-size:0.86rem';
+  msg.textContent = 'Carregando foto…';
+  const img = document.createElement('img');
+  img.alt = legenda || 'Foto';
+  img.style.cssText = 'display:none;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.55)';
+  // TAMANHO: o ponto grava 320x240 (e' o que a webcam do posto aceita) e o
+  // comprovante da nota a prazo pode vir em 1920x1080. Foto pequena e' ampliada
+  // para ocupar a tela, ate' 3x -- acima disso so' borra. Foto maior que a tela
+  // cabe inteira, e o clique mostra no tamanho real para ler a assinatura.
+  let ampliada = false, podeAmpliar = false;
+  const ajustar = () => {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return;
+    const areaW = Math.max(100, palco.clientWidth - 32), areaH = Math.max(100, palco.clientHeight - 16);
+    const cabe = Math.min(areaW / w, areaH / h, 3);
+    podeAmpliar = cabe < 1;
+    if (!podeAmpliar) ampliada = false;
+    const k = ampliada ? 1 : cabe;
+    img.style.width = Math.round(w * k) + 'px';
+    img.style.height = Math.round(h * k) + 'px';
+    img.style.cursor = podeAmpliar ? (ampliada ? 'zoom-out' : 'zoom-in') : 'default';
+    img.title = podeAmpliar ? (ampliada ? 'Clique para ajustar à tela' : 'Clique para ver no tamanho real') : '';
+    // no tamanho real, centralizar cortaria o canto de cima -- ancora no topo p/ rolar
+    palco.style.alignItems = ampliada ? 'flex-start' : 'center';
+    palco.style.justifyContent = ampliada ? 'flex-start' : 'center';
+  };
+  img.onload = () => { msg.remove(); img.style.display = 'block'; ajustar(); };
+  img.onerror = () => { msg.style.color = '#f87171'; msg.textContent = 'Não foi possível carregar a foto.'; };
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!podeAmpliar) return;
+    ampliada = !ampliada;
+    ajustar();
+  });
+  ov._ajustar = ajustar;
+  palco.append(msg, img);
+  ov.append(topo, palco);
+
+  ov.addEventListener('click', (e) => { if (e.target === ov || e.target === palco || e.target === topo) fecharFoto(); });
+  x.addEventListener('click', fecharFoto);
+  document.addEventListener('keydown', _fotoTecla);
+  window.addEventListener('resize', _fotoRedim);
+  document.body.appendChild(ov);
+  document.body.style.overflow = 'hidden';
+  img.src = url;
+  x.focus();
+}
+function _fotoTecla(e) { if (e.key === 'Escape') fecharFoto(); }
+function _fotoRedim() { const ov = document.getElementById('oct-foto'); if (ov && ov._ajustar) ov._ajustar(); }
+function fecharFoto() {
+  const ov = document.getElementById('oct-foto');
+  if (!ov) return;
+  ov.remove();
+  document.removeEventListener('keydown', _fotoTecla);
+  window.removeEventListener('resize', _fotoRedim);
+  document.body.style.overflow = '';
+}
+
 // sessao caiu: mostra o login UMA vez, com o motivo. Sem o aviso o usuario acha
 // que o sistema perdeu o trabalho dele.
 let _avisouSessao = false;

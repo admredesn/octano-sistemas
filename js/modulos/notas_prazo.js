@@ -44,7 +44,10 @@ async function npListar() {
           ${notas.map(n => {
             const d = new Date(n.registrado_em);
             return `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
-              ${n.foto_url ? `<img src="${npEsc(n.foto_url)}" onclick="window.open('${npEsc(n.foto_url)}','_blank')" style="width:100%;height:160px;object-fit:cover;cursor:pointer;display:block">` : '<div style="height:160px;background:#0b0d14;display:flex;align-items:center;justify-content:center;color:#555">sem foto</div>'}
+              ${n.foto_url ? `<img src="${npEsc(n.foto_url)}" data-foto="${npEsc(n.foto_url)}"
+                data-legenda="${npEsc([n.cliente_nome, 'R$ ' + Number(n.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }), d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), n.numero_nfe ? 'NFC-e ' + n.numero_nfe : ''].filter(Boolean).join('  ·  '))}"
+                onclick="verFoto(this.dataset.foto, this.dataset.legenda)"
+                style="width:100%;height:160px;object-fit:cover;cursor:zoom-in;display:block" title="Ver comprovante">` : '<div style="height:160px;background:#0b0d14;display:flex;align-items:center;justify-content:center;color:#555">sem foto</div>'}
               <div style="padding:10px">
                 <div style="color:#ddd;font-weight:500;font-size:0.86rem">${npEsc(n.cliente_nome) || '—'}</div>
                 <div style="color:#9aa;font-size:0.76rem;margin-top:3px">${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>

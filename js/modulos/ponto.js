@@ -134,7 +134,10 @@ async function pontoFiltrar() {
             <tr style="border-top:1px solid #1c1f2e;color:#ddd">
               <td style="padding:8px 12px">
                 ${r.foto_url
-                  ? `<img src="${pontoEsc(r.foto_url)}" onclick="window.open('${pontoEsc(r.foto_url)}','_blank')" style="width:46px;height:46px;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid #2a2d3e" title="Abrir foto">`
+                  ? `<img src="${pontoEsc(r.foto_url)}" data-foto="${pontoEsc(r.foto_url)}"
+                       data-legenda="${pontoEsc([r.funcionario, r.tipo === 'saida' ? 'Saída' : 'Entrada', fmtDH(r.registrado_em)].filter(Boolean).join('  ·  '))}"
+                       onclick="verFoto(this.dataset.foto, this.dataset.legenda)"
+                       style="width:46px;height:46px;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid #2a2d3e" title="Ver foto">`
                   : '<span style="color:#555">—</span>'}
               </td>
               <td style="padding:8px 12px;font-weight:600">${pontoEsc(r.funcionario)}</td>
