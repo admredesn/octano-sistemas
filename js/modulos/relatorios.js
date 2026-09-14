@@ -17,7 +17,12 @@ const RELATORIOS_REG = [
     fn: () => relatorioEstoque(),
   },
   {
-    id: 'descargas', icone: '🚛', titulo: 'Descargas',
+    id: 'entregas', icone: '⛽', titulo: 'Entregas de Combustível',
+    descricao: 'Todas as descargas medidas pela sonda, com ou sem nota: início, fim, temperatura, altura, volume antes/depois e entregue, por tanque.',
+    fn: () => relatorioEntregas(),
+  },
+  {
+    id: 'descargas', icone: '🚛', titulo: 'Descargas × Notas',
     descricao: 'Cada descarga medida pela sonda, casada com a nota de compra: litros medidos × nota, descarga sem nota, nota sem descarga e sonda travada.',
     fn: () => relatorioDescargas(),
   },

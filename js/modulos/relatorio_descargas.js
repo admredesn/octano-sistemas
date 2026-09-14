@@ -158,7 +158,7 @@ function _descSomaDias(dia, n) { const d = new Date(dia + 'T12:00:00'); d.setDat
 // sonda de um posto, dia a dia em paralelo (um mês = ~170 mil leituras; em
 // série levaria minutos). Cada dia paginado de 1000 em 1000, ORDENADO — página
 // sem order no PostgREST pode repetir/pular linhas.
-async function _descLerSonda(eid, de, ate, progresso) {
+async function _descLerSonda(eid, de, ate, progresso, colunas) {
   const dias = [];
   for (let d = de; d <= ate; d = _descSomaDias(d, 1)) dias.push(d);
   const todas = [];
@@ -169,7 +169,7 @@ async function _descLerSonda(eid, de, ate, progresso) {
       const d = fila.shift();
       const a = _descUtc(d), b = _descUtc(_descSomaDias(d, 1));
       for (let off = 0; off < 60000; off += 1000) {
-        const { data, error } = await sb.from('oct_medicoes').select('tanque_numero,volume,medido_em')
+        const { data, error } = await sb.from('oct_medicoes').select(colunas || 'tanque_numero,volume,medido_em')
           .eq('empresa_id', eid).gte('medido_em', a).lt('medido_em', b)
           .order('medido_em').order('tanque_numero').range(off, off + 999);
         if (error) { erro = error; return; }
@@ -520,6 +520,312 @@ function relatorioDescargasImprimir() {
   <table><thead><tr><th>Data / hora</th><th>Tanque</th><th class="r">Antes → depois</th><th class="r">Litros</th><th>NF-e</th><th class="r">L nota</th><th class="r">Dif.</th><th>Situação</th></tr></thead><tbody>${corpo}</tbody></table>
   ${semDesc ? `<h2>Notas de combustível sem descarga no posto</h2><table><thead><tr><th>Emissão</th><th>NF-e</th><th>Fornecedor</th><th>Produto</th><th class="r">Valor</th></tr></thead><tbody>${semDesc}</tbody></table>` : ''}
 </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('O navegador bloqueou a janela de impressão. Libere o pop-up e tente de novo.'); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
+}
+
+// ============================================================
+//  RELATÓRIO: ENTREGAS DE COMBUSTÍVEL — só a descarga, com ou sem nota
+// ------------------------------------------------------------
+//  Mesmo formato do "Relatório de Entregas de Combustíveis" do console ELS:
+//  por tanque, início/fim, temperatura, altura e volume antes e depois, e o
+//  entregue. NÃO usa a marca entrega_em_progresso do console: no Florestal ela
+//  liga e desliga o dia inteiro sem o volume mudar (36 mil leituras marcadas
+//  desde julho) e na AC ela não pegou a descarga de 06/08. A entrega é a
+//  subida de volume (_descDetectar) refinada minuto a minuto: começa na
+//  última leitura antes de subir e termina no pico. Se a vazão para (menos de
+//  15 L num minuto) e volta em até 20 min (troca de compartimento do caminhão),
+//  vira outra linha, como o console faz (Florestal 26/08: 4.964 + 2.003 L).
+//  Validado contra o PDF do console do Florestal (ago-set/2026): 21 de 21
+//  entregas, diferença de no máximo 9 L.
+// ============================================================
+
+// raw: leituras de UM tanque ordenadas [{ms, v, alt, temp}]; e: descarga de _descDetectar
+function _entRefinar(raw, e) {
+  const M = 60000;
+  const j = raw.filter(r => r.ms >= e.ini - 45 * M && r.ms <= e.fim + 45 * M);
+  if (j.length < 3) return [];
+  // mediana de 3 vizinhos: uma leitura maluca isolada não abre nem fecha entrega
+  const sv = j.map((r, i) => i === 0 || i === j.length - 1 ? r.v : _descMediana([j[i - 1].v, r.v, j[i + 1].v]));
+  const sobe = (k) => k > 0 && sv[k] > sv[k - 1] + 15;
+  const firme = (k) => { const ate = Math.min(j.length - 1, k + 8); return sv[ate] - sv[k - 1] >= 150 || Math.max(...sv.slice(k, ate + 1)) - sv[k - 1] >= 150; };
+  let k = 1;
+  while (k < j.length && !(j[k].ms >= e.ini - 15 * M && sobe(k) && firme(k))) k++;
+  if (k >= j.length) return [];
+  const partes = [];
+  let ini = k - 1, pico = k;
+  for (let i = k + 1; i < j.length; i++) {
+    if (sv[i] > sv[i - 1] + 15) { if (sv[i] > sv[pico]) pico = i; continue; }
+    // vazão parou (subiu <= 15 L no minuto). Volta a subir em até 20 min? Então
+    // era troca de compartimento: fecha esta etapa e abre outra — o console faz
+    // igual (26/08: 6.169 -> 6.176 num minuto e depois +2.003 L). Etapa com
+    // menos de 300 L ainda não é compartimento: é só oscilação no começo.
+    if (sv[i] > sv[pico]) pico = i;
+    let prox = -1;
+    for (let q = i + 1; q < j.length && j[q].ms - j[i].ms <= 20 * M; q++) {
+      if (sobe(q) && firme(q) && sv[Math.min(j.length - 1, q + 8)] - sv[q - 1] >= 100) { prox = q; break; }
+    }
+    if (prox < 0) break;                          // parou de vez: fim da entrega
+    if (sv[pico] - sv[ini] < 300) continue;       // ainda no começo, segue a mesma etapa
+    partes.push([ini, pico]);
+    ini = prox - 1; pico = prox; i = prox;
+  }
+  partes.push([ini, pico]);
+  return partes
+    .map(([a, b]) => ({
+      tq: e.tq, comb: e.comb, obs: e.obs,
+      ini: j[a].ms, fim: j[b].ms, volIni: Math.round(sv[a]), volFim: Math.round(sv[b]),
+      altIni: j[a].alt, altFim: j[b].alt, tempIni: j[a].temp, tempFim: j[b].temp,
+      entregue: Math.round(sv[b] - sv[a]),
+    }))
+    .filter(p => p.entregue >= 100);
+}
+
+// medições cruas (com altura/temperatura) -> entregas
+function _entCalcular(medicoes, tanques) {
+  // uma leitura por minuto por tanque. A AC grava em DOBRO em alguns períodos
+  // (dois coletores): duas leituras no mesmo minuto parecem "vazão parada" e
+  // picavam a descarga de 03/08 em uma linha por minuto.
+  const minutos = {};
+  medicoes.forEach(m => {
+    const v = Number(m.volume);
+    if (!(v > 0) || m.tanque_numero == null) return;
+    const ms = Date.parse(m.medido_em);
+    if (isNaN(ms)) return;
+    const k = m.tanque_numero + '|' + Math.floor(ms / 60000);
+    const b = (minutos[k] = minutos[k] || { tq: m.tanque_numero, ms, v: [], alt: [], temp: [] });
+    b.v.push(v);
+    if (m.altura != null) b.alt.push(Number(m.altura));
+    if (m.temperatura != null) b.temp.push(Number(m.temperatura));
+  });
+  const porTq = {};
+  Object.values(minutos).forEach(b => {
+    (porTq[b.tq] = porTq[b.tq] || []).push({
+      ms: b.ms, v: _descMediana(b.v),
+      alt: b.alt.length ? _descMediana(b.alt) : null, temp: b.temp.length ? _descMediana(b.temp) : null,
+    });
+  });
+  Object.values(porTq).forEach(a => a.sort((x, y) => x.ms - y.ms));
+  const out = [];
+  _descDetectar(medicoes, tanques).forEach(e => {
+    const partes = _entRefinar(porTq[e.tq] || [], e);
+    // sem minuto a minuto confiável (sonda sem leitura no meio): fica a subida de 15 min
+    if (!partes.length) out.push({ tq: e.tq, comb: e.comb, obs: e.obs, ini: e.ini, fim: e.fim, volIni: e.de, volFim: e.para, altIni: null, altFim: null, tempIni: null, tempFim: null, entregue: e.litros });
+    else out.push(...partes);
+  });
+  return out;
+}
+
+const _ENT_AZUL = '#3a78b5';
+
+async function relatorioEntregas() {
+  const c = document.getElementById('conteudo');
+  if (!c) return;
+  const hoje = _relDataHoje();
+  c.innerHTML = `<div style="padding:24px">
+    ${_relHeader('⛽ Entregas de Combustível')}
+    <p style="color:#8a8f98;margin:-6px 0 14px;font-size:.82rem;max-width:900px">Todas as descargas medidas pela sonda, com ou sem nota: início e fim, temperatura, altura e volume antes e depois, e o volume entregue. Mesmo formato do relatório de entregas do console da sonda. Hora do posto.</p>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">
+      <label style="color:#9fb3c8;font-size:.8rem">De<br><input type="date" id="ent-ini" value="${_relDataInicioMes()}" style="margin-top:3px"></label>
+      <label style="color:#9fb3c8;font-size:.8rem">Até<br><input type="date" id="ent-fim" value="${hoje}" max="${hoje}" style="margin-top:3px"></label>
+      <label style="color:#9fb3c8;font-size:.8rem">Tanque<br>
+        <select id="ent-tq" style="margin-top:3px" onchange="_entRender()"><option value="">Todos</option></select></label>
+      <button onclick="relatorioEntregasCarregar()" style="padding:8px 16px;border-radius:7px;border:none;background:#f97316;color:#fff;cursor:pointer;font-weight:600">Buscar</button>
+      <button onclick="relatorioEntregasXLSX()" style="padding:8px 14px;border-radius:7px;border:1px solid #16a34a;background:transparent;color:#16a34a;cursor:pointer;font-weight:600">⬇ Excel</button>
+      <button onclick="relatorioEntregasCSV()" style="padding:8px 14px;border-radius:7px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;cursor:pointer;font-weight:600">⬇ CSV</button>
+      <button onclick="relatorioEntregasImprimir()" style="padding:8px 14px;border-radius:7px;border:1px solid #2a2d3e;background:transparent;color:#8892a0;cursor:pointer;font-weight:600">🖨 Imprimir</button>
+    </div>
+    <div id="ent-corpo"><p style="color:#888">Carregando…</p></div>
+  </div>`;
+  relatorioEntregasCarregar();
+}
+
+async function relatorioEntregasCarregar() {
+  const box = document.getElementById('ent-corpo');
+  if (!box) return;
+  const eid = _relEid();
+  if (!eid) { box.innerHTML = '<p style="color:#f87171">Selecione uma empresa.</p>'; return; }
+  const hoje = _relDataHoje();
+  const ini = document.getElementById('ent-ini')?.value || _relDataInicioMes();
+  let fim = document.getElementById('ent-fim')?.value || hoje;
+  if (fim > hoje) fim = hoje;
+  if (ini > fim) { box.innerHTML = '<p style="color:#f87171">A data inicial é depois da final.</p>'; return; }
+  const nDias = Math.round((Date.parse(fim) - Date.parse(ini)) / 86400000) + 1;
+  if (nDias > 92) { box.innerHTML = '<p style="color:#f87171">Escolha no máximo 92 dias (a sonda grava uma leitura por minuto por tanque).</p>'; return; }
+  const token = (window._entToken = (window._entToken || 0) + 1);
+  const msg = t => { if (token === window._entToken) box.innerHTML = `<p style="color:#888">${t}</p>`; };
+  try {
+    msg('Lendo os tanques…');
+    const tq = await sb.from('oct_tanques').select('numero,combustivel,capacidade').eq('empresa_id', eid).order('numero').then(r => r.data || []);
+    // um dia a mais de cada lado: descarga que começa 23:50 termina no outro dia
+    const de = _descSomaDias(ini, -1), ate = _descSomaDias(fim, 1) > hoje ? hoje : _descSomaDias(fim, 1);
+    const med = await _descLerSonda(eid, de, ate, (f, t) => msg(`Lendo a sonda: dia ${f} de ${t}…`),
+                                    'tanque_numero,volume,altura,temperatura,medido_em');
+    if (token !== window._entToken) return;
+    const entregas = _entCalcular(med, tq).filter(e => { const d = _descDia(e.ini); return d >= ini && d <= fim; });
+    const info = (typeof empresaAtivaInfo === 'function') ? empresaAtivaInfo() : null;
+    window._entDados = {
+      ini, fim, tanques: tq, entregas,
+      empresa: info ? (info.nome || '') : '', posto: info ? (info.nome_fantasia || info.nome || '') : '', cnpj: info ? (info.cnpj || '') : '',
+    };
+    const sel = document.getElementById('ent-tq');
+    if (sel) {
+      const atual = sel.value;
+      sel.innerHTML = '<option value="">Todos</option>' + tq.map(t => `<option value="${t.numero}">${t.numero} · ${_descEsc(t.combustivel)}</option>`).join('');
+      sel.value = tq.some(t => String(t.numero) === atual) ? atual : '';
+    }
+    _entRender();
+  } catch (e) {
+    box.innerHTML = `<p style="color:#f87171">Não consegui montar o relatório: ${_descEsc(e.message)}</p>`;
+  }
+}
+
+function _entDataHora(ms) { const d = new Date(ms); return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR'); }
+function _entN(v, casas) { return v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas }); }
+
+// grupos por tanque, entregas da mais nova para a mais velha (como o console)
+function _entGrupos() {
+  const D = window._entDados;
+  if (!D) return [];
+  const filtro = document.getElementById('ent-tq')?.value || '';
+  const nums = Array.from(new Set(D.tanques.map(t => t.numero).concat(D.entregas.map(e => e.tq)))).sort((a, b) => a - b);
+  return nums.filter(n => !filtro || String(n) === filtro).map(n => {
+    const t = D.tanques.find(x => x.numero === n) || {};
+    const lista = D.entregas.filter(e => e.tq === n).sort((a, b) => b.ini - a.ini);
+    return { tq: n, produto: t.combustivel || (lista[0] && lista[0].comb) || '', lista, total: lista.reduce((s, e) => s + e.entregue, 0) };
+  });
+}
+
+function _entRender() {
+  const box = document.getElementById('ent-corpo');
+  if (!box || !window._entDados) return;
+  const grupos = _entGrupos();
+  const th = (t, dir) => `<th style="padding:7px 8px;text-align:${dir ? 'right' : 'left'};white-space:nowrap">${t}</th>`;
+  const totalGeral = grupos.reduce((s, g) => s + g.total, 0);
+  const resumo = grupos.filter(g => g.lista.length).map(g =>
+    `<span style="display:inline-block;background:#0f1a2a;border:1px solid #2a4a6a;border-radius:20px;padding:4px 10px;margin:3px;color:#cbd5e1;font-size:.78rem">TQ ${g.tq} ${_descEsc(g.produto)}: <strong style="color:#5dca9a">${g.lista.length} · ${_descFmtL(g.total)} L</strong></span>`).join('');
+  const blocos = grupos.map(g => {
+    const linhas = g.lista.map((e, i) => `<tr style="background:${i % 2 ? '#12151f' : 'transparent'};border-bottom:1px solid #1e2233">
+        <td style="padding:6px 8px;white-space:nowrap;color:#cbd5e1">${_entDataHora(e.ini)}</td>
+        <td style="padding:6px 8px;white-space:nowrap;color:#cbd5e1">${_entDataHora(e.fim)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.tempIni, 1)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.tempFim, 1)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.altIni, 0)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.volIni, 0)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.altFim, 0)}</td>
+        <td style="padding:6px 8px;text-align:right">${_entN(e.volFim, 0)}</td>
+        <td style="padding:6px 8px;text-align:right;color:#5dca9a;font-weight:700">${_entN(e.entregue, 0)}${e.obs ? `<div style="color:#fbbf24;font-size:.7rem;font-weight:400;white-space:normal">${_descEsc(e.obs)}</div>` : ''}</td>
+      </tr>`).join('');
+    return `<div style="margin-bottom:18px;border:1px solid #1e2233;border-radius:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 12px;background:#13151f">
+        <span style="color:#e6e6e6;font-weight:700">${_descEsc(g.produto)}</span>
+        <span style="color:#9fb3c8">Tanque <b style="color:#e6e6e6">${g.tq}</b></span>
+      </div>
+      <div style="overflow:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+          <thead><tr style="background:${_ENT_AZUL};color:#fff">
+            ${th('Data Inicial')}${th('Data Final')}${th('Temp. Ini. (°C)', 1)}${th('Temp. Fin. (°C)', 1)}${th('Altura Ini. (mm)', 1)}${th('Volume Ini. (L)', 1)}${th('Altura Fin. (mm)', 1)}${th('Volume Fin. (L)', 1)}${th('Entregue (L)', 1)}
+          </tr></thead>
+          <tbody>${linhas || '<tr><td colspan="9" style="padding:12px;color:#888">Nenhuma entrega no período.</td></tr>'}</tbody>
+          <tfoot><tr style="border-top:2px solid #2a2d3e"><td colspan="8" style="padding:8px;font-weight:700;color:#e6e6e6">Total :</td>
+            <td style="padding:8px;text-align:right;font-weight:700;color:#5dca9a">${_descFmtL(g.total)}</td></tr></tfoot>
+        </table>
+      </div></div>`;
+  }).join('');
+  box.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:12px 16px;min-width:150px">
+        <div style="color:#8a8f98;font-size:.72rem;text-transform:uppercase;letter-spacing:.4px">Total entregue</div>
+        <div style="color:#5dca9a;font-size:1.15rem;font-weight:700;margin-top:2px">${_descFmtL(totalGeral)} L</div></div>
+      <div>${resumo}</div>
+    </div>
+    ${blocos}`;
+}
+
+function _entMatriz() {
+  const m = [['Tanque', 'Produto', 'Data Inicial', 'Data Final', 'Temp. Ini. (°C)', 'Temp. Fin. (°C)', 'Altura Ini. (mm)', 'Volume Ini. (L)', 'Altura Fin. (mm)', 'Volume Fin. (L)', 'Entregue (L)', 'Observação']];
+  const r1 = v => v == null || isNaN(v) ? '' : Math.round(v * 10) / 10;
+  const r0 = v => v == null || isNaN(v) ? '' : Math.round(v);
+  _entGrupos().forEach(g => g.lista.forEach(e => m.push([
+    g.tq, g.produto, _entDataHora(e.ini), _entDataHora(e.fim), r1(e.tempIni), r1(e.tempFim),
+    r0(e.altIni), r0(e.volIni), r0(e.altFim), r0(e.volFim), e.entregue, e.obs || ''])));
+  return m;
+}
+
+function relatorioEntregasCSV() {
+  const m = _entMatriz();
+  if (m.length < 2) { alert('Nada para exportar. Gere o relatório primeiro.'); return; }
+  // número com vírgula decimal: o Excel em pt-BR lê 22.4 como texto
+  const cel = v => {
+    const s = typeof v === 'number' ? String(v).replace('.', ',') : String(v == null ? '' : v);
+    return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const txt = '﻿' + m.map(l => l.map(cel).join(';')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'entregas_' + window._entDados.ini + '_' + window._entDados.fim + '.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function relatorioEntregasXLSX() {
+  const m = _entMatriz();
+  if (m.length < 2) { alert('Nada para exportar. Gere o relatório primeiro.'); return; }
+  let XLSX;
+  try { XLSX = await _relCarregarXLSX(); } catch (e) { alert(e.message); return; }
+  const ws = XLSX.utils.aoa_to_sheet(m);
+  ws['!cols'] = m[0].map((h, i) => ({ wch: i === 1 ? 20 : i === 11 ? 40 : Math.max(11, String(h).length + 2) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Entregas');
+  XLSX.writeFile(wb, 'entregas_' + window._entDados.ini + '_' + window._entDados.fim + '.xlsx');
+}
+
+// impressão no formato do "Relatório de Entregas de Combustíveis" do console:
+// uma página por tanque, cabeçalho com empresa/posto/produto/tanque, tabela com
+// cabeçalho azul, total e rodapé com data de geração e página
+function relatorioEntregasImprimir() {
+  const D = window._entDados;
+  const grupos = _entGrupos().filter(g => g.lista.length);
+  if (!D || !grupos.length) { alert('Nada para imprimir. Gere o relatório primeiro.'); return; }
+  const esc = _descEsc;
+  const br = d => d.split('-').reverse().join('/');
+  const agora = new Date().toLocaleString('pt-BR');
+  const paginas = grupos.map((g, idx) => `
+    <section class="pag">
+      <div class="tit"><div class="t1">Relatório de Entregas de Combustíveis</div><div class="t2">Medição de estoque pela sonda · ${br(D.ini)} a ${br(D.fim)}</div></div>
+      <table class="cab">
+        <tr><td class="k">Empresa</td><td>${esc(D.empresa)}</td><td class="k r">CNPJ</td><td class="r">${esc(D.cnpj)}</td></tr>
+        <tr><td class="k">Posto</td><td>${esc(D.posto)}</td><td class="k r">Tanque</td><td class="r">${g.tq}</td></tr>
+        <tr><td class="k">Produto</td><td>${esc(g.produto)}</td><td></td><td></td></tr>
+      </table>
+      <table class="dados">
+        <thead><tr><th>Data Inicial</th><th>Data Final</th><th class="r">Temp. Ini. (°C)</th><th class="r">Temp. Fin. (°C)</th><th class="r">Altura Ini. (mm)</th><th class="r">Volume Ini. (L)</th><th class="r">Altura Fin. (mm)</th><th class="r">Volume Fin. (L)</th><th class="r">Entregue (L)</th></tr></thead>
+        <tbody>${g.lista.map(e => `<tr><td>${_entDataHora(e.ini)}</td><td>${_entDataHora(e.fim)}</td><td class="r">${_entN(e.tempIni, 1)}</td><td class="r">${_entN(e.tempFim, 1)}</td><td class="r">${_entN(e.altIni, 0)}</td><td class="r">${_entN(e.volIni, 0)}</td><td class="r">${_entN(e.altFim, 0)}</td><td class="r">${_entN(e.volFim, 0)}</td><td class="r b">${_entN(e.entregue, 0)}${e.obs ? '<br><small>' + esc(e.obs) + '</small>' : ''}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="8" class="b">Total :</td><td class="r b">${_descFmtL(g.total)}</td></tr></tfoot>
+      </table>
+      <div class="rod"><span>Octano Sistemas</span><span>${agora}<br>${idx + 1}/${grupos.length}</span></div>
+    </section>`).join('');
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Entregas ${esc(D.posto)} ${br(D.ini)} a ${br(D.fim)}</title>
+<style>
+  * { box-sizing: border-box; } body { font: 11px/1.35 Arial, Helvetica, sans-serif; color: #111; margin: 0; }
+  .pag { padding: 16px 22px; page-break-after: always; display: flex; flex-direction: column; min-height: 180mm; }
+  .pag:last-child { page-break-after: auto; }
+  .tit { text-align: center; margin-bottom: 12px; } .t1 { font-size: 17px; font-weight: bold; } .t2 { font-size: 12px; color: #333; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; }
+  .cab td { padding: 2px 4px; font-size: 11.5px; } .cab .k { font-weight: bold; width: 80px; }
+  .dados { margin-top: 8px; } .dados th { background: ${_ENT_AZUL}; color: #fff; padding: 5px 6px; text-align: left; font-size: 11px; border-right: 2px solid #fff; }
+  .dados td { padding: 4px 6px; } .dados tbody tr:nth-child(even) td { background: #f2f2f2; }
+  .dados tfoot td { border-top: 1px solid #999; padding-top: 6px; }
+  .r { text-align: right; } .b { font-weight: bold; } small { color: #8a5300; font-weight: normal; }
+  .rod { margin-top: auto; padding-top: 18px; border-top: 1px solid #ccc; display: flex; justify-content: space-between; align-items: flex-end; color: #333; font-size: 10.5px; }
+  .rod span:last-child { text-align: right; }
+  thead { display: table-header-group; } tr { break-inside: avoid; }
+  @media print { * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } @page { size: landscape; margin: 10mm; } }
+</style></head><body>${paginas}</body></html>`;
   const w = window.open('', '_blank');
   if (!w) { alert('O navegador bloqueou a janela de impressão. Libere o pop-up e tente de novo.'); return; }
   w.document.write(html);
