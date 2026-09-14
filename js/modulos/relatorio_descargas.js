@@ -620,28 +620,49 @@ function _entCalcular(medicoes, tanques) {
   return out;
 }
 
-// Entregas REGISTRADAS PELO CONSOLE (oct_sonda_entregas, gravadas pelo núcleo via
-// i202) têm prioridade: não somem quando o núcleo fica sem ler a sonda. O
+// Três fontes, nesta ordem: (1) descarga detectada pelo NÚCLEO no ato, com o
+// relógio do computador; (2) registro do CONSOLE (i202), que cobre quando o
+// núcleo ficou sem ler — descartado pelo núcleo se a data do console for
+// absurda (AC perde a data); (3) cálculo pela sonda na nuvem, marcado com *.
+// Registros em oct_sonda_entregas (coluna origem). O
 // cálculo pela subida de volume cobre o período antes do núcleo coletar e
 // serve de conferência. Uma linha calculada que cai dentro de uma entrega do
 // console (mesmo tanque, início até 15 min de diferença ou dentro do intervalo
 // dela) é a MESMA descarga e sai da lista — senão contaria em dobro.
 // O Concept (Tijuco) devolve a altura final nos dois campos: aí a altura
 // inicial vem do cálculo.
-function _entMesclar(calculadas, console, tanques) {
+function _entMesclar(calculadas, registros, tanques) {
   const combDe = {};
   (tanques || []).forEach(t => { combDe[t.numero] = t.combustivel; });
-  const usada = new Set();
+  const num = v => (v == null ? null : Number(v));
+  const H = 3600 * 1000;
+  // núcleo primeiro (relógio do computador), depois console (relógio do console)
+  const peso = { nucleo: 0, console: 1 };
+  const regs = (registros || []).slice().sort((a, b) => (peso[a.origem || 'console'] ?? 1) - (peso[b.origem || 'console'] ?? 1));
   const out = [];
-  (console || []).forEach(c => {
+  regs.forEach(c => {
     const ini = Date.parse(c.inicio), fim = c.fim ? Date.parse(c.fim) : ini;
-    const num = v => (v == null ? null : Number(v));
     const e = {
-      tq: Number(c.tanque_numero), comb: combDe[c.tanque_numero] || '', origem: 'console', obs: '',
+      tq: Number(c.tanque_numero), comb: combDe[c.tanque_numero] || '', origem: c.origem || 'console', obs: c.obs || '',
       ini, fim, volIni: num(c.vol_ini), volFim: num(c.vol_fim), altIni: num(c.altura_ini), altFim: num(c.altura_fim),
       tempIni: num(c.temp_ini), tempFim: num(c.temp_fim),
       entregue: c.entregue != null ? Math.round(Number(c.entregue)) : Math.round(num(c.vol_fim) - num(c.vol_ini)),
     };
+    // o console repete uma descarga que o núcleo já registrou? Mesmo tanque e:
+    // começo até 15 min com volume de antes parecido, intervalos que se cruzam,
+    // ou mesmo volume entregue até 6 h de distância (relógio do console torto).
+    // O 2º compartimento do caminhão começa minutos depois, mas com OUTRO volume
+    // de antes — por isso só o horário não basta.
+    const mesma = out.some(o => o.tq === e.tq && (
+      (Math.abs(o.ini - e.ini) <= 15 * 60000 && o.volIni != null && e.volIni != null && Math.abs(o.volIni - e.volIni) <= 150)
+      || (e.ini < o.fim && o.ini < e.fim)
+      || (Math.abs(o.ini - e.ini) <= 6 * H && Math.abs(o.entregue - e.entregue) <= Math.max(60, 0.03 * o.entregue)
+          && o.volIni != null && e.volIni != null && Math.abs(o.volIni - e.volIni) <= 150)));
+    if (!mesma) out.push(e);
+  });
+  // cálculo pela sonda na nuvem: só o que nenhum registro cobre
+  const usada = new Set();
+  out.forEach(e => {
     let par = null;
     calculadas.forEach((k, i) => {
       if (usada.has(i) || k.tq !== e.tq) return;
@@ -651,8 +672,8 @@ function _entMesclar(calculadas, console, tanques) {
       usada.add(i);
       if (!par || Math.abs(k.ini - e.ini) < Math.abs(par.ini - e.ini)) par = k;
     });
-    if (par && e.altIni != null && e.altIni === e.altFim && par.altIni != null) e.altIni = par.altIni;
-    out.push(e);
+    // o Concept (Tijuco) devolve a altura final nos dois campos: a inicial vem do cálculo
+    if (par && e.origem === 'console' && e.altIni != null && e.altIni === e.altFim && par.altIni != null) e.altIni = par.altIni;
   });
   calculadas.forEach((k, i) => { if (!usada.has(i)) out.push(Object.assign({ origem: 'sonda' }, k)); });
   return out;
@@ -798,7 +819,7 @@ function _entRender() {
         <div style="color:#5dca9a;font-size:1.15rem;font-weight:700;margin-top:2px">${_descFmtL(totalGeral)} L</div></div>
       <div>${resumo}</div>
     </div>
-    <p style="color:#8a8f98;font-size:.76rem;margin:0 0 12px">Entregas registradas pelo console da sonda. <span style="color:#fbbf24">*</span> = calculada pela subida de volume (período em que o console ainda não era lido pelo núcleo ou não tem a entrega).${window._entDados.consoleErro ? ' <span style="color:#f87171">Registro do console indisponível: ' + _descEsc(window._entDados.consoleErro) + '</span>' : ''}</p>
+    <p style="color:#8a8f98;font-size:.76rem;margin:0 0 12px">Descargas registradas pelo núcleo no ato ou pelo console da sonda. <span style="color:#fbbf24">*</span> = calculada pela subida de volume (período antes do núcleo registrar).${window._entDados.consoleErro ? ' <span style="color:#f87171">Registro do console indisponível: ' + _descEsc(window._entDados.consoleErro) + '</span>' : ''}</p>
     ${blocos}`;
 }
 
@@ -809,7 +830,7 @@ function _entMatriz() {
   _entGrupos().forEach(g => g.lista.forEach(e => m.push([
     g.tq, g.produto, _entDataHora(e.ini), _entDataHora(e.fim), r1(e.tempIni), r1(e.tempFim),
     r0(e.altIni), r0(e.volIni), r0(e.altFim), r0(e.volFim), e.entregue,
-    e.origem === 'sonda' ? 'calculada pela sonda' : 'console', e.obs || ''])));
+    e.origem === 'sonda' ? 'calculada pela sonda' : e.origem === 'nucleo' ? 'núcleo (no ato)' : 'console', e.obs || ''])));
   return m;
 }
 
@@ -864,7 +885,7 @@ function relatorioEntregasImprimir() {
         <tbody>${g.lista.map(e => `<tr><td>${_entDataHora(e.ini)}${e.origem === 'sonda' ? ' *' : ''}</td><td>${_entDataHora(e.fim)}</td><td class="r">${_entN(e.tempIni, 1)}</td><td class="r">${_entN(e.tempFim, 1)}</td><td class="r">${_entN(e.altIni, 0)}</td><td class="r">${_entN(e.volIni, 0)}</td><td class="r">${_entN(e.altFim, 0)}</td><td class="r">${_entN(e.volFim, 0)}</td><td class="r b">${_entN(e.entregue, 0)}${e.obs ? '<br><small>' + esc(e.obs) + '</small>' : ''}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="8" class="b">Total :</td><td class="r b">${_descFmtL(g.total)}</td></tr></tfoot>
       </table>
-      ${g.lista.some(e => e.origem === 'sonda') ? '<div class="leg">* calculada pela subida de volume da sonda (sem registro do console)</div>' : ''}
+      ${g.lista.some(e => e.origem === 'sonda') ? '<div class="leg">* calculada pela subida de volume da sonda (sem registro do núcleo nem do console)</div>' : ''}
       <div class="rod"><span>Octano Sistemas</span><span>${agora}<br>${idx + 1}/${grupos.length}</span></div>
     </section>`).join('');
   const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Entregas ${esc(D.posto)} ${br(D.ini)} a ${br(D.fim)}</title>
