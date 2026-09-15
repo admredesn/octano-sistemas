@@ -146,7 +146,9 @@ function _dispCalcular(D) {
     // ---- Sicoob (real) ----
     const s = Array.isArray(D.saldos) ? D.saldos.find(x => x.empresa_id === eid) : null;
     const sicoob = s ? {
-      valor: s.saldo != null ? Number(s.saldo) - Number(s.saldo_bloqueado || 0) : null,
+      // o "saldo" da API JA' e' o disponivel: o bloqueado (cheque) fica fora dele.
+      // Prova: Florestal 15/09 saldo 1.363,01 com 3.719,66 bloqueado e limite zero.
+      valor: s.saldo != null ? Number(s.saldo) : null,
       bloqueado: Number(s.saldo_bloqueado || 0), lido: s.consultado_em, erro: s.erro,
     } : null;
 
@@ -272,7 +274,7 @@ async function _dispRender(forcar) {
       card('Vendido hoje', G.vend, '#e6e6e6', 'pista + loja') +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px">' + P.map(_dispCardPosto).join('') + '</div>' +
-    '<p style="color:#556;font-size:0.72rem;margin-top:12px;max-width:1000px">Sicoob = saldo lido no banco menos o bloqueado. As contas marcadas <b>estimado</b> partem do último saldo informado e somam o movimento: ' +
+    '<p style="color:#556;font-size:0.72rem;margin-top:12px;max-width:1000px">Sicoob = saldo disponível lido no banco (o bloqueado, cheque a liberar, fica fora). As contas marcadas <b>estimado</b> partem do último saldo informado e somam o movimento: ' +
     'PagBank = vendas líquidas da maquininha (taxa real do posto) − Pix de mesma titularidade que chegaram ao Sicoob vindos dessa conta; cofre = depositado − creditado; ' +
     'dinheiro/Banco do Brasil = pista − cartão/Pix − prazo − depositado/transferido. Informe o saldo real de tempos em tempos para zerar a diferença. ' +
     '"Dinheiro e outros" do vendido hoje inclui frota e o que não passou na maquininha.</p>';
@@ -290,7 +292,7 @@ function _dispCardPosto(p) {
     '<div style="color:#6b7688;font-size:0.72rem;margin-bottom:6px">disponível agora · livre depois das contas <b style="color:' + (p.livre >= 0 ? '#4ade80' : '#f87171') + '">' + _biMoney(p.livre) + '</b></div>';
 
   if (p.sicoob && p.sicoob.valor != null) {
-    const det = 'real · lido no banco ' + _dispHora(p.sicoob.lido) + (p.sicoob.bloqueado ? ' · ' + _biMoney(p.sicoob.bloqueado) + ' bloqueado' : '') +
+    const det = 'real · lido no banco ' + _dispHora(p.sicoob.lido) + (p.sicoob.bloqueado ? ' · + ' + _biMoney(p.sicoob.bloqueado) + ' bloqueado (cheque a liberar, fora do total)' : '') +
       (p.sicoob.erro ? ' · <span style="color:#fbbf24">última leitura falhou</span>' : '');
     h += linha('🏦', 'Sicoob', _biMoney(p.sicoob.valor), '#e6e6e6', det);
   } else {
