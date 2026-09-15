@@ -403,6 +403,8 @@ function nfeSaidaCapturarCampos() {
   if (g('ns-saida'))  n.data_saida = g('ns-saida').value || null;
   if (g('ns-cfop'))   n.cfop_padrao = g('ns-cfop').value;
   if (g('ns-inf'))    n.inf_complementar = g('ns-inf').value;
+  if (g('ns-final'))  n.finalidade = g('ns-final').value;
+  if (g('ns-ref'))    n.chave_ref = g('ns-ref').value.replace(/\D/g, '');
   // transporte
   const frete = document.querySelector('input[name="ns-frete"]:checked');
   if (frete) n.mod_frete = frete.value;
@@ -461,6 +463,20 @@ function nfeSaidaAbaCapa(nota, somenteLeitura) {
         <div class="ns-fg">
           <label>Saída</label>
           <input id="ns-saida" type="date" value="${dSaida}" ${somenteLeitura?'disabled':''} />
+        </div>
+        <div class="ns-fg">
+          <label>Finalidade</label>
+          <select id="ns-final" ${somenteLeitura?'disabled':''}>
+            <option value="1" ${String(nota?.finalidade||'1')==='1'?'selected':''}>1 · Normal</option>
+            <option value="4" ${String(nota?.finalidade||'')==='4'?'selected':''}>4 · Devolução de compra</option>
+          </select>
+        </div>
+        <div class="ns-fg" style="grid-column:span 3">
+          <label>Chave da NF-e de origem (devolução)</label>
+          <div style="display:flex;gap:6px">
+            <input id="ns-ref" value="${nota?.chave_ref||''}" ${somenteLeitura?'disabled':''} placeholder="44 dígitos da nota de compra" style="flex:1" />
+            ${somenteLeitura?'':`<button class="ns-btn-linha" style="white-space:nowrap" onclick="nfeSaidaPuxarRef()">⤵ Puxar itens da nota</button>`}
+          </div>
         </div>
         <div class="ns-fg span2">
           <label>CFOP padrão da nota</label>
@@ -795,6 +811,107 @@ function nfeSaidaAddItem() {
   nfeSaidaRenderItens(false);
 }
 
+// quantidade editada na grade (ex.: devolução parcial): total = qtd × unitário
+function nfeSaidaQtdItem(i, v) {
+  const it = _saidaItens[i]; if (!it) return;
+  const q = Math.max(0, parseFloat(String(v).replace(',', '.')) || 0);
+  it.quantidade = q;
+  it.valor_total = Math.round(q * Number(it.valor_unitario || 0) * 100) / 100;
+  nfeSaidaRenderItens(false);
+}
+
+function _nsErroColuna(error) {
+  const m = String((error && error.message) || error || '');
+  return /chave_ref/.test(m) ? 'Falta rodar o SQL-NFE-SAIDA-DEVOLUCAO.sql no Supabase (coluna chave_ref).' : 'Erro: ' + m;
+}
+
+// XML da NF-e de origem (entrada importada ou manifestada) desta empresa
+async function _nsXmlRef(chave) {
+  const { data: ent } = await sb.from('oct_nfe_entrada').select('xml_completo').eq('empresa_id', _saidaEmpresaId).eq('chave_nfe', chave).limit(1);
+  let xml = ent && ent[0] && ent[0].xml_completo;
+  if (!xml) {
+    const { data: man } = await sb.from('oct_nfe_manifestadas').select('xml').eq('empresa_id', _saidaEmpresaId).eq('chave_nfe', chave).limit(1);
+    xml = man && man[0] && man[0].xml;
+  }
+  if (!xml) return null;
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  return doc.getElementsByTagName('infNFe').length ? doc : null;
+}
+function _nsTag(el, tag) { const x = el && el.getElementsByTagName(tag)[0]; return x ? x.textContent : ''; }
+function _nsEnder(el) {
+  if (!el) return null;
+  return { logradouro: _nsTag(el, 'xLgr'), numero: _nsTag(el, 'nro') || 'S/N', bairro: _nsTag(el, 'xBairro'),
+           c_mun: _nsTag(el, 'cMun'), municipio: _nsTag(el, 'xMun'), uf: _nsTag(el, 'UF'), cep: _nsTag(el, 'CEP') };
+}
+
+// DEVOLUÇÃO: lê a nota de compra pela chave e monta capa + itens a partir dela.
+// Os itens usam o PRODUTO do posto (casado pelo código ANP) com a quantidade,
+// o preço e a tributação da nota de origem; a quantidade pode ser ajustada na grade.
+async function nfeSaidaPuxarRef() {
+  nfeSaidaCapturarCampos();
+  const n = _saidaNotaAtual || {};
+  const chave = (n.chave_ref || '').replace(/\D/g, '');
+  if (chave.length !== 44) { nfeSaidaMsg('Informe os 44 dígitos da chave da nota de compra.', 'erro'); return; }
+  nfeSaidaMsg('Lendo a nota de origem...', 'info');
+  const doc = await _nsXmlRef(chave);
+  if (!doc) { nfeSaidaMsg('Nota não encontrada nas entradas/manifestadas deste posto.', 'erro'); return; }
+  const emitEl = doc.getElementsByTagName('emit')[0], destEl = doc.getElementsByTagName('dest')[0];
+  const cnpjEmp = String((_saidaEmpresa && _saidaEmpresa.cnpj) || '').replace(/\D/g, '');
+  const cnpjDestRef = _nsTag(destEl, 'CNPJ');
+  if (cnpjEmp && cnpjDestRef && cnpjEmp !== cnpjDestRef) {
+    nfeSaidaMsg(`Essa nota foi emitida para o CNPJ ${cnpjDestRef}, não para este posto (${cnpjEmp}). A devolução tem de sair do posto que recebeu a nota.`, 'erro');
+    return;
+  }
+  const cnpjForn = _nsTag(emitEl, 'CNPJ');
+  const forn = _saidaPessoas.find(p => String(p.documento || '').replace(/\D/g, '') === cnpjForn);
+  if (!forn) { nfeSaidaMsg(`Fornecedor ${_nsTag(emitEl, 'xNome')} (${cnpjForn}) não está cadastrado em Pessoas deste posto.`, 'erro'); return; }
+  const ufForn = _nsTag(emitEl, 'UF'), ufEmp = _nsTag(destEl, 'UF') || (_saidaEmpresa && _saidaEmpresa.uf) || 'MG';
+  const mesmaUF = ufForn === ufEmp;
+  const itens = [], faltam = [];
+  Array.from(doc.getElementsByTagName('det')).forEach(det => {
+    const prod = det.getElementsByTagName('prod')[0];
+    const anp = _nsTag(prod, 'cProdANP');
+    const cands = anp ? _saidaProdutos.filter(p => p.cod_anp === anp && p.ind_combustivel === 'S') : [];
+    const p = cands[0];
+    if (!p) { faltam.push(_nsTag(prod, 'xProd')); return; }
+    const icms = det.getElementsByTagName('ICMS')[0];
+    const cst = _nsTag(icms, 'CST') || p.cst_icms || '';
+    const adrem = parseFloat(_nsTag(icms, 'adRemICMSRet')) || Number(p.aliq_icms_ad_rem) || 0;
+    const q = parseFloat(_nsTag(prod, 'qCom')) || 0, vu = parseFloat(_nsTag(prod, 'vUnCom')) || 0;
+    const pbio = parseFloat(_nsTag(prod, 'pBio'));
+    itens.push({
+      produto_id: p.id, codigo: p.codigo, descricao: p.nome,
+      ncm: _nsTag(prod, 'NCM') || p.ncm, cest: _nsTag(prod, 'CEST') || p.cest,
+      cfop: mesmaUF ? '5661' : '6661', unidade: _nsTag(prod, 'uCom') || p.unidade || 'L',
+      quantidade: q, valor_unitario: vu, valor_total: Math.round(q * vu * 100) / 100,
+      cst_icms: cst, cod_anp: anp, desc_anp: _nsTag(prod, 'descANP') || p.desc_anp,
+      ind_combustivel: 'S', ind_monofasico: cst === '61' ? 'S' : (p.ind_monofasico || 'N'),
+      origem: _nsTag(icms, 'orig') || p.origem || '0', csosn: null,
+      aliq_icms: 0, aliq_icms_ad_rem: adrem,
+      cst_pis: _nsTag(det.getElementsByTagName('PIS')[0], 'CST') || p.cst_pis,
+      aliq_pis: 0,
+      cst_cofins: _nsTag(det.getElementsByTagName('COFINS')[0], 'CST') || p.cst_cofins,
+      aliq_cofins: 0,
+      perc_bio: isNaN(pbio) ? (Number(p.perc_bio) || 0) : pbio, pmpf: 0,
+      unidade_tributavel: _nsTag(prod, 'uTrib') || null,
+    });
+  });
+  if (faltam.length) { nfeSaidaMsg('Sem produto do posto com o mesmo código ANP para: ' + faltam.join(', '), 'erro'); return; }
+  const ide = doc.getElementsByTagName('ide')[0];
+  const nNF = _nsTag(ide, 'nNF'), serie = _nsTag(ide, 'serie');
+  const dEmi = (_nsTag(ide, 'dhEmi') || '').slice(0, 10).split('-').reverse().join('/');
+  n.finalidade = '4';
+  n.destinatario_id = forn.id;
+  n.natureza_op = 'DEVOLUCAO DE COMPRA DE COMBUSTIVEL';
+  n.cfop_padrao = mesmaUF ? '5661' : '6661';
+  n.inf_complementar = `Devolucao referente a NF-e ${nNF} serie ${serie} de ${dEmi}, chave ${chave}.`;
+  _saidaNotaAtual = n;
+  _saidaItens = itens;
+  _saidaAbaForm = 'itens';
+  nfeSaidaRenderForm(n);
+  nfeSaidaMsg(`✓ ${itens.length} item(ns) da NF ${nNF}. Ajuste a quantidade se a devolução for parcial e salve.`, 'ok');
+}
+
 function nfeSaidaRemItem(idx) {
   _saidaItens.splice(idx, 1);
   nfeSaidaRenderItens(false);
@@ -822,7 +939,7 @@ function nfeSaidaRenderItens(somenteLeitura) {
             <td>${it.descricao}${it.cod_anp?`<br><span style="font-size:0.66rem;color:#fbbf24">⛽ ANP ${it.cod_anp}</span>`:''}</td>
             <td>${somenteLeitura?(it.cfop||'—'):`<input value="${it.cfop||''}" style="width:60px;padding:3px 5px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem" onchange="_saidaItens[${i}].cfop=this.value" />`}</td>
             <td>${it.unidade}</td>
-            <td style="text-align:right">${fmt(it.quantidade)}</td>
+            <td style="text-align:right">${somenteLeitura?fmt(it.quantidade):`<input type="number" step="0.001" min="0" value="${it.quantidade}" style="width:84px;text-align:right;padding:3px 5px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem" onchange="nfeSaidaQtdItem(${i}, this.value)" />`}</td>
             <td style="text-align:right">${fmt(it.valor_unitario)}</td>
             <td style="text-align:right;font-weight:600">${fmt(it.valor_total)}</td>
             ${somenteLeitura?'':`<td><button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f44;padding:2px 7px" onclick="nfeSaidaRemItem(${i})">✕</button></td>`}
@@ -873,6 +990,9 @@ async function nfeSaidaSalvar() {
     data_emissao: n.data_emissao || new Date().toISOString(),
     data_saida: n.data_saida || null,
     inf_complementar: n.inf_complementar || null,
+    finalidade: String(n.finalidade || '1'),
+    // devolução e destinatário com IE: não é consumidor final
+    ind_final: (String(n.finalidade || '1') === '4' || (dest && dest.ie)) ? '0' : '1',
     destinatario_id: destId,
     dest_nome: dest?.nome, dest_documento: dest?.documento, dest_ie: dest?.ie, dest_email: dest?.email,
     mod_frete: n.mod_frete || '9',
@@ -884,15 +1004,22 @@ async function nfeSaidaSalvar() {
     atualizado_em: new Date().toISOString(),
   };
 
+  if (String(cab.finalidade) === '4') {
+    if (!/^\d{44}$/.test(n.chave_ref || '')) { nfeSaidaMsg('Devolução: informe a chave da NF-e de origem (44 dígitos).', 'erro'); return; }
+    cab.chave_ref = n.chave_ref;
+  } else if (n.chave_ref) {
+    cab.chave_ref = n.chave_ref;
+  }
+
   let nfeId = _saidaEditId;
   if (nfeId) {
     const { error } = await sb.from('oct_nfe_saida').update(cab).eq('id', nfeId);
-    if (error) { nfeSaidaMsg('Erro: ' + error.message, 'erro'); return; }
+    if (error) { nfeSaidaMsg(_nsErroColuna(error), 'erro'); return; }
     await sb.from('oct_nfe_saida_itens').delete().eq('nfe_saida_id', nfeId);
     try { await sb.from('oct_nfe_saida_cupons').delete().eq('nfe_saida_id', nfeId); } catch(e){}
   } else {
     const { data, error } = await sb.from('oct_nfe_saida').insert(cab).select().single();
-    if (error) { nfeSaidaMsg('Erro: ' + error.message, 'erro'); return; }
+    if (error) { nfeSaidaMsg(_nsErroColuna(error), 'erro'); return; }
     nfeId = data.id; _saidaEditId = nfeId;
   }
 
@@ -970,8 +1097,21 @@ async function nfeSaidaTransmitir() {
       aliq_pis: Number(it.aliq_pis) || 0, aliq_cofins: Number(it.aliq_cofins) || 0,
     }));
 
+    // devolução: endereços reais saem da nota de origem (a tela Empresa/Pessoas
+    // não tem número, bairro nem código IBGE; o emissor caía em "Dores do Indaiá")
+    const fin = String(n.finalidade || '1');
+    const refDoc = n.chave_ref ? await _nsXmlRef(n.chave_ref) : null;
+    if (fin === '4' && !refDoc) { nfeSaidaMsg('Devolução: nota de origem não encontrada pela chave — confira a chave e salve de novo.', 'erro'); return; }
+    const endEmp = refDoc ? _nsEnder(refDoc.getElementsByTagName('enderDest')[0]) : null;
+    const endDest = (refDoc && _nsTag(refDoc.getElementsByTagName('emit')[0], 'CNPJ') === String(dest.documento || '').replace(/\D/g, ''))
+      ? _nsEnder(refDoc.getElementsByTagName('enderEmit')[0]) : null;
+
     const nota = {
       numero: n.numero || Date.now() % 1000000,
+      finalidade: fin,
+      ind_final: (fin === '4' || dest.ie) ? '0' : '1',
+      refs: n.chave_ref ? [n.chave_ref] : [],
+      inf_complementar: n.inf_complementar || '',
       serie: n.serie || NS_SERIE_PADRAO,
       natureza_op: n.natureza_op || 'VENDA',
       id_lote: '1',
@@ -984,6 +1124,7 @@ async function nfeSaidaTransmitir() {
         numero: 'S/N', bairro: 'CENTRO',
         municipio: _saidaEmpresa.cidade || '', c_mun: _saidaEmpresa.c_mun || '3123205',
         uf: _saidaEmpresa.uf || 'MG', cep: (_saidaEmpresa.cep || '').replace(/\D/g, ''),
+        ...(endEmp || {}),
         crt: _saidaEmpresa.regime_tributario === 'simples' ? '1' : '3',
       },
       destinatario: {
@@ -994,6 +1135,7 @@ async function nfeSaidaTransmitir() {
         ie: (dest.ie || '').replace(/\D/g, '') || null,
         ind_ie: dest.ie ? '1' : '9',
         uf: dest.uf || 'MG',
+        ...(endDest || {}),
       },
       itens,
     };
