@@ -100,6 +100,8 @@ async function moduloBi() {
 }
 
 async function _biRender() {
+  // aba 💰 Disponível (bi_disponivel.js): mesma janela e o mesmo timer
+  if ((window._biAba || 'geral') === 'disponivel' && typeof _dispRender === 'function') return _dispRender();
   const hoje = _biHojeLocal();
   const mes = hoje.slice(0, 7);
   const per = _biPerDatas();
@@ -376,6 +378,7 @@ async function _biRender() {
       '<div class="og-titulo"><span>📈 B.I — Visão do Grupo</span>' +
         '<span style="font-size:0.72rem;color:#667;font-weight:400;margin-left:12px">atualizado ' + agora + ' · renova a cada 60s</span>' +
         '<button class="og-fechar" title="Fechar" onclick="navegarPara(\'empresa\')">✕</button></div>' +
+      (typeof _biAbas === 'function' ? _biAbas() : '') +
       '<div style="padding:14px 16px">' +
         _biToolbarPer(per) +
         _biCardGrupo(g) +
