@@ -1095,6 +1095,9 @@ async function nfeSaidaTransmitir() {
       b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
     }
 
+    // nota de origem (devolução): lida ANTES dos itens, que copiam dela o origComb
+    const refDoc = n.chave_ref ? await _nsXmlRef(n.chave_ref) : null;
+
     // monta itens no formato do /emitir
     const itens = _saidaItens.map((it, i) => ({
       nItem: i + 1,
@@ -1124,7 +1127,6 @@ async function nfeSaidaTransmitir() {
     // devolução: endereços reais saem da nota de origem (a tela Empresa/Pessoas
     // não tem número, bairro nem código IBGE; o emissor caía em "Dores do Indaiá")
     const fin = String(n.finalidade || '1');
-    const refDoc = n.chave_ref ? await _nsXmlRef(n.chave_ref) : null;
     if (fin === '4' && !refDoc) { nfeSaidaMsg('Devolução: nota de origem não encontrada pela chave — confira a chave e salve de novo.', 'erro'); return; }
     const endEmp = refDoc ? _nsEnder(refDoc.getElementsByTagName('enderDest')[0]) : null;
     const endDest = (refDoc && _nsTag(refDoc.getElementsByTagName('emit')[0], 'CNPJ') === String(dest.documento || '').replace(/\D/g, ''))
