@@ -837,6 +837,17 @@ async function _nsXmlRef(chave) {
   const doc = new DOMParser().parseFromString(xml, 'text/xml');
   return doc.getElementsByTagName('infNFe').length ? doc : null;
 }
+// UF de origem do combustível (origComb, obrigatório na NF-e — rejeição 909):
+// na devolução repete os percentuais do mesmo produto na nota de origem
+function _nsOrigComb(refDoc, anp) {
+  if (!refDoc || !anp) return null;
+  const det = Array.from(refDoc.getElementsByTagName('det')).find(d => _nsTag(d, 'cProdANP') === anp);
+  if (!det) return null;
+  const lista = Array.from(det.getElementsByTagName('origComb')).map(o => ({
+    indImport: _nsTag(o, 'indImport') || '0', cUFOrig: _nsTag(o, 'cUFOrig'), pOrig: parseFloat(_nsTag(o, 'pOrig')) || 0,
+  })).filter(o => o.cUFOrig);
+  return lista.length ? lista : null;
+}
 function _nsTag(el, tag) { const x = el && el.getElementsByTagName(tag)[0]; return x ? x.textContent : ''; }
 function _nsEnder(el) {
   if (!el) return null;
@@ -1107,6 +1118,7 @@ async function nfeSaidaTransmitir() {
       aliq_icms_ad_rem: Number(it.aliq_icms_ad_rem) || 0,
       cst_pis: it.cst_pis || '04', cst_cofins: it.cst_cofins || '04',
       aliq_pis: Number(it.aliq_pis) || 0, aliq_cofins: Number(it.aliq_cofins) || 0,
+      orig_comb: _nsOrigComb(refDoc, it.cod_anp),
     }));
 
     // devolução: endereços reais saem da nota de origem (a tela Empresa/Pessoas
