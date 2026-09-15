@@ -2290,7 +2290,52 @@ function _fatStatusCel(f, bol) {
   return sel(temNf, "NF", "NF-e anexada à fatura") +
          sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
          sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
-         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + cob + erro;
+         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + _fatBolSituacao(f, bol) + cob + erro;
+}
+
+// PAGO OU NAO: a situacao que o BANCO confirmou (consulta do Sicoob de hora em
+// hora; boleto pago vira recebimento e a fatura fecha sozinha -- gatilho do
+// SQL-BOLETO-BAIXA-FATURA). Vencido conta a partir do dia util: vencimento em
+// sabado/domingo/feriado so' vence no proximo dia util, sem encargo.
+function _fatBolSituacao(f, bol) {
+  if (!bol || !bol.situacao) return "";
+  const chip = (txt, fundo, cor, tit) => `<div title="${_fatEsc(tit || "")}" style="display:inline-block;margin-top:3px;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:${fundo};color:${cor}">${txt}</div>`;
+  const conf = bol.consultado_em ? "Conferido no banco em " + new Date(bol.consultado_em).toLocaleString("pt-BR") : "Ainda não conferido no banco";
+  const nn = "Boleto " + (bol.nosso_numero || "") + ". ";
+  const dias = n => n + " dia" + (Number(n) === 1 ? "" : "s");
+  if (bol.status === "liquidado") {
+    const dif = bol.valor_pago != null ? Number(bol.valor_pago) - Number(bol.valor) : 0;
+    const extra = dif > 0.009 ? " · +" + _fatMoney(dif) + " juros" : "";
+    if (bol.situacao === "PAGO EM DIA") return chip("✔ Pago em dia " + _fatData(bol.pago_em) + extra, "#14532d", "#86efac", nn + conf);
+    if (bol.situacao === "PAGO COM ATRASO") return chip("✔ Pago com " + dias(bol.dias_atraso) + " de atraso · " + _fatData(bol.pago_em) + extra, "#422006", "#fcd34d", nn + conf);
+    return chip("✔ Pago · crédito " + _fatData(bol.credito_em), "#14532d", "#86efac", nn + "Data do pagamento ainda não confirmada pelo banco (só o crédito no extrato). " + conf);
+  }
+  if (bol.status === "cancelado") return chip("Boleto cancelado", "#1f2430", "#8b93a3", nn + conf);
+  if (bol.status !== "registrado") return "";
+  if (f.status === "liquidada") {
+    return chip("⚠ Boleto " + _fatEsc(bol.nosso_numero || "") + " ainda aberto no banco", "#422006", "#fcd34d",
+                "A fatura já foi recebida por outro meio, mas o boleto segue em aberto no Sicoob: peça a baixa para o cliente não pagar em dobro. " + conf);
+  }
+  if (bol.situacao === "VENCIDO") return chip("✖ Vencido há " + dias(bol.dias_vencido), "#450a0a", "#fca5a5", nn + "Venceu em " + _fatData(bol.vence_ate) + ". " + conf);
+  if (bol.situacao === "VENCE HOJE") return chip("⏰ Vence hoje", "#422006", "#fcd34d", nn + conf);
+  return chip("Vence " + _fatData(bol.vence_ate || bol.vencimento), "#172033", "#93c5fd", nn + conf);
+}
+
+function _fatResumoBoletos(faturas, bolPorFat, status) {
+  if (status !== "aberta") return "";
+  const g = { VENCIDO: [0, 0], "VENCE HOJE": [0, 0], "A VENCER": [0, 0] };
+  let semBol = 0;
+  faturas.forEach(f => {
+    const b = bolPorFat[f.id];
+    if (!b || b.status !== "registrado" || !g[b.situacao]) { if (!b || b.status !== "liquidado") semBol++; return; }
+    g[b.situacao][0]++; g[b.situacao][1] += Number(b.valor || 0);
+  });
+  const item = (rot, [n, v], cor) => n ? `<span style="color:${cor};font-weight:700">${n} ${rot}</span> <span style="color:#9aa">(${_fatBRL(v)})</span>` : "";
+  const partes = [item("vencido(s)", g.VENCIDO, "#fca5a5"), item("vence(m) hoje", g["VENCE HOJE"], "#fcd34d"),
+                  item("a vencer", g["A VENCER"], "#93c5fd")].filter(Boolean);
+  if (!partes.length) return "";
+  return `<div style="padding:8px 14px;font-size:12px;border-bottom:1px solid #2a2d3e;background:#101420">🏦 Boletos em aberto: ${partes.join(" · ")}
+    <span style="color:#6b7688;font-size:11px"> — situação conferida no Sicoob de hora em hora; boleto pago baixa a fatura sozinho</span></div>`;
 }
 
 // o numero grande e' o que se cobra; o bruto so' aparece quando ha' abatimento,
@@ -2332,15 +2377,34 @@ async function fatListarFaturas(status) {
   // a selecao vale para a lista que esta' na tela: ids de outra aba viram lixo
   const idsAqui = new Set(faturas.map(x => x.id));
   [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
-  // um boleto por fatura numa consulta so' -- 20 faturas nao podem virar 20 idas
+  // um boleto por fatura numa consulta so' -- 20 faturas nao podem virar 20 idas.
+  // Le a VIEW de situacao (pago em dia / atraso / vencido), que o banco calcula
+  // com a data de hoje. Fatura com mais de um boleto (o 2o emitido para corrigir
+  // valor, ex. Bread Life 13) mostra o que interessa: pago > registrado > resto.
   const bolPorFat = {};
   if (faturas.length) {
+    // a view foi criada antes de consultado_em existir (b.* congela as colunas):
+    // o horario da ultima conferencia no banco vem da tabela
+    const campos = "fatura_id,nosso_numero,status,valor,valor_pago,vencimento,vence_ate,pago_em,credito_em,situacao,dias_vencido,dias_atraso";
     try {
-      const r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status")
-        .in("fatura_id", faturas.map(x => x.id));
-      (r.data || []).forEach(b => { bolPorFat[b.fatura_id] = b; });
+      const ids = faturas.map(x => x.id);
+      let r = await sb.from("oct_boletos_situacao").select(campos).in("fatura_id", ids);
+      if (r.error) r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status").in("fatura_id", ids);
+      else {
+        const c = await sb.from("oct_boletos").select("nosso_numero,consultado_em").in("fatura_id", ids);
+        const quando = {};
+        (c.data || []).forEach(x => { quando[x.nosso_numero] = x.consultado_em; });
+        (r.data || []).forEach(x => { x.consultado_em = quando[x.nosso_numero] || null; });
+      }
+      const peso = { liquidado: 0, registrado: 1, pendente: 2, erro: 3, cancelado: 4 };
+      (r.data || []).forEach(b => {
+        const atual = bolPorFat[b.fatura_id];
+        const pb = peso[b.status] ?? 5, pa = atual ? (peso[atual.status] ?? 5) : 99;
+        if (!atual || pb < pa || (pb === pa && String(b.vencimento || "") > String(atual.vencimento || ""))) bolPorFat[b.fatura_id] = b;
+      });
     } catch (e) { /* tabela de boletos pode nao existir */ }
   }
+  window._fatBolPorFat = bolPorFat;
   const linhas = faturas.map(fatr => `<tr>
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
@@ -2366,6 +2430,7 @@ async function fatListarFaturas(status) {
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
     ${_fatBarraLote(faturas, status)}
+    ${_fatResumoBoletos(faturas, bolPorFat, status)}
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
