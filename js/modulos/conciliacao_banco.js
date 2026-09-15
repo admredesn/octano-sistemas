@@ -272,7 +272,9 @@ async function cbAprovar(movId, contaId, dif) {
     tarifa: Number(enc.tarifa.toFixed(2)),
     desconto: dif < 0 ? Number((-dif).toFixed(2)) : 0,
     forma_pagamento: 'Sicoob',
-    observacoes: `conciliação aprovada na tela — pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id}) ref. ${c.descricao}${rot}`,
+    // ACRESCENTA: apagar a observação tirava a chave da NF gravada pela manifestada
+    // e o robô de contas a pagar criava o título de novo (NF 363331 com 3 títulos, 15/09/2026)
+    observacoes: _cbObsMais(c.observacoes, `conciliação aprovada na tela — pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id}) ref. ${c.descricao}${rot}`),
   }, ['status', 'aberto']);
   if (error) { alert('Erro: ' + error.message); return; }
   await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: contaId, dif_encargos: dif || null }).eq('id', movId);
@@ -281,14 +283,20 @@ async function cbAprovar(movId, contaId, dif) {
   _cbRender();
 }
 
+function _cbObsMais(antiga, nova) {
+  const a = String(antiga || '').trim();
+  return a ? a + ' | ' + nova : nova;
+}
+
 async function cbDesfazer(movId) {
   const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
   if (!mv || !mv.conta_pagar_id) return;
+  const { data: cAnt } = await sb.from('oct_contas_pagar').select('observacoes').eq('id', mv.conta_pagar_id).single();
   if (!confirm('Desfazer esta baixa? O título volta a ABERTO e o eventual título de juros é removido.')) return;
   await _cbUpdConta(mv.conta_pagar_id, {
     status: 'aberto', data_pagamento: null, valor_pago: null, forma_pagamento: null,
     juros: 0, tarifa: 0, desconto: 0,
-    observacoes: 'baixa desfeita na tela de conciliação',
+    observacoes: _cbObsMais(cAnt && cAnt.observacoes, 'baixa desfeita na tela de conciliação'),
   });
   await sb.from('oct_contas_pagar').delete().eq('categoria', 'juros-multa').like('observacoes', `%${movId}%`);
   await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null, dif_encargos: null }).eq('id', movId);
