@@ -1061,8 +1061,12 @@ async function nfeSaidaTransmitir() {
   if (!_saidaEditId) { nfeSaidaMsg('Salve o rascunho antes de transmitir.', 'erro'); return; }
   if (!_saidaItens.length) { nfeSaidaMsg('Adicione ao menos um item.', 'erro'); return; }
   if (!_saidaEmpresa?.cert_path) { nfeSaidaMsg('Certificado não configurado (tela Empresa).', 'erro'); return; }
-  const senha = (typeof getCertSenha === 'function') ? getCertSenha() : null;
-  if (!senha) { nfeSaidaMsg('Senha do certificado não encontrada (tela Empresa).', 'erro'); return; }
+  // 15/09/2026: a senha guardada no navegador só existe no PC que cadastrou o
+  // certificado. Com a senha cifrada no servidor (cadastrada pela tela Empresa),
+  // emite por /emitir-empresa — igual à NFC-e — e o navegador não vê cert nem senha.
+  const senhaServidor = !!_saidaEmpresa.cert_senha_cifrada;
+  const senha = senhaServidor ? null : ((typeof getCertSenha === 'function') ? getCertSenha() : null);
+  if (!senhaServidor && !senha) { nfeSaidaMsg('Senha do certificado não cadastrada (tela Empresa › certificado).', 'erro'); return; }
 
   const n = _saidaNotaAtual || {};
   const dest = _saidaPessoas.find(p => p.id === n.destinatario_id);
@@ -1072,10 +1076,13 @@ async function nfeSaidaTransmitir() {
   nfeSaidaMsg('📡 Transmitindo à SEFAZ...', 'info');
 
   try {
-    // certificado do app (mesmo padrao da manifestacao)
-    const { data: cb } = await sb.storage.from('octano-certs').download(_saidaEmpresa.cert_path);
-    const buf = await cb.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    // certificado do app (mesmo padrao da manifestacao) — só no modo sem senha no servidor
+    let b64 = null;
+    if (!senhaServidor) {
+      const { data: cb } = await sb.storage.from('octano-certs').download(_saidaEmpresa.cert_path);
+      const buf = await cb.arrayBuffer();
+      b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    }
 
     // monta itens no formato do /emitir
     const itens = _saidaItens.map((it, i) => ({
@@ -1141,10 +1148,15 @@ async function nfeSaidaTransmitir() {
     };
 
     const cnpj = nota.emitente.cnpj;
-    const resp = await fetch(`${SEFAZ_URL}/emitir`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cnpj, cert_base64: b64, cert_senha: senha, ambiente, nota }),
-    });
+    const resp = senhaServidor
+      ? await fetch(`${SEFAZ_URL}/emitir-empresa`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ empresa_id: _saidaEmpresaId, ambiente, nota }),
+        })
+      : await fetch(`${SEFAZ_URL}/emitir`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cnpj, cert_base64: b64, cert_senha: senha, ambiente, nota }),
+        });
     const r = await resp.json();
 
     if (r.ok) {
