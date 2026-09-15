@@ -1092,7 +1092,12 @@ async function nfeSaidaTransmitir() {
       cEAN: 'SEM GTIN', cEANTrib: 'SEM GTIN',
       ncm: it.ncm, cest: it.cest || null, cfop: it.cfop,
       uCom: it.unidade || 'LT', uTrib: it.unidade_tributavel || it.unidade || 'LT',
-      qCom: Number(it.quantidade), vUnCom: Number(it.valor_unitario), vProd: Number(it.valor_total),
+      // o banco guarda o unitário com 4 casas (5,9764766667 → 5,9765): 1.650 × 5,9765
+      // não dá o total e a SEFAZ rejeita (629). Nesse caso o unitário sai do total.
+      qCom: Number(it.quantidade),
+      vUnCom: (Number(it.quantidade) > 0 && Math.abs(Number(it.quantidade) * Number(it.valor_unitario) - Number(it.valor_total)) > 0.009)
+        ? Number(it.valor_total) / Number(it.quantidade) : Number(it.valor_unitario),
+      vProd: Number(it.valor_total),
       ind_combustivel: it.ind_combustivel || 'N',
       ind_monofasico: it.ind_monofasico || 'N',
       cod_anp: it.cod_anp || null, desc_anp: it.desc_anp || null,
