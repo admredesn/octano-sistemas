@@ -1,333 +1,633 @@
 // ============================================================
-// CONCILIAÇÃO BANCÁRIA (Sicoob) — extrato × contas a pagar
+// CONCILIAÇÃO BANCÁRIA — livro financeiro por conta × espelho do banco
 // ------------------------------------------------------------
-// O extrato entra sozinho (gateway/sync); o conciliador 6/6h baixa o que é
-// inequívoco. Esta tela mostra o resultado e resolve o resto:
-//   ✓ Conciliados  — movimento ligado ao título (ref. NF, encargos separados)
-//   ？ Sugestões    — pares prováveis para APROVAR com um clique
-//   ○ Sem par      — débitos p/ vincular manualmente a um título
-//   ↧ Créditos     — entradas (Pix recebidos, transferências...)
-// Regras espelham o conciliador: exato · juros≤12% (título vencido) ·
-// desconto≤5% · débito nunca antes da emissão · transferência interna não casa.
-// Juros/multa aprovado aqui também vira título pago em 5.1.02.01.0002.
-// Auto-atualização a cada 60s (pausa com modal aberto).
+// Pedido do Ronan (15/09/2026): a tela serve para COMPROVAR a movimentação
+// financeira do posto. Por conta (Sicoob, PagBank, Caixa/Cofre, BB):
+//   esquerda  LIVRO do posto (oct_fin_lancamentos) com saldo corrido —
+//             navegar, alterar, excluir, lançar (despesa/receita, saque,
+//             depósito, transferência), conciliar
+//   direita   ESPELHO do extrato (oct_banco_movimentos), que não se perde
+// Conciliar = ligar lançamento(s) do livro à linha do banco que os comprova.
+// O livro recebe sozinho (oct_fin_sincronizar) as contas pagas e os títulos
+// recebidos; o resto se lança aqui, de preferência a partir da linha do banco.
+// Etapa 2: cada Pix e cada cartão das vendas entram detalhados.
 // ============================================================
 
-const _CB_REFRESH_MS = 60000;
+const CB_TARIFA_BOLETO = 3.72;   // tarifa do Sicoob por boleto liquidado
+const _CB_INICIO = '2026-07-01'; // o livro começa aqui (decisão do Ronan)
+const _CB_TIPOS = {
+  despesa_financeira: { rot: 'Despesa financeira', nat: 'D' },
+  receita_financeira: { rot: 'Receita financeira', nat: 'C' },
+  despesa_adm:        { rot: 'Despesa administrativa', nat: 'D' },
+  receita_adm:        { rot: 'Receita administrativa', nat: 'C' },
+  pagamento_titulo:   { rot: 'Pagamento de título', nat: 'D' },
+  recebimento_titulo: { rot: 'Recebimento de título', nat: 'C' },
+  transferencia:      { rot: 'Transferência entre contas', nat: null },
+  saque:              { rot: 'Saque (banco → caixa)', nat: null },
+  deposito:           { rot: 'Depósito (caixa → banco)', nat: null },
+  ajuste:             { rot: 'Ajuste', nat: null },
+};
 
-function _cbMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }); }
-function _cbDt(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '—'; }
+const _cb = { contas: [], contaId: null, lanc: [], movs: [], saldoAntes: 0, selL: new Set(), selM: null,
+              filtro: { status: 'todos', nat: 'todos', busca: '' }, sincronizado: {} };
+
+function _cbMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _cbNum(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _cbDt(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—'; }
 function _cbEsc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function _cbInterno(m) { return ((m.info || '') + (m.descricao || '')).includes('FAV.: SN '); }
+function _cbIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function _cbInfo(m) { return String(m.info || '').replace(/\|@/g, ' · ').replace(/\s+/g, ' ').trim(); }
+function _cbConta() { return _cb.contas.find(c => c.id === _cb.contaId) || null; }
+function _cbSinal(l) { return (l.natureza === 'C' ? 1 : -1) * Number(l.valor || 0); }
+function _cbSinalMov(m) { return (m.tipo === 'debito' ? -1 : 1) * Number(m.valor || 0); }
+
+// PostgREST devolve no máximo 1000 linhas: pagina com ordem estável
+async function _cbTudo(montar) {
+  const out = [];
+  for (let off = 0; off < 200000; off += 1000) {
+    const { data, error } = await montar().range(off, off + 999);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
 
 async function moduloConcBanco() {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando conciliação...</p>';
-  try { await _cbRender(); }
+  try { await _cbCarregar(true); }
   catch (e) {
-    conteudo.innerHTML = '<div style="padding:24px;color:#f44">Erro: ' + (e.message || e) +
+    const falta = /oct_fin_/.test(String(e.message || e));
+    conteudo.innerHTML = '<div style="padding:24px;color:#f87171">' +
+      (falta ? 'Falta rodar o <b>SQL-LIVRO-FINANCEIRO.sql</b> no Supabase.' : 'Erro: ' + _cbEsc(e.message || e)) +
       ' <button onclick="moduloConcBanco()" style="margin-left:10px;padding:6px 14px;border-radius:6px;border:none;background:#f97316;color:#fff;cursor:pointer">Tentar de novo</button></div>';
-  }
-  if (!window._cbTimer) {
-    window._cbTimer = setInterval(() => {
-      try {
-        if (!document.getElementById('cb-raiz')) return;
-        if (document.getElementById('cb-modal')) return;   // não atrapalha vínculo manual
-        _cbRender();
-      } catch (e) {}
-    }, _CB_REFRESH_MS);
   }
 }
 
 function _cbPeriodo() {
   const p = window._cbPer || {};
   const hoje = new Date();
-  const iso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  return { ini: p.ini || iso(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)), fim: p.fim || iso(hoje) };
+  return { ini: p.ini || _cbIso(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), fim: p.fim || _cbIso(hoje) };
 }
-function cbSetPeriodo() {
-  window._cbPer = { ini: document.getElementById('cb-ini').value, fim: document.getElementById('cb-fim').value };
+
+// ---------- dados ----------
+async function _cbCarregar(sincronizar) {
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  if (!eid) { document.getElementById('conteudo').innerHTML = '<p style="color:#f87171;padding:20px">Selecione a empresa.</p>'; return; }
+  if (_cb.eid !== eid) { _cb.eid = eid; _cb.contaId = null; _cb.selL.clear(); _cb.selM = null; }
+
+  const { data: contas, error: eC } = await sb.from('oct_fin_contas').select('*').eq('empresa_id', eid).eq('ativo', true).order('ordem');
+  if (eC) throw eC;
+  _cb.contas = contas || [];
+  if (!_cb.contas.length) {
+    document.getElementById('conteudo').innerHTML = '<p style="color:#fbbf24;padding:20px">Este posto ainda não tem contas cadastradas (SQL-LIVRO-FINANCEIRO.sql).</p>';
+    return;
+  }
+  if (!_cb.contaId || !_cbConta()) _cb.contaId = _cb.contas[0].id;
+
+  // traz para o livro o que o sistema já sabe (1× por abertura, ou no ↻)
+  if (sincronizar || !_cb.sincronizado[eid]) {
+    const { error } = await sb.rpc('oct_fin_sincronizar', { p_empresa: eid, p_desde: _CB_INICIO });
+    if (error) console.warn('oct_fin_sincronizar:', error.message);
+    _cb.sincronizado[eid] = Date.now();
+  }
+
+  const conta = _cbConta();
+  const per = _cbPeriodo();
+  const desdeSaldo = conta.saldo_inicial_em || _CB_INICIO;
+  const [lanc, movs] = await Promise.all([
+    _cbTudo(() => sb.from('oct_fin_lancamentos').select('*').eq('conta_id', conta.id).eq('excluido', false)
+      .gte('data', desdeSaldo).lte('data', per.fim).order('data').order('criado_em').order('id')),
+    conta.extrato_banco
+      ? _cbTudo(() => sb.from('oct_banco_movimentos').select('*').eq('empresa_id', eid).eq('banco', conta.extrato_banco)
+          .gte('data', per.ini).lte('data', per.fim).order('data').order('id'))
+      : Promise.resolve([]),
+  ]);
+  // cheque bloqueado não é movimento (o crédito vem na liberação) — fora do espelho
+  _cb.movs = movs.filter(m => !/^DEP\.CHEQUE BLOQ/i.test(m.descricao || ''));
+  _cb.saldoAntes = Number(conta.saldo_inicial || 0) + lanc.filter(l => l.data < per.ini).reduce((s, l) => s + _cbSinal(l), 0);
+  _cb.lanc = lanc.filter(l => l.data >= per.ini);
+
+  // saldo do banco (Sicoob, gateway 10/10 min)
+  _cb.saldoBanco = null;
+  if (conta.extrato_banco === 'sicoob') {
+    const { data: s } = await sb.from('oct_banco_saldos').select('saldo,consultado_em').eq('empresa_id', eid).maybeSingle();
+    _cb.saldoBanco = s || null;
+  }
   _cbRender();
 }
 
-async function _cbRender() {
-  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
-  if (!eid) { document.getElementById('conteudo').innerHTML = '<p style="color:#f44;padding:20px">Selecione a empresa.</p>'; return; }
+// sugestão: lançamento sem comprovante × linha do banco livre, mesmo valor e sinal, até 3 dias
+function _cbSugestoes() {
+  const usados = new Set(_cb.lanc.filter(l => l.banco_mov_id).map(l => l.banco_mov_id));
+  const livres = _cb.movs.filter(m => !usados.has(m.id) && !m.conciliado);
+  const sug = {};
+  const dias = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
+  _cb.lanc.filter(l => !l.conciliado).forEach(l => {
+    const c = livres.filter(m => Math.abs(_cbSinalMov(m) - _cbSinal(l)) < 0.005 && dias(m.data, l.data) <= 3);
+    if (c.length === 1) sug[l.id] = c[0];
+  });
+  // a mesma linha do banco não pode ser sugerida para dois lançamentos
+  const cont = {};
+  Object.values(sug).forEach(m => { cont[m.id] = (cont[m.id] || 0) + 1; });
+  Object.keys(sug).forEach(k => { if (cont[sug[k].id] > 1) delete sug[k]; });
+  return sug;
+}
+
+// ---------- tela ----------
+function _cbRender() {
+  const raiz = document.getElementById('conteudo');
+  if (!raiz) return;
+  const conta = _cbConta();
   const per = _cbPeriodo();
-  const [mR, cR, pgR, jR] = await Promise.all([
-    sb.from('oct_banco_movimentos').select('*').eq('empresa_id', eid)
-      .gte('data', per.ini).lte('data', per.fim).order('data', { ascending: false }),
-    sb.from('oct_contas_pagar').select('id,descricao,valor,vencimento,competencia,status,categoria')
-      .eq('empresa_id', eid).eq('status', 'aberto').order('vencimento'),
-    sb.from('oct_contas_pagar').select('id,descricao,valor,valor_pago,vencimento,data_pagamento,status,categoria')
-      .eq('empresa_id', eid).eq('status', 'pago')
-      .gte('data_pagamento', per.ini).lte('data_pagamento', per.fim).order('data_pagamento', { ascending: false }),
-    sb.from('oct_plano_contas').select('id').eq('empresa_id', eid).eq('codigo', '5.1.02.01.0002').eq('ativo', true),
-  ]);
-  if (mR.error) throw new Error(mR.error.message + ' — rode o SQL-SICOOB-EXTRATO.sql');
-  const movs = mR.data || [], abertas = cR.data || [], pagas = pgR.data || [];
-  window._cbPlanoJuros = (jR.data && jR.data[0] && jR.data[0].id) || null;
-  window._cbAbertas = abertas;
+  const f = _cb.filtro;
+  const sug = _cbSugestoes();
+  const movPorId = {}; _cb.movs.forEach(m => { movPorId[m.id] = m; });
+  const lancPorMov = {}; _cb.lanc.forEach(l => { if (l.banco_mov_id) (lancPorMov[l.banco_mov_id] = lancPorMov[l.banco_mov_id] || []).push(l); });
 
-  // títulos vinculados aos movimentos conciliados (p/ mostrar a referência)
-  const ids = [...new Set(movs.filter(m => m.conta_pagar_id).map(m => m.conta_pagar_id))];
-  let vinculadas = {};
-  if (ids.length) {
-    const { data } = await sb.from('oct_contas_pagar').select('id,descricao,valor,vencimento').in('id', ids);
-    (data || []).forEach(c => vinculadas[c.id] = c);
-  }
-
-  const deb = movs.filter(m => m.tipo === 'debito');
-  const cred = movs.filter(m => m.tipo === 'credito');
-  const conciliados = deb.filter(m => m.conciliado);
-  const pendentes = deb.filter(m => !m.conciliado);
-
-  // sugestões: mesmas regras do conciliador automático (mas sempre com aprovação)
-  const usadas = new Set();
-  const sugestoes = [];
-  pendentes.forEach(m => {
-    if (_cbInterno(m)) return;
-    const vm = Number(m.valor);
-    const cands = abertas.filter(c => !usadas.has(c.id) && m.data >= (c.competencia || '0000-00-00'));
-    const exato = cands.filter(c => Math.abs(Number(c.valor) - vm) < 0.005);
-    let alvo = null, tipo = '', dif = 0;
-    if (exato.length === 1) { alvo = exato[0]; tipo = 'exato'; }
-    if (!alvo) {
-      const juros = cands.filter(c => c.vencimento <= m.data && vm - Number(c.valor) > 0 && vm - Number(c.valor) <= Math.max(0.10, Number(c.valor) * 0.12));
-      if (juros.length === 1) { alvo = juros[0]; tipo = 'juros'; dif = Math.round((vm - Number(alvo.valor)) * 100) / 100; }
-    }
-    if (!alvo) {
-      const desc = cands.filter(c => Number(c.valor) - vm > 0 && Number(c.valor) - vm <= Number(c.valor) * 0.05);
-      if (desc.length === 1) { alvo = desc[0]; tipo = 'desconto'; dif = Math.round((vm - Number(alvo.valor)) * 100) / 100; }
-    }
-    if (alvo) { usadas.add(alvo.id); sugestoes.push({ m, c: alvo, tipo, dif }); }
+  // saldo corrido sobre TODOS os lançamentos do período; filtro só esconde
+  let saldo = _cb.saldoAntes, cred = 0, deb = 0, conc = 0, naoConc = 0;
+  const linhas = _cb.lanc.map((l, i) => {
+    saldo += _cbSinal(l);
+    if (l.natureza === 'C') cred += Number(l.valor); else deb += Number(l.valor);
+    if (l.conciliado) conc += _cbSinal(l); else naoConc += _cbSinal(l);
+    return { l, saldo, seq: i + 1 };
   });
-  const sugeridos = new Set(sugestoes.map(s => s.m.id));
-  const semPar = pendentes.filter(m => !sugeridos.has(m.id));
+  const busca = f.busca.toLowerCase();
+  const vis = linhas.filter(({ l }) =>
+    (f.status === 'todos' || (f.status === 'conc' ? l.conciliado : !l.conciliado)) &&
+    (f.nat === 'todos' || l.natureza === f.nat) &&
+    (!busca || [l.pessoa, l.descricao, l.detalhe, l.documento, _cbNum(l.valor)].join(' ').toLowerCase().includes(busca)));
 
-  const totJuros = conciliados.reduce((s, m) => s + Math.max(0, Number(m.dif_encargos || 0)), 0);
-  const sugPorConta = {};
-  sugestoes.forEach(s => sugPorConta[s.c.id] = s);
-  const movPorConta = {};
-  conciliados.forEach(m => movPorConta[m.conta_pagar_id] = m);
+  const tipoRot = t => (_CB_TIPOS[t] && _CB_TIPOS[t].rot) || t || '';
+  const trL = vis.map(({ l, saldo: s, seq }) => {
+    const sel = _cb.selL.has(l.id);
+    const sg = sug[l.id];
+    const bg = sel ? '#1e3a5f' : l.conciliado ? '#0f1f17' : sg ? '#2a2310' : 'transparent';
+    return `<tr data-id="${l.id}" style="background:${bg};cursor:pointer" onclick="cbSelLanc('${l.id}', event)" ondblclick="cbEditar('${l.id}')">
+      <td class="cbl-td"><input type="checkbox" ${sel ? 'checked' : ''} onclick="event.stopPropagation();cbSelLanc('${l.id}', event, true)"></td>
+      <td class="cbl-td cbl-mut">${seq}</td>
+      <td class="cbl-td" title="${_cbEsc(l.pessoa)}">${_cbEsc(l.pessoa || '')}</td>
+      <td class="cbl-td cbl-mut" title="${_cbEsc(tipoRot(l.tipo) + (l.detalhe ? ' · ' + l.detalhe : ''))}">${_cbEsc(tipoRot(l.tipo))}${l.detalhe ? '<br><span style="font-size:0.66rem">' + _cbEsc(l.detalhe) + '</span>' : ''}</td>
+      <td class="cbl-td" title="${_cbEsc(l.descricao)}">${_cbEsc(l.descricao || '')}${l.origem !== 'manual' ? ' <span class="cbl-tag">auto</span>' : ''}${l.editado ? ' <span class="cbl-tag">editado</span>' : ''}</td>
+      <td class="cbl-td cbl-mut">${_cbEsc(l.documento || '')}</td>
+      <td class="cbl-td">${_cbDt(l.data)}</td>
+      <td class="cbl-td cbl-r" style="color:#4ade80">${l.natureza === 'C' ? _cbNum(l.valor) : ''}</td>
+      <td class="cbl-td cbl-r" style="color:#f87171">${l.natureza === 'D' ? _cbNum(l.valor) : ''}</td>
+      <td class="cbl-td cbl-r" style="color:${s >= 0 ? '#86efac' : '#fca5a5'};font-weight:600">${_cbNum(s)}</td>
+      <td class="cbl-td" style="text-align:center">${l.conciliado ? '<b style="color:#4ade80" title="conciliado">S</b>'
+        : sg ? `<button class="cbl-mini" title="Sugestão: ${_cbEsc(sg.descricao)} ${_cbDt(sg.data)}" onclick="event.stopPropagation();cbConciliarPar('${l.id}','${sg.id}')">✓?</button>` : '<span style="color:#667">N</span>'}</td>
+    </tr>`;
+  }).join('');
 
-  const card = (rot, val, cor, sub) => `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 12px;min-width:148px">
-    <div class="nfe-label">${rot}</div><div style="font-size:1.05rem;font-weight:700;color:${cor};margin-top:3px">${val}</div>
-    ${sub ? `<div style="font-size:0.7rem;color:#778">${sub}</div>` : ''}</div>`;
+  const trM = _cb.movs.map(m => {
+    const ligados = lancPorMov[m.id] || [];
+    const sel = _cb.selM === m.id;
+    const bg = sel ? '#1e3a5f' : ligados.length ? '#0f1f17' : m.conciliado ? '#161a22' : 'transparent';
+    const v = _cbSinalMov(m);
+    const st = ligados.length ? `<span style="color:#4ade80" title="${_cbEsc(ligados.map(x => x.descricao).join(' | '))}">✓ ${ligados.length > 1 ? ligados.length + ' lanç.' : 'livro'}</span>`
+      : m.conciliado ? '<span style="color:#889" title="conciliado fora do livro (antes de 01/07 ou por outra tela)">✓</span>'
+      : `<button class="cbl-mini" onclick="event.stopPropagation();cbLancarDoBanco('${m.id}')">＋ Lançar</button>`;
+    return `<tr style="background:${bg};cursor:pointer" onclick="cbSelMov('${m.id}')">
+      <td class="cbl-td">${_cbDt(m.data)}</td>
+      <td class="cbl-td" title="${_cbEsc(_cbInfo(m))}">${_cbEsc(m.descricao || '')}<br><span class="cbl-mut" style="font-size:0.68rem">${_cbEsc(_cbInfo(m).slice(0, 70))}</span></td>
+      <td class="cbl-td cbl-mut">${_cbEsc(m.documento || '')}</td>
+      <td class="cbl-td cbl-r" style="color:${v >= 0 ? '#4ade80' : '#f87171'};font-weight:600">${v >= 0 ? '+' : '−'}${_cbNum(Math.abs(v))}</td>
+      <td class="cbl-td" style="text-align:center;white-space:nowrap">${st}</td>
+    </tr>`;
+  }).join('');
 
-  // ---- COLUNA ESQUERDA: lançamentos do SISTEMA (contas a pagar) ----
-  const chip = (txt, cor, bg) => `<span style="font-size:0.68rem;font-weight:700;padding:1px 8px;border-radius:9px;background:${bg};color:${cor}">${txt}</span>`;
-  const linSis = [];
-  pagas.forEach(c => {
-    const m = movPorConta[c.id];
-    linSis.push(`<div style="display:flex;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid #1a1d2e;background:#0f1a12">
-      <div style="width:44px;color:#889;font-size:0.75rem">${_cbDt(c.data_pagamento)}</div>
-      <div style="flex:1;min-width:0"><div style="color:#dfe6ee;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_cbEsc(c.descricao)}</div>
-        <div style="font-size:0.7rem;color:#788">${c.categoria === 'juros-multa' ? 'juros/multa · conta 5.1.02.01.0002' : 'venc ' + _cbDt(c.vencimento)}${m ? ' · casado com o extrato →' : ''}</div></div>
-      <div style="font-weight:700;color:#7ee2a0">${_cbMoney(c.valor)}</div>
-      ${chip('PAGO', '#7ee2a0', '#10231a')}
-      ${m ? `<button class="fc-btn mini" title="Desfazer a baixa" style="color:#f08080" onclick="cbDesfazer('${m.id}')">↩</button>` : '<span style="width:26px"></span>'}
-    </div>`);
-  });
-  abertas.forEach(c => {
-    const s = sugPorConta[c.id];
-    linSis.push(`<div style="display:flex;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid #1a1d2e;${s ? 'background:#1a1500' : ''}">
-      <div style="width:44px;color:#889;font-size:0.75rem">${_cbDt(c.vencimento)}</div>
-      <div style="flex:1;min-width:0"><div style="color:#dfe6ee;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_cbEsc(c.descricao)}</div>
-        <div style="font-size:0.7rem;color:#788">${s ? '？ sugestão no extrato: pagamento de ' + _cbMoney(s.m.valor) + ' em ' + _cbDt(s.m.data) : 'sem pagamento localizado'}</div></div>
-      <div style="font-weight:700;color:${c.vencimento < new Date().toISOString().slice(0, 10) ? '#f0a0a0' : '#e5e7eb'}">${_cbMoney(c.valor)}</div>
-      ${chip(c.vencimento < new Date().toISOString().slice(0, 10) ? 'VENCIDO' : 'ABERTO', c.vencimento < new Date().toISOString().slice(0, 10) ? '#f0a0a0' : '#fbbf24', '#241a08')}
-      ${s ? `<button class="fc-btn mini" style="color:#7ee2a0" title="Aprovar a baixa sugerida" onclick="cbAprovar('${s.m.id}','${c.id}',${s.dif})">✓</button>` : '<span style="width:26px"></span>'}
-    </div>`);
-  });
+  const nSug = Object.keys(sug).length;
+  const saldoFim = saldo;
+  const selSoma = _cb.lanc.filter(l => _cb.selL.has(l.id)).reduce((s, l) => s + _cbSinal(l), 0);
+  const selMov = _cb.selM ? _cb.movs.find(m => m.id === _cb.selM) : null;
+  const banco = _cb.saldoBanco;
+  const difBanco = banco && per.fim >= _cbIso(new Date()) ? Number(banco.saldo) - saldoFim : null;
 
-  // ---- COLUNA DIREITA: EXTRATO do banco ----
-  const linBan = movs.map(m => {
-    const c = m.conta_pagar_id ? (vinculadas[m.conta_pagar_id] || {}) : null;
-    const sug = sugestoes.find(s => s.m.id === m.id);
-    const deb_ = m.tipo === 'debito';
-    let rodape, acao = '<span style="width:26px"></span>', bg = '';
-    if (m.conciliado && c) {
-      bg = 'background:#0f1a12';
-      rodape = `✓ baixou: ${_cbEsc((c.descricao || '').slice(0, 44))}${m.dif_encargos ? ' · encargos ' + _cbMoney(m.dif_encargos) : ''}`;
-      acao = `<button class="fc-btn mini" title="Desfazer" style="color:#f08080" onclick="cbDesfazer('${m.id}')">↩</button>`;
-    } else if (sug) {
-      bg = 'background:#1a1500';
-      const _se = _cbClassificaEncargo(sug.dif, sug.c.vencimento, m.data);
-      rodape = `？ sugestão: ${_cbEsc(sug.c.descricao.slice(0, 40))} (${_se.tarifa > 0 ? '+' + _cbMoney(_se.tarifa) + ' tarifa' : _se.juros > 0 ? '+' + _cbMoney(_se.juros) + ' juros' : sug.dif < 0 ? _cbMoney(sug.dif) + ' desc.' : 'exato'})`;
-      acao = `<button class="fc-btn mini" style="color:#7ee2a0" title="Aprovar" onclick="cbAprovar('${m.id}','${sug.c.id}',${sug.dif})">✓</button>`;
-    } else if (_cbInterno(m)) {
-      rodape = '<span style="color:#c084fc">transferência interna do grupo</span>';
-    } else if (deb_) {
-      rodape = _cbEsc((m.info || '').split('|').filter(Boolean)[1] || m.info || '').slice(0, 46) || 'sem par no sistema';
-      acao = `<button class="fc-btn mini" title="Vincular a um título" onclick="cbVincular('${m.id}')">🔗</button>`;
-    } else {
-      rodape = _cbEsc((m.info || '').split('|').filter(Boolean)[1] || '').slice(0, 46) || 'entrada';
-    }
-    return `<div style="display:flex;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid #1a1d2e;${bg}">
-      <div style="width:44px;color:#889;font-size:0.75rem">${_cbDt(m.data)}</div>
-      <div style="flex:1;min-width:0"><div style="color:#dfe6ee;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_cbEsc(m.descricao) || '—'}</div>
-        <div style="font-size:0.7rem;color:#788">${rodape}</div></div>
-      <div style="font-weight:700;color:${deb_ ? '#f0a0a0' : '#7ee2a0'}">${deb_ ? '−' : '+'}${_cbMoney(m.valor)}</div>
-      ${acao}</div>`;
-  });
-
-  const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  document.getElementById('conteudo').innerHTML = `
-  <div class="og-janela" id="cb-raiz">
-    <div class="og-titulo"><span>🏦 Conciliação bancária — Sicoob</span>
-      <span style="font-size:0.72rem;color:#667;font-weight:400;margin-left:12px">atualizado ${agora} · renova a cada 60s</span>
-      <button class="og-fechar" onclick="navegarPara('empresa')">✕</button></div>
-    <div style="padding:14px 16px">
-      <div class="fc-filtros" style="margin-bottom:12px">
-        <label>Período:</label>
-        <input id="cb-ini" type="date" value="${per.ini}" class="fc-inp2">
-        <span style="color:#667">até</span>
-        <input id="cb-fim" type="date" value="${per.fim}" class="fc-inp2">
-        <button class="fc-btn" onclick="cbSetPeriodo()">Aplicar</button>
+  // tela cheia: ocupa do fim do menu até o rodapé da janela
+  const topo = Math.max(0, Math.round(raiz.getBoundingClientRect().top + window.scrollY));
+  raiz.innerHTML = `
+  <style>
+    #cb-raiz{position:fixed;left:0;right:0;bottom:0;top:${topo}px;z-index:20;background:#0b0d13;display:flex;flex-direction:column;color:#e0e0e0;font-size:0.8rem}
+    .cbl-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;background:#13151f;border-bottom:1px solid #2a2d3e}
+    .cbl-conta{padding:6px 12px;border-radius:7px;border:1px solid #2a2d3e;background:#0f1117;color:#9aa;cursor:pointer;text-align:left;line-height:1.2}
+    .cbl-conta.on{border-color:#f97316;color:#fdba74;background:#1f1a14}
+    .cbl-in{padding:5px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem}
+    .cbl-btn{padding:6px 11px;border-radius:6px;border:1px solid #2a2d3e;background:#161a26;color:#cbd5e1;cursor:pointer;font-size:0.76rem;white-space:nowrap}
+    .cbl-btn:hover{border-color:#3b82f6;color:#93c5fd}
+    .cbl-btn:disabled{opacity:.4;cursor:default}
+    .cbl-pane{display:flex;flex-direction:column;min-height:0;border:1px solid #2a2d3e;border-radius:8px;overflow:hidden;background:#0d1017}
+    .cbl-scroll{overflow:auto;flex:1;min-height:0}
+    .cbl-tab{width:100%;border-collapse:collapse;table-layout:fixed}
+    .cbl-tab th{position:sticky;top:0;background:#1a1d2e;color:#94a3b8;font-weight:600;font-size:0.7rem;text-align:left;padding:6px;border-bottom:1px solid #2a2d3e;z-index:1}
+    .cbl-td{padding:4px 6px;border-bottom:1px solid #161a24;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:top}
+    .cbl-r{text-align:right;font-variant-numeric:tabular-nums}
+    .cbl-mut{color:#7c8698}
+    .cbl-tag{font-size:0.6rem;padding:0 4px;border-radius:3px;background:#1f2937;color:#94a3b8}
+    .cbl-mini{padding:1px 6px;border-radius:4px;border:1px solid #3a3320;background:#221d10;color:#fbbf24;cursor:pointer;font-size:0.68rem}
+    .cbl-tot{display:flex;gap:6px;flex-wrap:wrap;padding:8px 14px;background:#13151f;border-top:1px solid #2a2d3e}
+    .cbl-tot div{background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;padding:4px 10px;min-width:130px}
+    .cbl-tot span{display:block;color:#7c8698;font-size:0.64rem;text-transform:uppercase;letter-spacing:.3px}
+    .cbl-tot b{font-variant-numeric:tabular-nums}
+    .cbl-menu{position:absolute;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:4px;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+    .cbl-menu button{display:block;width:100%;text-align:left;padding:6px 12px;background:none;border:none;color:#cbd5e1;cursor:pointer;border-radius:5px;font-size:0.78rem}
+    .cbl-menu button:hover{background:#1e293b}
+  </style>
+  <div id="cb-raiz">
+    <div class="cbl-bar" style="justify-content:space-between">
+      <b style="color:#f97316;font-size:0.95rem">🏦 Conciliação bancária</b>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${_cb.contas.map(c => `
+        <button class="cbl-conta ${c.id === _cb.contaId ? 'on' : ''}" onclick="cbTrocarConta(${c.id})">
+          ${_cbEsc(c.nome)}${c.numero ? ' <span style="color:#667">' + _cbEsc(c.numero) + '</span>' : ''}</button>`).join('')}
+        <button class="cbl-btn" title="Saldo inicial da conta" onclick="cbSaldoInicial()">⚙ Saldo inicial</button>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        ${card('✓ Conciliados', _cbMoney(conciliados.reduce((s, m) => s + Number(m.valor), 0)), '#7ee2a0', conciliados.length + ' baixas')}
-        ${card('？ Sugestões', _cbMoney(sugestoes.reduce((s, x) => s + Number(x.m.valor), 0)), '#fbbf24', sugestoes.length + ' p/ aprovar')}
-        ${card('○ Débitos sem par', _cbMoney(semPar.reduce((s, m) => s + Number(m.valor), 0)), '#c9d2dc', semPar.length + ' a vincular')}
-        ${card('Juros/multa acumulado', _cbMoney(totJuros), '#fb923c', 'conta 5.1.02.01.0002')}
-        ${card('Entradas no período', _cbMoney(cred.reduce((s, m) => s + Number(m.valor), 0)), '#7ee2a0', cred.length + ' créditos')}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div style="background:#0d1017;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
-          <div style="padding:9px 12px;background:#13151f;border-bottom:1px solid #2a2d3e;font-weight:700;color:#f97316">
-            📋 Sistema — contas a pagar <span style="color:#667;font-size:0.72rem;font-weight:400">(${pagas.length} pagas no período · ${abertas.length} abertas)</span></div>
-          <div style="max-height:62vh;overflow:auto">${linSis.join('') || '<p style="padding:16px;color:#777">Nada no período.</p>'}</div>
+      <button onclick="navegarPara('empresa')" style="background:none;border:none;color:#888;font-size:1.1rem;cursor:pointer" title="Fechar">✕</button>
+    </div>
+    <div class="cbl-bar">
+      <span class="cbl-mut">Período</span>
+      <input type="date" id="cb-ini" class="cbl-in" value="${per.ini}" min="${_CB_INICIO}"> até
+      <input type="date" id="cb-fim" class="cbl-in" value="${per.fim}">
+      <select id="cb-st" class="cbl-in" onchange="cbFiltro()">
+        <option value="todos" ${f.status === 'todos' ? 'selected' : ''}>Todos</option>
+        <option value="nao" ${f.status === 'nao' ? 'selected' : ''}>Não conciliados</option>
+        <option value="conc" ${f.status === 'conc' ? 'selected' : ''}>Conciliados</option></select>
+      <select id="cb-nat" class="cbl-in" onchange="cbFiltro()">
+        <option value="todos" ${f.nat === 'todos' ? 'selected' : ''}>Créditos e débitos</option>
+        <option value="C" ${f.nat === 'C' ? 'selected' : ''}>Só créditos</option>
+        <option value="D" ${f.nat === 'D' ? 'selected' : ''}>Só débitos</option></select>
+      <input id="cb-busca" class="cbl-in" style="width:190px" placeholder="Pessoa, descrição, valor..." value="${_cbEsc(f.busca)}" oninput="cbFiltro(true)">
+      <button class="cbl-btn" onclick="cbAplicarPeriodo()">🔍 Pesquisar</button>
+      <button class="cbl-btn" onclick="_cbCarregar(true)" title="Traz de novo contas pagas e títulos recebidos">↻ Atualizar</button>
+    </div>
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,58fr) minmax(0,42fr);gap:10px;padding:10px 14px">
+      <div class="cbl-pane">
+        <div class="cbl-bar" style="border-radius:0;gap:6px">
+          <b style="color:#fdba74">📒 Livro — ${_cbEsc(conta.nome)}</b>
+          <span class="cbl-mut">${vis.length} de ${_cb.lanc.length}</span>
+          <span style="flex:1"></span>
+          <button class="cbl-btn" onclick="cbMenuNovo(this)">＋ Novo ▾</button>
+          <button class="cbl-btn" ${_cb.selL.size === 1 ? '' : 'disabled'} onclick="cbEditar()">✏️ Alterar</button>
+          <button class="cbl-btn" ${_cb.selL.size ? '' : 'disabled'} onclick="cbExcluir()">🗑 Excluir</button>
+          <button class="cbl-btn" ${_cb.selL.size && selMov ? '' : 'disabled'} onclick="cbConciliar()" title="Liga os lançamentos marcados à linha do banco selecionada">🔗 Conciliar</button>
+          <button class="cbl-btn" ${_cb.lanc.some(l => _cb.selL.has(l.id) && l.conciliado) ? '' : 'disabled'} onclick="cbDesconciliar()">↩ Desconciliar</button>
+          <button class="cbl-btn" ${nSug ? '' : 'disabled'} onclick="cbAprovarSugestoes()" style="${nSug ? 'border-color:#a16207;color:#fbbf24' : ''}">✓ Sugestões (${nSug})</button>
         </div>
-        <div style="background:#0d1017;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden">
-          <div style="padding:9px 12px;background:#13151f;border-bottom:1px solid #2a2d3e;font-weight:700;color:#60a5fa">
-            🏦 Banco — extrato Sicoob <span style="color:#667;font-size:0.72rem;font-weight:400">(${movs.length} movimentos)</span></div>
-          <div style="max-height:62vh;overflow:auto">${linBan.join('') || '<p style="padding:16px;color:#777">Sem movimentos no período.</p>'}</div>
-        </div>
+        <div class="cbl-scroll"><table class="cbl-tab">
+          <colgroup><col style="width:26px"><col style="width:42px"><col style="width:17%"><col style="width:13%"><col><col style="width:70px"><col style="width:78px"><col style="width:86px"><col style="width:86px"><col style="width:92px"><col style="width:42px"></colgroup>
+          <thead><tr><th></th><th>Seq</th><th>Pessoa</th><th>Detalhe</th><th>Descrição</th><th>Doc</th><th>Data</th><th style="text-align:right">Crédito</th><th style="text-align:right">Débito</th><th style="text-align:right">Saldo</th><th>Conc</th></tr></thead>
+          <tbody>
+            <tr><td class="cbl-td" colspan="9" style="color:#7c8698">Saldo anterior a ${_cbDt(per.ini)}</td><td class="cbl-td cbl-r" style="font-weight:600">${_cbNum(_cb.saldoAntes)}</td><td></td></tr>
+            ${trL || '<tr><td class="cbl-td" colspan="11" style="color:#777;padding:14px">Nenhum lançamento no período.</td></tr>'}
+          </tbody></table></div>
       </div>
-      <p style="color:#556;font-size:0.72rem;margin-top:10px">✓ verde = casado · amarelo = sugestão (aprove no ✓) · 🔗 = vincular manual · ↩ = desfazer · roxo = transferência interna do grupo (não concilia com fornecedor).</p>
-    </div></div>`;
+      <div class="cbl-pane">
+        <div class="cbl-bar" style="border-radius:0">
+          <b style="color:#60a5fa">🏦 Banco — ${conta.extrato_banco ? 'extrato ' + _cbEsc(conta.nome) : 'sem extrato automático'}</b>
+          <span class="cbl-mut">${_cb.movs.length} movimentos</span>
+          ${selMov ? `<span style="flex:1"></span><span class="cbl-mut">selecionado: <b style="color:#e0e0e0">${_cbMoney(_cbSinalMov(selMov))}</b> · marcados no livro: <b style="color:${Math.abs(selSoma - _cbSinalMov(selMov)) < 0.005 ? '#4ade80' : '#fbbf24'}">${_cbMoney(selSoma)}</b></span>` : ''}
+        </div>
+        <div class="cbl-scroll">${conta.extrato_banco ? `<table class="cbl-tab">
+          <colgroup><col style="width:80px"><col><col style="width:78px"><col style="width:100px"><col style="width:76px"></colgroup>
+          <thead><tr><th>Data</th><th>Descrição</th><th>Doc</th><th style="text-align:right">Valor</th><th></th></tr></thead>
+          <tbody>${trM || '<tr><td class="cbl-td" colspan="5" style="color:#777;padding:14px">Sem movimentos no período.</td></tr>'}</tbody></table>`
+          : `<p style="padding:18px;color:#7c8698;line-height:1.5">Esta conta não tem extrato automático. O livro ao lado é o controle dela:
+             lance as entradas e saídas e informe o saldo inicial (⚙). As vendas no cartão e Pix da maquininha entram sozinhas na etapa 2.</p>`}</div>
+      </div>
+    </div>
+    <div class="cbl-tot">
+      <div><span>Saldo anterior</span><b>${_cbMoney(_cb.saldoAntes)}</b></div>
+      <div><span>Créditos</span><b style="color:#4ade80">${_cbMoney(cred)}</b></div>
+      <div><span>Débitos</span><b style="color:#f87171">${_cbMoney(deb)}</b></div>
+      <div><span>Saldo do livro</span><b>${_cbMoney(saldoFim)}</b></div>
+      <div><span>Conciliado no período</span><b style="color:#4ade80">${_cbMoney(conc)}</b></div>
+      <div><span>Não conciliado</span><b style="color:${Math.abs(naoConc) > 0.004 ? '#fbbf24' : '#94a3b8'}">${_cbMoney(naoConc)}</b></div>
+      ${banco ? `<div><span>Saldo no banco (${new Date(banco.consultado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})</span><b>${_cbMoney(banco.saldo)}</b></div>` : ''}
+      ${difBanco !== null ? `<div><span>Banco − livro</span><b style="color:${Math.abs(difBanco) < 0.01 ? '#4ade80' : '#f87171'}">${_cbMoney(difBanco)}</b></div>` : ''}
+    </div>
+  </div>`;
 }
 
-// TARIFA x JUROS — quando o pagamento sai maior que o boleto, a diferença não é
-// toda juros. O banco cobra uma tarifa fixa por boleto liquidado, que independe
-// de atraso. Medido no Tijuco: R$ 3,72 em 7 títulos, com 0, 1 e 2 dias de atraso,
-// em faces de 11 mil a 27 mil — dois deles pagos NO PRÓPRIO VENCIMENTO. Já os
-// juros de verdade variam de 0,22% a 8,27% da face conforme os dias.
-// Somadas, a tarifa inflava a despesa de atraso que não houve.
-const CB_TARIFA_BOLETO = 3.72;   // tarifa do Sicoob por boleto liquidado
+// ---------- navegação / seleção ----------
+function cbTrocarConta(id) { _cb.contaId = id; _cb.selL.clear(); _cb.selM = null; _cbCarregar(false); }
+function cbAplicarPeriodo() {
+  const ini = document.getElementById('cb-ini').value, fim = document.getElementById('cb-fim').value;
+  window._cbPer = { ini: ini < _CB_INICIO ? _CB_INICIO : ini, fim };
+  _cb.selL.clear(); _cb.selM = null;
+  _cbCarregar(false);
+}
+function cbFiltro(digitando) {
+  _cb.filtro = { status: document.getElementById('cb-st').value, nat: document.getElementById('cb-nat').value, busca: document.getElementById('cb-busca').value };
+  _cbRender();
+  if (digitando) { const b = document.getElementById('cb-busca'); b.focus(); b.setSelectionRange(b.value.length, b.value.length); }
+}
+function cbSelLanc(id, ev, soToggle) {
+  if (soToggle || (ev && (ev.ctrlKey || ev.metaKey))) { _cb.selL.has(id) ? _cb.selL.delete(id) : _cb.selL.add(id); }
+  else { const so = _cb.selL.size === 1 && _cb.selL.has(id); _cb.selL.clear(); if (!so) _cb.selL.add(id); }
+  _cbRender();
+}
+function cbSelMov(id) { _cb.selM = _cb.selM === id ? null : id; _cbRender(); }
 
-// A coluna `tarifa` só existe depois do SQL-TARIFA-BANCARIA.sql. Enquanto não
-// rodar, o PostgREST recusa o update inteiro e a baixa não acontece — a tela
-// diria "erro" sem o usuário entender por quê. Tenta com, cai para sem.
-async function _cbUpdConta(id, patch, extraFiltro) {
-  const exec = (p) => {
-    let q = sb.from('oct_contas_pagar').update(p).eq('id', id);
-    if (extraFiltro) q = q.eq(extraFiltro[0], extraFiltro[1]);
-    return q;
-  };
-  let r = await exec(patch);
-  if (r.error && 'tarifa' in patch) {
-    const semTarifa = Object.assign({}, patch);
-    delete semTarifa.tarifa;
-    // sem a coluna, o encargo volta a ser tudo juros — melhor que perder a baixa
-    if (semTarifa.juros === 0 && patch.tarifa > 0) semTarifa.juros = patch.tarifa;
-    r = await exec(semTarifa);
+// ---------- conciliar ----------
+async function _cbLigar(lancs, mov) {
+  const autor = await _cbAutor();
+  for (const l of lancs) {
+    const { error } = await sb.from('oct_fin_lancamentos').update({ conciliado: true, banco_mov_id: mov.id, atualizado_em: new Date().toISOString() }).eq('id', l.id);
+    if (error) throw error;
+    // título pago: o comprovante também fica no próprio título (robô e B.I usam)
+    if (l.origem === 'contas_pagar' && lancs.length === 1) {
+      await sb.from('oct_banco_movimentos').update({ conta_pagar_id: null, conciliado: false }).eq('conta_pagar_id', l.origem_id).neq('id', mov.id);
+      await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: l.origem_id }).eq('id', mov.id);
+    }
   }
-  return r;
+  if (!(lancs.length === 1 && lancs[0].origem === 'contas_pagar'))
+    await sb.from('oct_banco_movimentos').update({ conciliado: true }).eq('id', mov.id);
+  console.info('conciliado por', autor, lancs.map(l => l.id), '→', mov.id);
 }
 
-// Classifica a diferença positiva. Conservador de propósito: só chama de tarifa
-// quando tem certeza — bate com o valor conhecido, ou não houve atraso nenhum
-// (sem atraso não existe juros). Fora disso, mantém juros e não inventa rateio.
+async function cbConciliar() {
+  const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id));
+  const mov = _cb.movs.find(m => m.id === _cb.selM);
+  if (!lancs.length || !mov) return;
+  if (lancs.some(l => l.conciliado)) { alert('Há lançamento já conciliado na seleção — desconcilie antes.'); return; }
+  const soma = lancs.reduce((s, l) => s + _cbSinal(l), 0);
+  const dif = Math.round((_cbSinalMov(mov) - soma) * 100) / 100;
+  if (Math.abs(dif) >= 0.01 && !confirm(`Os ${lancs.length} lançamento(s) somam ${_cbMoney(soma)} e o banco mostra ${_cbMoney(_cbSinalMov(mov))} (diferença ${_cbMoney(dif)}). Conciliar mesmo assim?`)) return;
+  try { await _cbLigar(lancs, mov); } catch (e) { alert('Erro: ' + (e.message || e)); return; }
+  _cb.selL.clear(); _cb.selM = null;
+  _cbCarregar(false);
+}
+
+async function cbConciliarPar(lancId, movId) {
+  const l = _cb.lanc.find(x => x.id === lancId), m = _cb.movs.find(x => x.id === movId);
+  if (!l || !m) return;
+  try { await _cbLigar([l], m); } catch (e) { alert('Erro: ' + (e.message || e)); return; }
+  _cbCarregar(false);
+}
+
+async function cbAprovarSugestoes() {
+  const sug = _cbSugestoes();
+  const pares = Object.entries(sug);
+  if (!pares.length || !confirm(`Conciliar ${pares.length} lançamento(s) com a linha do banco de mesmo valor (até 3 dias de diferença)?`)) return;
+  try {
+    for (const [lid, m] of pares) await _cbLigar([_cb.lanc.find(l => l.id === lid)], m);
+  } catch (e) { alert('Erro: ' + (e.message || e)); }
+  _cbCarregar(false);
+}
+
+async function cbDesconciliar() {
+  const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id) && l.conciliado);
+  if (!lancs.length || !confirm(`Desfazer a conciliação de ${lancs.length} lançamento(s)? O lançamento continua no livro.`)) return;
+  for (const l of lancs) {
+    await sb.from('oct_fin_lancamentos').update({ conciliado: false, banco_mov_id: null, atualizado_em: new Date().toISOString() }).eq('id', l.id);
+    if (l.banco_mov_id) {
+      const outros = _cb.lanc.filter(x => x.banco_mov_id === l.banco_mov_id && x.id !== l.id && !_cb.selL.has(x.id));
+      if (!outros.length) await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null }).eq('id', l.banco_mov_id);
+    }
+  }
+  _cb.selL.clear();
+  _cbCarregar(false);
+}
+
+// ---------- lançar / alterar / excluir ----------
+async function _cbAutor() {
+  try { const s = await getSession(); return (s && s.user && (s.user.email || s.user.id)) || null; } catch (e) { return null; }
+}
+
+function cbMenuNovo(btn) {
+  document.getElementById('cb-menu')?.remove();
+  const r = btn.getBoundingClientRect();
+  const m = document.createElement('div');
+  m.id = 'cb-menu'; m.className = 'cbl-menu';
+  m.style.left = r.left + 'px'; m.style.top = (r.bottom + 4) + 'px'; m.style.position = 'fixed';
+  m.innerHTML = ['despesa_financeira', 'receita_financeira', 'despesa_adm', 'receita_adm', 'saque', 'deposito', 'transferencia']
+    .map(t => `<button onclick="document.getElementById('cb-menu').remove();cbAbrirForm({tipo:'${t}'})">${_CB_TIPOS[t].rot}</button>`).join('');
+  document.body.appendChild(m);
+  setTimeout(() => document.addEventListener('click', function fecha(ev) { if (!m.contains(ev.target)) { m.remove(); document.removeEventListener('click', fecha); } }), 0);
+}
+
+// Lançar a partir da linha do banco: já nasce conciliado com ela
+async function cbLancarDoBanco(movId) {   // eslint: async por causa dos títulos
+  const m = _cb.movs.find(x => x.id === movId);
+  if (!m) return;
+  const info = _cbInfo(m).toUpperCase();
+  const deb = m.tipo === 'debito';
+  const interno = /MESMA TIT|FAV\.: SN |REM\.: SN /.test(info);
+  const pessoa = (_cbInfo(m).split(' · ').find(p => /[A-Za-z]{3}/.test(p) && !/Pagamento Pix|Recebimento Pix|Transfer/i.test(p)) || '').replace(/^(FAV|REM)\.: /, '');
+  // débito: oferece baixar um título em aberto (o mais parecido primeiro)
+  let titulos = [];
+  if (deb && !interno) {
+    const { data } = await sb.from('oct_contas_pagar').select('id,descricao,valor,vencimento,competencia,observacoes')
+      .eq('empresa_id', _cb.eid).eq('status', 'aberto').lte('competencia', m.data).order('vencimento').limit(500);
+    titulos = (data || []).map(c => Object.assign(c, { dif: Math.round((Number(m.valor) - Number(c.valor)) * 100) / 100 }))
+      .sort((a, b) => Math.abs(a.dif) - Math.abs(b.dif)).slice(0, 40);
+  }
+  cbAbrirForm({
+    tipo: interno ? 'transferencia' : deb ? 'despesa_adm' : 'receita_adm',
+    natureza: deb ? 'D' : 'C', valor: Number(m.valor), data: m.data, pessoa,
+    descricao: m.descricao, documento: m.documento && m.documento !== 'Pix' ? m.documento : '', movId, titulos,
+  });
+}
+
+// TARIFA x JUROS: tarifa só com certeza (R$ 3,72 exato ou pago até o vencimento)
 function _cbClassificaEncargo(dif, vencimento, dataPgto) {
   if (!(dif > 0.004)) return { juros: 0, tarifa: 0 };
   const d = Math.round(dif * 100) / 100;
   if (Math.abs(d - CB_TARIFA_BOLETO) < 0.015) return { juros: 0, tarifa: d };
   const v = Date.parse(String(vencimento || '').slice(0, 10));
   const p = Date.parse(String(dataPgto || '').slice(0, 10));
-  if (v && p && p <= v) return { juros: 0, tarifa: d };   // pago em dia: não é juros
+  if (v && p && p <= v) return { juros: 0, tarifa: d };
   return { juros: d, tarifa: 0 };
 }
 
-// executa a baixa aprovada: o título fecha pelo que SAIU DA CONTA; o encargo fica
-// dentro do próprio título, separado em juros (5.1.02.01.0002) e tarifa
-// bancária (5.1.02.01.0001); o movimento guarda a referência completa
-async function cbAprovar(movId, contaId, dif) {
-  const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
-  const { data: c } = await sb.from('oct_contas_pagar').select('*').eq('id', contaId).single();
-  if (!mv || !c || c.status !== 'aberto') { alert('Título/movimento mudou — recarregando.'); _cbRender(); return; }
-  const enc = _cbClassificaEncargo(dif, c.vencimento, mv.data);
-  const rot = enc.tarifa > 0 ? ` + tarifa bancária R$${enc.tarifa.toFixed(2)}`
-    : enc.juros > 0 ? ` + juros R$${enc.juros.toFixed(2)}`
-    : dif < 0 ? ` − desconto R$${(-dif).toFixed(2)}` : '';
-  if (!confirm(`Baixar "${c.descricao}" (${_cbMoney(c.valor)}) com o pagamento de ${_cbMoney(mv.valor)} de ${_cbDt(mv.data)}${rot}?`)) return;
-  // A BAIXA VALE O QUE SAIU DA CONTA (extrato manda) e o encargo fica no próprio
-  // título, em juros/desconto. Antes gravava valor_pago = valor de face e criava
-  // um título separado para a diferença — a conciliação bancária não fechava e
-  // o encargo virava "título novo" solto na lista.
-  const { error } = await _cbUpdConta(contaId, {
-    status: 'pago', data_pagamento: mv.data, valor_pago: Number(mv.valor),
-    juros: Number(enc.juros.toFixed(2)),
-    tarifa: Number(enc.tarifa.toFixed(2)),
-    desconto: dif < 0 ? Number((-dif).toFixed(2)) : 0,
-    forma_pagamento: 'Sicoob',
-    // ACRESCENTA: apagar a observação tirava a chave da NF gravada pela manifestada
-    // e o robô de contas a pagar criava o título de novo (NF 363331 com 3 títulos, 15/09/2026)
-    observacoes: _cbObsMais(c.observacoes, `conciliação aprovada na tela — pagamento de ${_cbMoney(mv.valor)} em ${mv.data} (mov ${mv.id}) ref. ${c.descricao}${rot}`),
-  }, ['status', 'aberto']);
+// baixa o título com o débito do banco: vale o que SAIU DA CONTA, encargo no
+// próprio título, observação acrescentada (nunca apagada — a chave da NF mora lá)
+async function cbBaixarTitulo() {
+  const d = window._cbForm || {};
+  const id = document.getElementById('cbf-titulo').value;
+  const m = _cb.movs.find(x => x.id === d.movId);
+  if (!id || !m) return;
+  const { data: c } = await sb.from('oct_contas_pagar').select('*').eq('id', id).single();
+  if (!c || c.status !== 'aberto') { alert('O título mudou — recarregando.'); _cbCarregar(false); return; }
+  const dif = Math.round((Number(m.valor) - Number(c.valor)) * 100) / 100;
+  const enc = _cbClassificaEncargo(dif, c.vencimento, m.data);
+  const rot = enc.tarifa > 0 ? ` + tarifa R$ ${_cbNum(enc.tarifa)}` : enc.juros > 0 ? ` + juros R$ ${_cbNum(enc.juros)}` : dif < 0 ? ` − desconto R$ ${_cbNum(-dif)}` : '';
+  if (!confirm(`Baixar "${c.descricao}" (${_cbMoney(c.valor)}) com o débito de ${_cbMoney(m.valor)} de ${_cbDt(m.data)}${rot}?`)) return;
+  const obs = `conciliação na tela — pagamento de ${_cbMoney(m.valor)} em ${m.data} (mov ${m.id})${rot}`;
+  const { error } = await sb.from('oct_contas_pagar').update({
+    status: 'pago', data_pagamento: m.data, valor_pago: Number(m.valor),
+    juros: enc.juros, tarifa: enc.tarifa, desconto: dif < 0 ? -dif : 0, forma_pagamento: 'Sicoob',
+    observacoes: (c.observacoes ? c.observacoes + ' | ' : '') + obs,
+  }).eq('id', id).eq('status', 'aberto');
   if (error) { alert('Erro: ' + error.message); return; }
-  await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: contaId, dif_encargos: dif || null }).eq('id', movId);
-  // (não cria mais título separado para o encargo — ele vive no campo 'juros'
-  //  do próprio título e a contabilidade lança em D Juros Passivos 5.1.02.01.0002)
-  _cbRender();
+  await sb.from('oct_banco_movimentos').update({ conciliado: true, conta_pagar_id: id, dif_encargos: dif || null }).eq('id', m.id);
+  document.getElementById('cb-modal')?.remove();
+  _cb.selL.clear(); _cb.selM = null;
+  _cbCarregar(true);   // a sincronização põe o pagamento no livro, já conciliado
 }
 
-function _cbObsMais(antiga, nova) {
-  const a = String(antiga || '').trim();
-  return a ? a + ' | ' + nova : nova;
+function cbEditar(id) {
+  const lid = id || [..._cb.selL][0];
+  const l = _cb.lanc.find(x => x.id === lid);
+  if (!l) return;
+  cbAbrirForm(Object.assign({}, l, { editar: true }));
 }
 
-async function cbDesfazer(movId) {
-  const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
-  if (!mv || !mv.conta_pagar_id) return;
-  const { data: cAnt } = await sb.from('oct_contas_pagar').select('observacoes').eq('id', mv.conta_pagar_id).single();
-  if (!confirm('Desfazer esta baixa? O título volta a ABERTO e o eventual título de juros é removido.')) return;
-  await _cbUpdConta(mv.conta_pagar_id, {
-    status: 'aberto', data_pagamento: null, valor_pago: null, forma_pagamento: null,
-    juros: 0, tarifa: 0, desconto: 0,
-    observacoes: _cbObsMais(cAnt && cAnt.observacoes, 'baixa desfeita na tela de conciliação'),
-  });
-  await sb.from('oct_contas_pagar').delete().eq('categoria', 'juros-multa').like('observacoes', `%${movId}%`);
-  await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null, dif_encargos: null }).eq('id', movId);
-  _cbRender();
-}
+async function cbAbrirForm(d) {
+  document.getElementById('cb-modal')?.remove();
+  const conta = _cbConta();
+  const auto = d.editar && d.origem !== 'manual';
+  const transf = ['transferencia', 'saque', 'deposito'].includes(d.tipo) && !d.editar;
+  let planos = window._cbPlanos;
+  if (!planos) {
+    const { data } = await sb.from('oct_plano_contas').select('id,codigo,descricao,subtipo').eq('empresa_id', _cb.eid).eq('ativo', true).order('codigo');
+    planos = window._cbPlanos = (data || []).filter(p => !p.subtipo || p.subtipo === 'analitica');
+  }
+  // saque/depósito: contas sugeridas (banco ↔ caixa)
+  const caixa = _cb.contas.find(c => c.tipo === 'caixa');
+  let origem = conta.id, destino = (_cb.contas.find(c => c.id !== conta.id) || conta).id;
+  if (d.tipo === 'saque' && caixa) { destino = caixa.id; if (conta.id === caixa.id) origem = (_cb.contas.find(c => c.tipo !== 'caixa') || conta).id; }
+  if (d.tipo === 'deposito' && caixa) { origem = caixa.id; if (conta.id === caixa.id) destino = (_cb.contas.find(c => c.tipo !== 'caixa') || conta).id; }
+  if (d.movId && d.tipo === 'transferencia') {           // do banco: esta conta é o lado da linha
+    if (d.natureza === 'C') { destino = conta.id; origem = (_cb.contas.find(c => c.id !== conta.id) || conta).id; }
+    else { origem = conta.id; destino = (_cb.contas.find(c => c.id !== conta.id) || conta).id; }
+  }
+  const optContas = sel => _cb.contas.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${_cbEsc(c.nome)}</option>`).join('');
+  const optTipos = Object.entries(_CB_TIPOS).filter(([k]) => d.editar || !['pagamento_titulo', 'recebimento_titulo', 'ajuste'].includes(k))
+    .map(([k, v]) => `<option value="${k}" ${k === d.tipo ? 'selected' : ''}>${v.rot}</option>`).join('');
+  const nat = d.natureza || (_CB_TIPOS[d.tipo] && _CB_TIPOS[d.tipo].nat) || 'D';
+  const bloq = auto ? 'disabled title="Vem de outra tela — altere na origem"' : '';
+  const campo = (rot, html, span) => `<label style="display:flex;flex-direction:column;gap:3px;${span ? 'grid-column:span ' + span : ''}"><span class="cbl-mut" style="font-size:0.7rem">${rot}</span>${html}</label>`;
 
-// vínculo manual: escolhe o título aberto para este débito
-async function cbVincular(movId) {
-  const { data: mv } = await sb.from('oct_banco_movimentos').select('*').eq('id', movId).single();
-  if (!mv) return;
-  const abertas = (window._cbAbertas || []);
-  const linhas = abertas.map(c => {
-    const dif = Math.round((Number(mv.valor) - Number(c.valor)) * 100) / 100;
-    return `<tr style="border-bottom:1px solid #1a1d2e">
-      <td class="fc-td">${_cbEsc(c.descricao).slice(0, 44)}</td>
-      <td class="fc-td">${_cbDt(c.vencimento)}</td>
-      <td class="fc-td fc-r">${_cbMoney(c.valor)}</td>
-      <td class="fc-td" style="color:${dif > 0 ? '#fb923c' : dif < 0 ? '#7ee2a0' : '#889'}">${dif > 0 ? '+' + _cbMoney(dif) : dif < 0 ? _cbMoney(dif) : 'exato'}</td>
-      <td class="fc-td"><button class="fc-btn" onclick="document.getElementById('cb-modal').remove();cbAprovar('${movId}','${c.id}',${dif})">Vincular</button></td></tr>`;
-  }).join('');
   const div = document.createElement('div');
   div.id = 'cb-modal';
-  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
-  div.innerHTML = `<div id="cb-modal-cx" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;max-width:760px;width:94%;max-height:80vh;min-width:340px;min-height:160px;overflow:auto;resize:both;padding:18px">
-    <div id="cb-modal-tit" style="display:flex;justify-content:space-between;margin-bottom:10px">
-      <b style="color:#f97316">🔗 Vincular débito de ${_cbMoney(mv.valor)} (${_cbDt(mv.data)}) a um título</b>
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+  div.innerHTML = `<div id="cb-modal-cx" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;width:640px;max-width:95%;padding:18px;color:#e0e0e0;font-size:0.82rem">
+    <div id="cb-modal-tit" style="display:flex;justify-content:space-between;margin-bottom:12px;cursor:move">
+      <b style="color:#f97316">${d.editar ? '✏️ Alterar lançamento' : d.movId ? '＋ Lançar a partir do banco' : '＋ Novo lançamento'}</b>
       <button onclick="document.getElementById('cb-modal').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem">✕</button></div>
-    <p style="color:#889;font-size:0.78rem;margin-bottom:10px">${_cbEsc(mv.descricao || '')} ${_cbEsc((mv.info || '').slice(0, 80))}</p>
-    <table class="fc-grid"><thead><tr><th>Título aberto</th><th>Venc</th><th>Valor</th><th>Dif</th><th></th></tr></thead>
-    <tbody>${linhas || '<tr><td class="fc-td" colspan="5" style="color:#777">Nenhum título aberto.</td></tr>'}</tbody></table></div>`;
+    ${auto ? `<p style="color:#fbbf24;font-size:0.74rem;margin:0 0 10px">Lançamento automático (${d.origem === 'contas_pagar' ? 'Contas a pagar' : 'título recebido'}): valor, data e natureza vêm da origem.</p>` : ''}
+    ${d.movId ? `<p style="color:#93c5fd;font-size:0.74rem;margin:0 0 10px">Vai nascer conciliado com a linha do banco de ${_cbDt(d.data)} · ${_cbMoney((d.natureza === 'D' ? -1 : 1) * d.valor)}.</p>` : ''}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      ${campo('Tipo', `<select id="cbf-tipo" class="cbl-in" ${auto ? 'disabled' : ''} onchange="cbFormTipo()">${optTipos}</select>`, 2)}
+      ${campo('Data', `<input id="cbf-data" type="date" class="cbl-in" value="${d.data || _cbIso(new Date())}" ${bloq}>`)}
+      <div id="cbf-simples" style="display:${transf ? 'none' : 'contents'}">
+        ${campo('Conta', `<select id="cbf-conta" class="cbl-in">${optContas(d.conta_id || conta.id)}</select>`)}
+        ${campo('Natureza', `<select id="cbf-nat" class="cbl-in" ${bloq}><option value="C" ${nat === 'C' ? 'selected' : ''}>Crédito (entrada)</option><option value="D" ${nat === 'D' ? 'selected' : ''}>Débito (saída)</option></select>`)}
+      </div>
+      <div id="cbf-transf" style="display:${transf ? 'contents' : 'none'}">
+        ${campo('Sai da conta', `<select id="cbf-origem" class="cbl-in">${optContas(origem)}</select>`)}
+        ${campo('Entra na conta', `<select id="cbf-destino" class="cbl-in">${optContas(destino)}</select>`)}
+      </div>
+      ${campo('Valor (R$)', `<input id="cbf-valor" type="number" step="0.01" min="0" class="cbl-in" value="${d.valor || ''}" ${bloq}>`)}
+      ${campo('Pessoa', `<input id="cbf-pessoa" class="cbl-in" value="${_cbEsc(d.pessoa || '')}">`, 2)}
+      ${campo('Documento', `<input id="cbf-doc" class="cbl-in" value="${_cbEsc(d.documento || '')}">`)}
+      ${campo('Descrição', `<input id="cbf-desc" class="cbl-in" value="${_cbEsc(d.descricao || '')}">`, 3)}
+      ${campo('Detalhe', `<input id="cbf-det" class="cbl-in" value="${_cbEsc(d.detalhe || '')}">`, 2)}
+      ${campo('Plano de contas', `<select id="cbf-plano" class="cbl-in"><option value="">—</option>${planos.map(p => `<option value="${p.id}" ${p.id === d.plano_conta_id ? 'selected' : ''}>${_cbEsc(p.codigo + ' ' + p.descricao)}</option>`).join('')}</select>`)}
+    </div>
+    ${d.titulos && d.titulos.length ? `<div style="margin-top:12px;padding:10px;border:1px solid #2a3a2a;border-radius:8px;background:#0f1a12">
+      <div class="cbl-mut" style="font-size:0.72rem;margin-bottom:6px">…ou este débito é o pagamento de um título em aberto?</div>
+      <div style="display:flex;gap:8px"><select id="cbf-titulo" class="cbl-in" style="flex:1">${d.titulos.map(t => `<option value="${t.id}">${_cbEsc(t.descricao)} · venc ${_cbDt(t.vencimento)} · ${_cbMoney(t.valor)} · ${t.dif === 0 ? 'exato' : (t.dif > 0 ? '+' : '') + _cbNum(t.dif)}</option>`).join('')}</select>
+      <button class="cbl-btn" style="border-color:#2f6f3f;color:#86efac" onclick="cbBaixarTitulo()">✓ Baixar título</button></div></div>` : ''}
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <span id="cbf-msg" style="flex:1;color:#f87171;font-size:0.76rem;align-self:center"></span>
+      <button class="cbl-btn" onclick="document.getElementById('cb-modal').remove()">Cancelar</button>
+      <button class="cbl-btn" style="background:#1f6f43;border-color:#1f6f43;color:#fff" onclick="cbSalvarForm()">💾 Salvar</button>
+    </div></div>`;
   document.body.appendChild(div);
-  if (typeof octArrastavel === 'function')
-    octArrastavel(document.getElementById('cb-modal-cx'), document.getElementById('cb-modal-tit'));
+  window._cbForm = d;
+  if (typeof octArrastavel === 'function') octArrastavel(document.getElementById('cb-modal-cx'), document.getElementById('cb-modal-tit'));
+}
+
+function cbFormTipo() {
+  const d = window._cbForm || {};
+  const t = document.getElementById('cbf-tipo').value;
+  const transf = ['transferencia', 'saque', 'deposito'].includes(t) && !d.editar;
+  document.getElementById('cbf-simples').style.display = transf ? 'none' : 'contents';
+  document.getElementById('cbf-transf').style.display = transf ? 'contents' : 'none';
+  const n = _CB_TIPOS[t] && _CB_TIPOS[t].nat;
+  if (n && !d.movId) document.getElementById('cbf-nat').value = n;
+}
+
+async function cbSalvarForm() {
+  const d = window._cbForm || {};
+  const g = id => document.getElementById(id);
+  const msg = t => { g('cbf-msg').textContent = t; };
+  const tipo = g('cbf-tipo').value;
+  const valor = Math.round(Number(g('cbf-valor').value) * 100) / 100;
+  const data = g('cbf-data').value;
+  if (!(valor > 0)) return msg('Informe o valor.');
+  if (!data) return msg('Informe a data.');
+  if (data < _CB_INICIO) return msg('O livro começa em 01/07/2026.');
+  const comum = {
+    empresa_id: _cb.eid, data, valor, tipo,
+    pessoa: g('cbf-pessoa').value.trim() || null, descricao: g('cbf-desc').value.trim() || null,
+    detalhe: g('cbf-det').value.trim() || null, documento: g('cbf-doc').value.trim() || null,
+    plano_conta_id: g('cbf-plano').value || null, atualizado_em: new Date().toISOString(),
+  };
+  const transf = ['transferencia', 'saque', 'deposito'].includes(tipo) && !d.editar;
+  try {
+    if (d.editar) {
+      const patch = d.origem !== 'manual'
+        ? { conta_id: Number(g('cbf-conta').value), pessoa: comum.pessoa, descricao: comum.descricao, detalhe: comum.detalhe, documento: comum.documento, plano_conta_id: comum.plano_conta_id, editado: true, atualizado_em: comum.atualizado_em }
+        : Object.assign({}, comum, { conta_id: Number(g('cbf-conta').value), natureza: g('cbf-nat').value });
+      const { error } = await sb.from('oct_fin_lancamentos').update(patch).eq('id', d.id);
+      if (error) throw error;
+      if (d.transferencia_id && d.origem === 'manual') {   // a outra perna acompanha valor/data/descrição
+        await sb.from('oct_fin_lancamentos').update({ valor, data, descricao: comum.descricao, atualizado_em: comum.atualizado_em })
+          .eq('transferencia_id', d.transferencia_id).neq('id', d.id);
+      }
+    } else if (transf) {
+      const o = Number(g('cbf-origem').value), de = Number(g('cbf-destino').value);
+      if (o === de) return msg('Escolha contas diferentes.');
+      const tid = (crypto.randomUUID && crypto.randomUUID()) || null;
+      const nomeO = (_cb.contas.find(c => c.id === o) || {}).nome, nomeD = (_cb.contas.find(c => c.id === de) || {}).nome;
+      const autor = await _cbAutor();
+      const pernas = [
+        Object.assign({}, comum, { conta_id: o, natureza: 'D', transferencia_id: tid, autor, descricao: comum.descricao || `${_CB_TIPOS[tipo].rot.split(' (')[0].toUpperCase()} PARA ${nomeD}` }),
+        Object.assign({}, comum, { conta_id: de, natureza: 'C', transferencia_id: tid, autor, descricao: comum.descricao || `${_CB_TIPOS[tipo].rot.split(' (')[0].toUpperCase()} DE ${nomeO}` }),
+      ];
+      if (d.movId) { const lado = pernas.find(p => p.conta_id === _cb.contaId); if (lado) { lado.conciliado = true; lado.banco_mov_id = d.movId; } }
+      const { error } = await sb.from('oct_fin_lancamentos').insert(pernas);
+      if (error) throw error;
+      if (d.movId) await sb.from('oct_banco_movimentos').update({ conciliado: true }).eq('id', d.movId);
+    } else {
+      const novo = Object.assign({}, comum, { conta_id: Number(g('cbf-conta').value), natureza: g('cbf-nat').value, autor: await _cbAutor() });
+      if (d.movId) { novo.conciliado = true; novo.banco_mov_id = d.movId; }
+      const { error } = await sb.from('oct_fin_lancamentos').insert(novo);
+      if (error) throw error;
+      if (d.movId) await sb.from('oct_banco_movimentos').update({ conciliado: true }).eq('id', d.movId);
+    }
+  } catch (e) { return msg('Erro: ' + (e.message || e)); }
+  g('cb-modal').remove();
+  _cb.selL.clear(); _cb.selM = null;
+  _cbCarregar(false);
+}
+
+async function cbExcluir() {
+  const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id));
+  if (!lancs.length) return;
+  if (lancs.some(l => l.conciliado)) { alert('Desconcilie antes de excluir.'); return; }
+  const autos = lancs.filter(l => l.origem !== 'manual').length;
+  if (!confirm(`Excluir ${lancs.length} lançamento(s)?` + (autos ? `\n${autos} vem(vêm) de Contas a pagar / títulos: some(m) do livro, mas o título continua como está na origem.` : '') +
+    (lancs.some(l => l.transferencia_id) ? '\nTransferência: as duas pernas são excluídas.' : ''))) return;
+  for (const l of lancs) {
+    if (l.origem !== 'manual') await sb.from('oct_fin_lancamentos').update({ excluido: true, atualizado_em: new Date().toISOString() }).eq('id', l.id);
+    else if (l.transferencia_id) await sb.from('oct_fin_lancamentos').delete().eq('transferencia_id', l.transferencia_id).eq('conciliado', false);
+    else await sb.from('oct_fin_lancamentos').delete().eq('id', l.id);
+  }
+  _cb.selL.clear();
+  _cbCarregar(false);
+}
+
+async function cbSaldoInicial() {
+  const c = _cbConta();
+  const v = prompt(`Saldo de "${c.nome}" no INÍCIO do dia ${_cbDt(c.saldo_inicial_em || _CB_INICIO)} (R$):`, String(c.saldo_inicial || 0).replace('.', ','));
+  if (v === null) return;
+  const n = Number(String(v).replace(/\./g, '').replace(',', '.'));
+  if (!isFinite(n)) { alert('Valor inválido.'); return; }
+  const { error } = await sb.from('oct_fin_contas').update({ saldo_inicial: n, saldo_inicial_em: c.saldo_inicial_em || _CB_INICIO }).eq('id', c.id);
+  if (error) { alert('Erro: ' + error.message); return; }
+  _cbCarregar(false);
 }
