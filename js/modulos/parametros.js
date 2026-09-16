@@ -17,6 +17,27 @@
 
 const PARAM_DEFS = [
   {
+    // 16/09/2026: antes isso só existia no config_local.json do PC do posto —
+    // para ligar o e-mail do PagBank na AC era preciso ir até lá. O núcleo passa
+    // a ler estas chaves da nuvem quando não acha a seção no arquivo local.
+    grupo: '💳 PagBank — e-mail de venda aprovada',
+    itens: [
+      { chave: 'pagbank_email_usuario', tipo: 'texto', rot: 'E-mail que recebe o aviso de venda', pad: '',
+        dica: 'postoxxxx@gmail.com',
+        desc: 'Caixa onde chega o "Venda aprovada" do PagBank. Ative o aviso no painel do PagBank: Configurações › Notificações › Seu negócio.' },
+      { chave: 'pagbank_email_senha', tipo: 'senha', rot: 'Senha de app do e-mail', pad: '',
+        desc: 'NÃO é a senha normal. No Gmail: Conta Google › Segurança › Verificação em duas etapas › Senhas de app. Dá só leitura e pode ser revogada.' },
+      { chave: 'pagbank_email_host', tipo: 'texto', rot: 'Servidor IMAP', pad: '', dica: 'imap.gmail.com',
+        desc: 'Em branco usa imap.gmail.com.' },
+      { chave: 'pagbank_email_porta', tipo: 'texto', rot: 'Porta do IMAP', pad: '', dica: '993',
+        desc: 'Em branco usa 993.' },
+      { chave: 'pagbank_email_remetente', tipo: 'texto', rot: 'Remetente do aviso', pad: '', dica: 'pagbank.com.br',
+        desc: 'Filtro de quem envia. Em branco usa pagbank.com.br.' },
+      { chave: 'pagbank_email_dias', tipo: 'texto', rot: 'Dias para trás na leitura', pad: '', dica: '2',
+        desc: 'Quantos dias de e-mail o núcleo relê a cada consulta. Em branco usa 1.' },
+    ],
+  },
+  {
     grupo: '📷 Câmera e imagens',
     itens: [
       { chave: 'webcam_disponivel', rot: 'Webcam instalada neste posto', pad: true,
