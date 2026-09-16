@@ -15,12 +15,18 @@
 
 const CB_TARIFA_BOLETO = 3.72;   // tarifa do Sicoob por boleto liquidado
 const _CB_INICIO = '2026-07-01'; // o livro começa aqui (decisão do Ronan)
+const _CB_MAX_LINHAS = 2000;     // cada Pix/cartão é uma linha: a tabela mostra por partes
 const _CB_TIPOS = {
   despesa_financeira: { rot: 'Despesa financeira', nat: 'D' },
   receita_financeira: { rot: 'Receita financeira', nat: 'C' },
   despesa_adm:        { rot: 'Despesa administrativa', nat: 'D' },
   receita_adm:        { rot: 'Receita administrativa', nat: 'C' },
   pagamento_titulo:   { rot: 'Pagamento de título', nat: 'D' },
+  venda_maquininha:   { rot: 'Venda na maquininha', nat: 'C' },
+  taxa_maquininha:    { rot: 'Taxa da maquininha', nat: 'D' },
+  deposito_cofre:     { rot: 'Depósito no cofre', nat: 'C' },
+  recebimento_pix:    { rot: 'Recebimento Pix/transferência', nat: 'C' },
+  liberacao_cheque:   { rot: 'Liberação de cheque', nat: 'C' },
   recebimento_titulo: { rot: 'Recebimento de título', nat: 'C' },
   transferencia:      { rot: 'Transferência entre contas', nat: null },
   saque:              { rot: 'Saque (banco → caixa)', nat: null },
@@ -90,6 +96,9 @@ async function _cbCarregar(sincronizar) {
   if (sincronizar || !_cb.sincronizado[eid]) {
     const { error } = await sb.rpc('oct_fin_sincronizar', { p_empresa: eid, p_desde: _CB_INICIO });
     if (error) console.warn('oct_fin_sincronizar:', error.message);
+    // etapa 2: vendas na maquininha, taxa do dia, cofre e Pix de cliente do extrato
+    const { error: eV } = await sb.rpc('oct_fin_sincronizar_vendas', { p_empresa: eid, p_desde: _CB_INICIO });
+    if (eV) console.warn('oct_fin_sincronizar_vendas:', eV.message);
     _cb.sincronizado[eid] = Date.now();
   }
 
@@ -161,7 +170,9 @@ function _cbRender() {
     (!busca || [l.pessoa, l.descricao, l.detalhe, l.documento, _cbNum(l.valor)].join(' ').toLowerCase().includes(busca)));
 
   const tipoRot = t => (_CB_TIPOS[t] && _CB_TIPOS[t].rot) || t || '';
-  const trL = vis.map(({ l, saldo: s, seq }) => {
+  // milhares de vendas por mês: a tabela mostra até 2.000 linhas por vez
+  const cortou = vis.length > _CB_MAX_LINHAS;
+  const trL = vis.slice(0, _CB_MAX_LINHAS).map(({ l, saldo: s, seq }) => {
     const sel = _cb.selL.has(l.id);
     const sg = sug[l.id];
     const bg = sel ? '#1e3a5f' : l.conciliado ? '#0f1f17' : sg ? '#2a2310' : 'transparent';
@@ -279,6 +290,7 @@ function _cbRender() {
           <tbody>
             <tr><td class="cbl-td" colspan="9" style="color:#7c8698">Saldo anterior a ${_cbDt(per.ini)}</td><td class="cbl-td cbl-r" style="font-weight:600">${_cbNum(_cb.saldoAntes)}</td><td></td></tr>
             ${trL || '<tr><td class="cbl-td" colspan="11" style="color:#777;padding:14px">Nenhum lançamento no período.</td></tr>'}
+            ${cortou ? `<tr><td class="cbl-td" colspan="11" style="color:#fbbf24;padding:10px">Mostrando as ${_CB_MAX_LINHAS} primeiras de ${vis.length} linhas — refine pelo período ou pela busca. Os totais abaixo consideram todas.</td></tr>` : ''}
           </tbody></table></div>
       </div>
       <div class="cbl-pane">
