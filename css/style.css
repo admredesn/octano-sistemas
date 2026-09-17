@@ -26,6 +26,13 @@ body { background: #0f1117; color: #e0e0e0; }
 .toolbar-item.breve small { font-size: 0.65rem; color: #f97316; margin-left: 4px; }
 
 .conteudo { padding: 24px; overflow-y: auto; height: calc(100vh - 90px); }
+/* 17/09/2026: o menu quebra em 2+ linhas e a conta fixa de 90px estourava a
+   janela -> duas barras de rolagem. Agora a tela é uma coluna do tamanho da
+   janela e só o conteúdo rola, qualquer que seja a altura do menu. */
+.app-shell { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.app-shell > .topbar, .app-shell > .toolbar { flex: 0 0 auto; }
+.app-shell > .conteudo { flex: 1 1 auto; min-height: 0; height: auto; }
+body:has(> #app.app-shell) { overflow: hidden; }
 .modulo-container { max-width: 860px; }
 .modulo-header { margin-bottom: 16px; border-bottom: 1px solid #2a2d3e; padding-bottom: 8px; }
 .modulo-header h2 { font-size: 1rem; color: #f97316; font-weight: 600; }

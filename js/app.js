@@ -142,6 +142,7 @@ function _tvPedeLogin(){
 }
 
 function renderLogin(){
+  document.getElementById('app').className = '';
   document.getElementById('app').innerHTML =
     '<div class="login-container"><div class="login-box">' +
     '<div class="login-logo"><h1>OCTANO</h1><span>SISTEMAS</span></div>' +
@@ -185,6 +186,7 @@ function _nomeUsuarioTopo(session) {
 async function renderApp(session){
   // carrega o contexto multi-empresa (perfil, lista de empresas, empresa ativa)
   await empresaCarregarContexto(session);
+  document.getElementById('app').className = 'app-shell';
   document.getElementById('app').innerHTML =
     '<div class="topbar">' +
       '<div class="logo">OCTANO SISTEMAS</div>' +
