@@ -21,9 +21,14 @@ async function moduloOperadores() {
   await opListar();
 }
 
+let _opNomesEmpresa = {};
+
 async function opListar() {
   const conteudo = document.getElementById('conteudo');
   const empresaId = window._opEmpresaId;
+  const { data: empresas } = await sb.from('oct_empresas').select('id,nome,nome_fantasia');
+  _opNomesEmpresa = {};
+  (empresas || []).forEach(e => { _opNomesEmpresa[e.id] = e.nome_fantasia || e.nome; });
   const { data: ops } = await sb.from('oct_perfis')
     .select('*')
     .eq('empresa_id', empresaId).order('nome');
@@ -40,7 +45,7 @@ async function opListar() {
         <table style="width:100%;border-collapse:collapse;font-size:0.86rem">
           <thead><tr style="color:#888;text-align:left;background:#0f1119">
             <th style="padding:10px 12px">Nome</th><th style="padding:10px 12px">Usuário</th>
-            <th style="padding:10px 12px">Perfil</th><th style="padding:10px 12px">${PERM.legado ? 'Gerencial' : 'Exceções'}</th>
+            <th style="padding:10px 12px">Perfil</th><th style="padding:10px 12px">Postos</th><th style="padding:10px 12px">${PERM.legado ? 'Gerencial' : 'Exceções'}</th>
             <th style="padding:10px 12px">Situação</th><th></th>
           </tr></thead>
           <tbody>
@@ -49,6 +54,7 @@ async function opListar() {
               <td style="padding:9px 12px;font-weight:600">${opEsc(o.nome)}</td>
               <td style="padding:9px 12px;font-family:monospace;color:#f97316">${opEsc(o.usuario) || '<span style="color:#666">— sem usuário —</span>'}</td>
               <td style="padding:9px 12px">${opEsc(_opPapelRot(o))}</td>
+              <td style="padding:9px 12px;font-size:0.8rem;color:#9aa">${_opPostosCel(o, _opNomesEmpresa)}</td>
               <td style="padding:9px 12px">${PERM.legado ? _opGerencialCel(o) : _opExcecoesCel(o)}</td>
               <td style="padding:9px 12px">${o.ativo ? '<span style="color:#4caf50">ativo</span>' : '<span style="color:#888">inativo</span>'}</td>
               <td style="padding:9px 12px;text-align:right;white-space:nowrap">
@@ -59,7 +65,7 @@ async function opListar() {
                   ? `<button onclick="opAcessoForm('${o.id}')" class="nfe-aba" style="font-size:0.76rem;color:#60a5fa">🖥 Gerencial</button>`
                   : `<button onclick="opPerfilForm('${o.id}')" class="nfe-aba" style="font-size:0.76rem;color:#60a5fa">🛡️ Perfil</button>`) : ''}
               </td>
-            </tr>`).join('') : '<tr><td colspan="6" style="padding:20px;text-align:center;color:#666">Nenhum operador cadastrado.</td></tr>'}
+            </tr>`).join('') : '<tr><td colspan="7" style="padding:20px;text-align:center;color:#666">Nenhum operador cadastrado.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -77,6 +83,12 @@ function _opPapelRot(o) {
   return o.master ? 'Gerente' : 'Operador / caixa';
 }
 
+function _opPostosCel(o, nomes) {
+  if (o.papel === 'master') return '<span style="color:#fbbf24">todos</span>';
+  const ids = (o.empresas && o.empresas.length) ? o.empresas : (o.empresa_id ? [o.empresa_id] : []);
+  return ids.map(id => opEsc(nomes[id] || '—')).join(', ') || '<span style="color:#555">—</span>';
+}
+
 function _opExcecoesCel(o) {
   const n = (o.perm_mais || []).length + (o.perm_menos || []).length;
   return n ? `<span style="color:#60a5fa">${n} exceção(ões)</span>` : '<span style="color:#555">—</span>';
@@ -90,6 +102,12 @@ async function opPerfilForm(id) {
   if (!o) return;
   _opPf.id = id; _opPf.nome = o.nome; _opPf.usuario = o.usuario; _opPf.busca = '';
   _opPf.papel = o.papel || (o.master ? 'gerente' : 'operador');
+  _opPf.empresaId = o.empresa_id;
+  _opPf.empresas = new Set((o.empresas && o.empresas.length) ? o.empresas : (o.empresa_id ? [o.empresa_id] : []));
+  if (!_opPf.listaEmpresas) {
+    const { data } = await sb.from('oct_empresas').select('id,nome,nome_fantasia').or('ativo.is.null,ativo.eq.true').order('nome');
+    _opPf.listaEmpresas = data || [];
+  }
   await _opPfPadrao();
   const mais = new Set(o.perm_mais || []), menos = new Set(o.perm_menos || []);
   _opPf.marcado = new Set([..._opPf.padrao].filter(c => !menos.has(c)));
@@ -110,6 +128,10 @@ async function opPfTrocarPapel(papel) {
   _opPfRender();
 }
 
+function opPfEmpresa(id, on) {
+  on ? _opPf.empresas.add(id) : _opPf.empresas.delete(id);
+  _opPfRender();
+}
 function opPfMarcar(c, on) { on ? _opPf.marcado.add(c) : _opPf.marcado.delete(c); _opPfRender(); }
 function opPfBuscar(v) {
   _opPf.busca = v; _opPfRender();
@@ -128,6 +150,7 @@ function _opPfRender() {
         const exc = _opPf.marcado.has(i.c) !== _opPf.padrao.has(i.c);
         return `<label style="display:flex;align-items:center;gap:8px;padding:2px 6px;border-radius:4px;${exc ? 'background:#1a2030' : ''}">
           <input type="checkbox" style="width:auto" ${_opPf.marcado.has(i.c) || master ? 'checked' : ''} ${master ? 'disabled' : ''} onchange="opPfMarcar('${i.c}', this.checked)">
+          <span style="color:#7c8698;font-family:monospace;font-size:0.72rem;min-width:40px">${i.cod}</span>
           <span style="color:#cdd6e0;font-size:0.8rem;flex:1">${opEsc(i.d)}</span>
           <span style="color:${exc ? '#60a5fa' : '#556'};font-size:0.68rem">${exc ? 'exceção' : (_opPf.padrao.has(i.c) ? 'do perfil' : '')}</span>
         </label>`;
@@ -138,6 +161,15 @@ function _opPfRender() {
       <h3 style="color:#ddd;margin-bottom:4px">🛡️ Perfil de ${opEsc(_opPf.nome)}</h3>
       <p style="color:#667;font-size:0.78rem;margin-bottom:12px">usuário <b style="color:#f97316">${opEsc(_opPf.usuario || '')}</b> ·
         o perfil define o padrão (Perfis); marque aqui só o que for diferente para esta pessoa</p>
+      <div style="color:#94a3b8;font-size:0.78rem;margin-bottom:4px">Postos que esta pessoa acessa</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+        ${master ? '<span style="color:#fbbf24;font-size:0.8rem">Master acessa todos os postos.</span>' :
+          (_opPf.listaEmpresas || []).map(e => `
+          <label style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:6px;cursor:pointer;
+            border:1px solid ${_opPf.empresas.has(e.id) ? '#f97316' : '#2a2d3e'};background:${_opPf.empresas.has(e.id) ? '#1f1a14' : '#0b0d14'};color:#cdd6e0;font-size:0.8rem">
+            <input type="checkbox" style="width:auto" ${_opPf.empresas.has(e.id) ? 'checked' : ''} onchange="opPfEmpresa('${e.id}', this.checked)">
+            ${opEsc(e.nome_fantasia || e.nome)}</label>`).join('')}
+      </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <select id="opp-papel" onchange="opPfTrocarPapel(this.value)" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
           ${PERFIS_OCTANO.map(p => `<option value="${p.id}" ${p.id === _opPf.papel ? 'selected' : ''}>${opEsc(p.rot)}</option>`).join('')}</select>
@@ -158,6 +190,12 @@ function _opPfRender() {
 async function opPerfilSalvar() {
   const msg = document.getElementById('op-msg');
   const papel = _opPf.papel;
+  const empresas = [..._opPf.empresas];
+  if (papel !== 'master' && !empresas.length) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Escolha pelo menos um posto — sem posto a pessoa entra e não vê nada.';
+    return;
+  }
   if (papel === 'master' && !confirm(`${_opPf.nome} vai ver e alterar TODOS os postos. Confirma o perfil Master?`)) return;
   const mais = [], menos = [];
   if (papel !== 'master') {
@@ -167,13 +205,20 @@ async function opPerfilSalvar() {
     });
   }
   msg.style.color = '#888'; msg.textContent = 'Salvando...';
-  const { error } = await sb.from('oct_perfis').update({
+  const corpo = {
     papel, master: papel === 'master', acessa_gerencial: papel !== 'operador',
     perm_mais: mais, perm_menos: menos,
-  }).eq('id', _opPf.id);
+  };
+  if (papel !== 'master') {
+    corpo.empresas = empresas;
+    // a empresa do cadastro continua sendo a "casa" da pessoa (PDV, ponto):
+    // se ela saiu da lista, passa a ser o primeiro posto autorizado
+    if (!empresas.includes(_opPf.empresaId)) corpo.empresa_id = empresas[0];
+  }
+  const { error } = await sb.from('oct_perfis').update(corpo).eq('id', _opPf.id);
   if (error) {
     msg.style.color = '#f87171';
-    msg.textContent = /papel|perm_/.test(error.message || '') ? 'Falta rodar repo/sql/SQL-PERFIS-PERMISSOES.sql no Supabase.' : 'Erro: ' + error.message;
+    msg.textContent = /papel|perm_|empresas/.test(error.message || '') ? 'Falta rodar repo/sql/SQL-PERFIS-PERMISSOES.sql no Supabase.' : 'Erro: ' + error.message;
     return;
   }
   msg.style.color = '#4caf50';

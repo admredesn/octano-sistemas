@@ -23,7 +23,7 @@ const PERFIS_OCTANO = [
 
 const PERM_CATALOGO = [
   // ---------------- RETAGUARDA ----------------
-  { area: 'Retaguarda', grupo: 'Financeiro — Contas a pagar', itens: [
+  { n: 1, area: 'Retaguarda', grupo: 'Financeiro — Contas a pagar', itens: [
     { c: 'contas_pagar.ver', d: 'Acessar Contas a pagar', p: 'gfc' },
     { c: 'contas_pagar.incluir', d: 'Incluir conta a pagar', p: 'gf', s: 1 },
     { c: 'contas_pagar.alterar', d: 'Alterar conta a pagar', p: 'gf', s: 1 },
@@ -33,7 +33,7 @@ const PERM_CATALOGO = [
     { c: 'contas_pagar.bancos', d: 'Gerenciar bancos', p: 'gf', s: 1 },
     { c: 'contas_pagar.plano', d: 'Incluir conta no plano de contas', p: 'gfc', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Financeiro — Conciliação bancária', itens: [
+  { n: 2, area: 'Retaguarda', grupo: 'Financeiro — Conciliação bancária', itens: [
     { c: 'conc_banco.ver', d: 'Acessar Conciliação', p: 'gfc' },
     { c: 'conc_banco.sincronizar', d: 'Atualizar o livro (contas pagas e vendas)', p: 'gf' },
     { c: 'conc_banco.incluir', d: 'Incluir lançamento', p: 'gf', s: 1 },
@@ -45,7 +45,7 @@ const PERM_CATALOGO = [
     { c: 'conc_banco.baixar_titulo', d: 'Baixar título pelo extrato', p: 'gf', s: 1 },
     { c: 'conc_banco.saldo_inicial', d: 'Alterar saldo inicial da conta', p: 'g', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Financeiro — Faturar', itens: [
+  { n: 3, area: 'Retaguarda', grupo: 'Financeiro — Faturar', itens: [
     { c: 'faturar.ver', d: 'Acessar Faturar', p: 'gf' },
     { c: 'faturar.receber_titulo', d: 'Receber título', p: 'gf', s: 1 },
     { c: 'faturar.parcelar', d: 'Parcelar título', p: 'gf', s: 1 },
@@ -59,7 +59,7 @@ const PERM_CATALOGO = [
     { c: 'faturar.enviar', d: 'Enviar fatura por e-mail/WhatsApp', p: 'gf', s: 1 },
     { c: 'faturar.cobrar', d: 'Cobrar cliente', p: 'gf', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Financeiro — Caixa, B.I e outros', itens: [
+  { n: 4, area: 'Retaguarda', grupo: 'Financeiro — Caixa, B.I e outros', itens: [
     { c: 'fcaixa.ver', d: 'Acessar Fechamento de caixa', p: 'gf' },
     { c: 'fcaixa.conferir', d: 'Conferir lançamentos do caixa', p: 'gf' },
     { c: 'fcaixa.lanc_incluir', d: 'Incluir lançamento no caixa', p: 'gf', s: 1 },
@@ -87,7 +87,7 @@ const PERM_CATALOGO = [
     { c: 'formas_pagamento.excluir', d: 'Excluir forma de recebimento', p: 'g', s: 1 },
     { c: 'formas_pagamento.negociacao', d: 'Criar/alterar/excluir preço negociado', p: 'gf', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Fiscal — Notas', itens: [
+  { n: 5, area: 'Retaguarda', grupo: 'Fiscal — Notas', itens: [
     { c: 'nfe.ver', d: 'Acessar NF-e de entrada', p: 'gfc' },
     { c: 'nfe.importar', d: 'Importar XML de entrada', p: 'gc', s: 1 },
     { c: 'nfe.alterar', d: 'Alterar / confirmar nota de entrada', p: 'gc', s: 1 },
@@ -109,7 +109,7 @@ const PERM_CATALOGO = [
     { c: 'manifestacao.incluir_nota', d: 'Importar nota manifestada', p: 'gc', s: 1 },
     { c: 'manifestacao.excluir', d: 'Excluir importação / desfazer', p: 'g', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Fiscal — Livros e contabilidade', itens: [
+  { n: 6, area: 'Retaguarda', grupo: 'Fiscal — Livros e contabilidade', itens: [
     { c: 'lmc.ver', d: 'Acessar LMC', p: 'gc' },
     { c: 'lmc.lancar_descarga', d: 'Lançar descarga', p: 'gc', s: 1 },
     { c: 'lmc.salvar_livro', d: 'Salvar livro do período', p: 'gc', s: 1 },
@@ -123,7 +123,7 @@ const PERM_CATALOGO = [
     { c: 'config_fiscal.ver', d: 'Acessar Config. fiscal', p: 'gc' },
     { c: 'config_fiscal.alterar', d: 'Alterar bombas, bicos e lacres fiscais', p: 'gc', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Cadastros — Pessoas', itens: [
+  { n: 7, area: 'Retaguarda', grupo: 'Cadastros — Pessoas', itens: [
     { c: 'pessoas.ver', d: 'Acessar Cadastro de pessoas', p: 'gfc' },
     { c: 'pessoas.incluir', d: 'Incluir pessoa', p: 'gf', s: 1 },
     { c: 'pessoas.alterar', d: 'Alterar pessoa', p: 'gf', s: 1 },
@@ -136,7 +136,7 @@ const PERM_CATALOGO = [
     { c: 'pessoas.lista_negra', d: 'Ver lista negra de placas', p: 'gf' },
     { c: 'pessoas.lista_negra_alterar', d: 'Bloquear/liberar placa', p: 'g', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Cadastros — Produtos e serviços', itens: [
+  { n: 8, area: 'Retaguarda', grupo: 'Cadastros — Produtos e serviços', itens: [
     { c: 'produtos.ver', d: 'Acessar Produtos', p: 'gfc' },
     { c: 'produtos.alterar', d: 'Incluir/alterar produto', p: 'gc' },
     { c: 'produtos.alterar_preco', d: 'Alterar preço, custo e margem', p: 'g', s: 1 },
@@ -146,7 +146,7 @@ const PERM_CATALOGO = [
     { c: 'servicos.alterar', d: 'Incluir/alterar serviço', p: 'gc' },
     { c: 'servicos.excluir', d: 'Excluir serviço', p: 'g', s: 1 },
   ]},
-  { area: 'Retaguarda', grupo: 'Pista — Tanques, aferição e ponto', itens: [
+  { n: 9, area: 'Retaguarda', grupo: 'Pista — Tanques, aferição e ponto', itens: [
     { c: 'tanques.ver', d: 'Acessar Tanques e bicos', p: 'gc' },
     { c: 'tanques.alterar', d: 'Incluir/alterar tanque (ajusta estoque)', p: 'g', s: 1 },
     { c: 'tanques.excluir', d: 'Excluir tanque', p: 'g', s: 1 },
@@ -161,11 +161,11 @@ const PERM_CATALOGO = [
     { c: 'ponto.ajustar', d: 'Incluir/ajustar marcação de ponto', p: 'g', s: 1 },
     { c: 'ponto.exportar', d: 'Exportar ponto', p: 'gf' },
   ]},
-  { area: 'Retaguarda', grupo: 'Relatórios', itens: [
+  { n: 10, area: 'Retaguarda', grupo: 'Relatórios', itens: [
     { c: 'relatorios.ver', d: 'Acessar Relatórios', p: 'gfc' },
     { c: 'relatorios.exportar', d: 'Exportar relatórios (Excel, CSV, impressão)', p: 'gfc' },
   ]},
-  { area: 'Retaguarda', grupo: 'Administração', itens: [
+  { n: 11, area: 'Retaguarda', grupo: 'Administração', itens: [
     { c: 'empresa.ver', d: 'Acessar Cadastro da empresa', p: 'gfc' },
     { c: 'empresa.alterar', d: 'Alterar dados da empresa', p: 'g', s: 1 },
     { c: 'empresa.certificado', d: 'Enviar/remover certificado digital', p: 'g', s: 1 },
@@ -182,7 +182,7 @@ const PERM_CATALOGO = [
   ]},
 
   // ---------------- PDV ----------------
-  { area: 'PDV', grupo: 'Turno e caixa', itens: [
+  { n: 12, area: 'PDV', grupo: 'Turno e caixa', itens: [
     { c: 'pdv.abrir_turno', d: 'Abrir turno', p: 'go' },
     { c: 'pdv.fechar_turno', d: 'Fechar turno', p: 'go', s: 1 },
     { c: 'pdv.suprimento', d: 'Suprimento', p: 'go', s: 1 },
@@ -193,7 +193,7 @@ const PERM_CATALOGO = [
     { c: 'pdv.resumo_caixa', d: 'Resumo do caixa (vendas, encerrantes, cartões)', p: 'go' },
     { c: 'pdv.paralisar_caixa', d: 'Paralisar caixa', p: 'go' },
   ]},
-  { area: 'PDV', grupo: 'Venda', itens: [
+  { n: 13, area: 'PDV', grupo: 'Venda', itens: [
     { c: 'pdv.fechar_venda', d: 'Fechar venda / emitir cupom (F1)', p: 'go', s: 1 },
     { c: 'pdv.adicionar_produto', d: 'Vender produto da loja (F2)', p: 'go' },
     { c: 'pdv.cancelar_item', d: 'Cancelar item (F5)', p: 'go', s: 1 },
@@ -214,14 +214,14 @@ const PERM_CATALOGO = [
     { c: 'pdv.cashback', d: 'Aplicar cashback na venda', p: 'go' },
     { c: 'pdv.emitir_nfse', d: 'Emitir nota de serviço', p: 'go', s: 1 },
   ]},
-  { area: 'PDV', grupo: 'Recebimentos e fila', itens: [
+  { n: 14, area: 'PDV', grupo: 'Recebimentos e fila', itens: [
     { c: 'pdv.conciliacao', d: 'Buscar extrato, EDI, cofre e frota', p: 'go' },
     { c: 'pdv.vincular_recebimento', d: 'Vincular recebimento ao abastecimento', p: 'go', s: 1 },
     { c: 'pdv.fila_alterar_forma', d: 'Trocar forma de pagamento na fila', p: 'go', s: 1 },
     { c: 'pdv.fila_transmitir', d: 'Transmitir a fila', p: 'go', s: 1 },
     { c: 'pdv.fila_desfazer', d: 'Desfazer baixa da fila', p: 'go', s: 1 },
   ]},
-  { area: 'PDV', grupo: 'Consultas e ponto', itens: [
+  { n: 15, area: 'PDV', grupo: 'Consultas e ponto', itens: [
     { c: 'pdv.consultar_abastecimentos', d: 'Consultar abastecimentos', p: 'go' },
     { c: 'pdv.consultar_recebimentos', d: 'Consultar recebimentos EDI/cofre', p: 'go' },
     { c: 'pdv.consultar_produtos', d: 'Consultar produtos', p: 'go' },
@@ -229,7 +229,7 @@ const PERM_CATALOGO = [
     { c: 'pdv.registrar_ponto', d: 'Registrar ponto', p: 'go' },
     { c: 'pdv.adiar_ponto', d: 'Adiar trava do ponto', p: 'g' },
   ]},
-  { area: 'PDV', grupo: 'Menu gerente (F8)', itens: [
+  { n: 16, area: 'PDV', grupo: 'Menu gerente (F8)', itens: [
     { c: 'pdv.menu_gerente', d: 'Abrir o menu gerente', p: 'g' },
     { c: 'pdv.alterar_preco', d: 'Alterar preço de bomba', p: 'g', s: 1 },
     { c: 'pdv.ajuste_tanque', d: 'Ajustar estoque do tanque', p: 'g', s: 1 },
@@ -242,10 +242,28 @@ const PERM_CATALOGO = [
   ]},
 ];
 
+// ---------------- código de cada permissão (1.1, 2.3...) ----------------
+// O número do GRUPO é fixo no catálogo (n) e o da permissão é a posição dentro
+// dele — por isso permissão nova entra no FIM do grupo: assim 2.2 continua
+// sendo 2.2 no dia seguinte, que é o que a pessoa lê na mensagem de bloqueio.
+const _PERM_COD = {};
+const _PERM_ITEM = {};
+PERM_CATALOGO.forEach(g => g.itens.forEach((i, j) => {
+  i.cod = g.n + '.' + (j + 1);
+  _PERM_COD[i.c] = i.cod;
+  _PERM_ITEM[i.c] = i;
+}));
+
+function permCodigo(chave) { return _PERM_COD[chave] || ''; }
+function permRotulo(chave) {
+  const i = _PERM_ITEM[chave];
+  return i ? (i.cod + ' — ' + i.d) : chave;
+}
+
 // ---------------- o usuário logado ----------------
 // Preenchido por permCarregar() no login. Enquanto o SQL novo não rodou
 // (rpc inexistente), fica em "legado" e a tela usa o controle antigo (PAPEIS).
-const PERM = { carregado: false, legado: true, papel: null, master: false, set: new Set() };
+const PERM = { carregado: false, legado: true, papel: null, master: false, set: new Set(), empresas: [] };
 
 function permPadrao(perfil) {
   const letra = { gerente: 'g', financeiro: 'f', contabilidade: 'c', operador: 'o' }[perfil];
@@ -261,6 +279,7 @@ async function permCarregar() {
     PERM.papel = data && data.papel || null;
     PERM.master = !!(data && data.master);
     PERM.set = new Set((data && data.liberadas) || []);
+    PERM.empresas = (data && data.empresas) || [];   // empresas autorizadas (vazio = só a do cadastro)
     PERM.legado = false;
   } catch (e) {
     console.warn('permissões: usando o controle antigo —', e.message || e);
@@ -278,7 +297,8 @@ function pode(chave) {
 // para ações: avisa e devolve false quando não pode
 function podeOuAvisa(chave) {
   if (pode(chave)) return true;
-  const item = PERM_CATALOGO.flatMap(g => g.itens).find(i => i.c === chave);
-  alert('Sem permissão: ' + (item ? item.d : chave) + '.\nPeça ao administrador para liberar no seu perfil.');
+  const perfil = (PERFIS_OCTANO.find(p => p.id === PERM.papel) || {}).rot || PERM.papel || 'seu perfil';
+  alert('Sem permissão\n\n' + permRotulo(chave) +
+        '\n\nPerfil: ' + perfil + '.\nPeça ao administrador para liberar esta permissão.');
   return false;
 }

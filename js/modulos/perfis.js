@@ -53,7 +53,7 @@ function _pfRender() {
   const total = PERM_CATALOGO.reduce((s, g) => s + g.itens.length, 0);
   let areaAtual = '';
   const grupos = PERM_CATALOGO.map((g, gi) => {
-    const itens = g.itens.filter(i => !busca || (i.d + ' ' + i.c + ' ' + g.grupo).toLowerCase().includes(busca));
+    const itens = g.itens.filter(i => !busca || (i.cod + ' ' + i.d + ' ' + i.c + ' ' + g.grupo).toLowerCase().includes(busca));
     if (!itens.length) return '';
     const lib = itens.filter(i => _pf.marcado.has(i.c)).length;
     const fechado = _pf.fechados.has(gi) && !busca;
@@ -63,7 +63,7 @@ function _pfRender() {
       <div style="border:1px solid #2a2d3e;border-radius:8px;margin-bottom:8px;background:#0f1119">
         <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer" onclick="pfAlternarGrupo(${gi})">
           <span style="color:#667;width:12px">${fechado ? '▸' : '▾'}</span>
-          <b style="color:#ddd;flex:1">${_pfEsc(g.grupo)}</b>
+          <b style="color:#ddd;flex:1"><span style="color:#f97316;font-family:monospace">${g.n}</span> ${_pfEsc(g.grupo)}</b>
           <span style="color:${lib === itens.length ? '#4ade80' : lib ? '#fbbf24' : '#667'};font-size:0.76rem">${lib}/${itens.length}</span>
           ${ehMaster ? '' : `<button class="nfe-aba" style="font-size:0.7rem;padding:2px 8px" onclick="event.stopPropagation();pfGrupoTodos(${gi},true)">todos</button>
           <button class="nfe-aba" style="font-size:0.7rem;padding:2px 8px" onclick="event.stopPropagation();pfGrupoTodos(${gi},false)">nenhum</button>`}
@@ -71,6 +71,7 @@ function _pfRender() {
         ${fechado ? '' : `<div style="padding:2px 12px 8px 32px">${itens.map(i => `
           <label style="display:flex;align-items:center;gap:8px;padding:3px 0;border-top:1px solid #161a24;cursor:${ehMaster ? 'default' : 'pointer'}">
             <input type="checkbox" style="width:auto" ${_pf.marcado.has(i.c) ? 'checked' : ''} ${ehMaster ? 'disabled' : ''} onchange="pfMarcar('${i.c}', this.checked)">
+            <span style="color:#7c8698;font-family:monospace;font-size:0.76rem;min-width:44px">${i.cod}</span>
             <span style="color:#cdd6e0;font-size:0.83rem;flex:1">${_pfEsc(i.d)}${i.s ? ' <span title="sensível: dinheiro, documento fiscal, exclusão ou configuração" style="font-size:0.62rem;color:#fca5a5;border:1px solid #7f1d1d;border-radius:3px;padding:0 4px">sensível</span>' : ''}</span>
             <span style="color:#556;font-size:0.68rem;font-family:monospace">${_pfEsc(i.c)}</span>
           </label>`).join('')}</div>`}
@@ -95,7 +96,7 @@ function _pfRender() {
       </div>
       <div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-          <input id="pf-busca" placeholder="Filtrar permissão..." value="${_pfEsc(_pf.busca)}" oninput="pfBuscar(this.value)"
+          <input id="pf-busca" placeholder="Filtrar por código (2.2) ou texto..." value="${_pfEsc(_pf.busca)}" oninput="pfBuscar(this.value)"
             style="flex:1;min-width:200px;padding:8px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
           <span style="color:#94a3b8;font-size:0.8rem">${_pf.marcado.size} de ${total} liberadas</span>
           ${ehMaster ? '' : `

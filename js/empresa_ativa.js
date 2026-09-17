@@ -45,7 +45,18 @@ async function empresaCarregarContexto(session) {
   }
 
   // 2) lista de empresas que o usuario pode ver
-  if (EMPRESA.ehMaster) {
+  // 17/09/2026: a pessoa pode ser autorizada em VÁRIOS postos (oct_perfis.empresas);
+  // o seletor do topo mostra exatamente essa lista. Master continua vendo todos.
+  const autorizadas = (typeof PERM !== 'undefined' && !PERM.legado && !PERM.master) ? (PERM.empresas || []) : [];
+  if (autorizadas.length > 1 || (autorizadas.length === 1 && autorizadas[0] !== EMPRESA.perfilEmpresaId)) {
+    const { data } = await sb
+      .from('oct_empresas')
+      .select('id, nome, nome_fantasia, cnpj')
+      .in('id', autorizadas)
+      .or('ativo.is.null,ativo.eq.true')
+      .order('nome', { ascending: true });
+    EMPRESA.lista = data || [];
+  } else if (EMPRESA.ehMaster) {
     // master ve todas as ATIVAS (empresa com ativo=false fica oculta do seletor;
     // reativar = voltar ativo=true no banco). Inclui ativo=null (nao desativada).
     const { data } = await sb
