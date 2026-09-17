@@ -107,6 +107,7 @@ async function abrirFormPlanoContab(id, eId) {
     + '</div></div>';
 }
 async function salvarPlanoContab(id, eId) {
+  if (!podeOuAvisa('contabilidade.plano')) return;
   const msg = document.getElementById('fpc-msg');
   const codigo = document.getElementById('fpc-cod').value.trim();
   const descricao = document.getElementById('fpc-desc').value.trim();
@@ -121,6 +122,7 @@ async function salvarPlanoContab(id, eId) {
   setTimeout(() => moduloContabilidade('plano'), 800);
 }
 async function excluirPlanoContab(id, eId) {
+  if (!podeOuAvisa('contabilidade.plano')) return;
   if (!confirm('Excluir esta conta?')) return;
   await sb.from('oct_plano_contas').update({ ativo: false }).eq('id', id);
   moduloContabilidade('plano');
@@ -207,6 +209,7 @@ async function renderSpedFiscal(empresaId, empresa) {
     + '</div>';
 }
 async function gerarSpedFiscal() {
+  if (!podeOuAvisa('contabilidade.gerar_sped')) return;
   // ============================================================
   // REESCRITO EM 08/08/2026 sobre o EFD REAL do posto (ReceitanetBX).
   // A montagem vive em sped_fiscal.js (spedFiscalMontar, funcao pura e
@@ -313,6 +316,7 @@ function _spedPreencherCfg(cfg) {
 
 // salva a configuracao em oct_empresas.sped_config (jsonb)
 async function spedSalvarConfig() {
+  if (!podeOuAvisa('contabilidade.sped_config')) return;
   const msg = document.getElementById('sped-cfg-msg');
   try {
     const ctd = {};
@@ -415,6 +419,7 @@ async function renderEcd(empresaId, empresa) {
 }
 
 async function gerarEcd() {
+  if (!podeOuAvisa('contabilidade.gerar_sped')) return;
   const ano = parseInt(document.getElementById('ecd-ano').value);
   const empresaId = window._contab_empresa_id;
   const empresa = window._contab_empresa;
@@ -456,6 +461,7 @@ async function gerarEcd() {
 }
 
 function downloadSped(tipo) {
+  if (!podeOuAvisa('contabilidade.gerar_sped')) return;
   const map = {
     fiscal: [window._spedFiscalTxt, window._spedFiscalNome],
     pis: [window._spedPisTxt, window._spedPisNome],

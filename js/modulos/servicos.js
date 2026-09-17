@@ -91,6 +91,7 @@ async function abrirFormServico(id, empresaId) {
 }
 
 async function salvarServico() {
+  if (!podeOuAvisa('servicos.alterar')) return;
   const msg = document.getElementById('fs-msg');
   const nome = document.getElementById('fs-nome').value.trim();
   if (!nome) { msg.textContent = 'Informe o nome do serviço.'; msg.style.color = '#f44'; return; }
@@ -121,6 +122,7 @@ async function salvarServico() {
 }
 
 async function excluirServico(id) {
+  if (!podeOuAvisa('servicos.excluir')) return;
   if (!confirm('Excluir este serviço? (ele deixa de aparecer na emissão de NFS-e)')) return;
   const { error } = await sb.from('oct_servicos').update({ ativo: false }).eq('id', id);
   if (error) { alert('Erro ao excluir: ' + error.message); return; }

@@ -252,6 +252,7 @@ async function frotaCarregar(empresaPessoaId) {
     </div>`).join('');
 }
 async function frotaAdd(empresaPessoaId, empresaId) {
+  if (!podeOuAvisa('pessoas.frota')) return;
   const placa = (document.getElementById('fpe-frota-placa').value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
   const veiculo = (document.getElementById('fpe-frota-veic').value || '').trim();
   const mot = document.getElementById('fpe-frota-mot').value || null;
@@ -267,6 +268,7 @@ async function frotaAdd(empresaPessoaId, empresaId) {
   frotaCarregar(empresaPessoaId);
 }
 async function frotaRemover(veicId, empresaPessoaId) {
+  if (!podeOuAvisa('pessoas.frota')) return;
   await sb.from('oct_frota_veiculos').update({ ativo: false }).eq('id', veicId);
   frotaCarregar(empresaPessoaId);
 }
@@ -359,6 +361,7 @@ async function buscarCnpjPessoa() {
 }
 
 async function salvarPessoa(id, empresaId) {
+  if (!podeOuAvisaAlgum(['pessoas.incluir', 'pessoas.alterar'])) return;
   const msg = document.getElementById('fpe-msg');
   const nome = document.getElementById('fpe-nome').value.trim();
   if (!nome) { msg.textContent = 'Nome obrigatório.'; msg.style.color = '#f44'; return; }
@@ -436,6 +439,7 @@ async function salvarPessoa(id, empresaId) {
 }
 
 async function excluirPessoa(id) {
+  if (!podeOuAvisa('pessoas.excluir')) return;
   if (!confirm('Excluir esta pessoa? (fica inativa, não some do histórico de NF-es)')) return;
   await sb.from('oct_pessoas').update({ ativo: false }).eq('id', id);
   moduloPessoas();
@@ -451,6 +455,7 @@ function pessoaStatusHtml(p) {
     + `${on ? '🟢 Ativo' : '⚪ Inativo'}</button>`;
 }
 async function pessoaSetAtivo(id, ativo) {
+  if (!podeOuAvisa('pessoas.ativar')) return;
   await sb.from('oct_pessoas').update({ ativo }).eq('id', id);
   moduloPessoas();
 }
@@ -541,6 +546,7 @@ async function placasListar() {
 }
 
 async function placaBloquear() {
+  if (!podeOuAvisa('pessoas.lista_negra_alterar')) return;
   const msg = document.getElementById('pl-msg');
   const placa = _plNorm(document.getElementById('pl-placa').value);
   const motivo = (document.getElementById('pl-motivo').value || '').trim();
@@ -560,6 +566,7 @@ async function placaBloquear() {
 }
 
 async function placaLiberar(id) {
+  if (!podeOuAvisa('pessoas.lista_negra_alterar')) return;
   if (!confirm('Liberar esta placa? Ela volta a poder abastecer a prazo.')) return;
   const { error } = await sb.from('oct_placas_bloqueadas')
     .update({ ativo: false, liberado_em: new Date().toISOString() }).eq('id', id);

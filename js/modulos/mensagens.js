@@ -165,6 +165,7 @@ function _msgPreview(i) {
 }
 
 async function msgSalvarTudo() {
+  if (!podeOuAvisa('parametros.alterar')) return;
   const st = document.getElementById('msg-status');
   st.style.color = '#8892a0'; st.textContent = 'Salvando...';
   const { data: s } = await sb.auth.getSession();

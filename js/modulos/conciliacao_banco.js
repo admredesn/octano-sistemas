@@ -399,6 +399,7 @@ function _cbMoverCursor(passo, somar) {
 // Espaço: com a linha do banco selecionada (ou a sugestão única de mesmo valor)
 // liga as duas; sem ela, só marca como conferido (dinheiro, conta sem extrato).
 async function cbAlternarConciliado() {
+  if (!podeOuAvisa('conc_banco.conciliar')) return;
   const l = _cb.lanc.find(x => x.id === _cb.cursor);
   if (!l || _cb.ocupado) return;
   _cb.ocupado = true;
@@ -470,6 +471,7 @@ async function _cbLigar(lancs, mov) {
 }
 
 async function cbConciliar() {
+  if (!podeOuAvisa('conc_banco.conciliar')) return;
   const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id));
   const mov = _cb.movs.find(m => m.id === _cb.selM);
   if (!lancs.length || !mov) return;
@@ -483,6 +485,7 @@ async function cbConciliar() {
 }
 
 async function cbConciliarPar(lancId, movId) {
+  if (!podeOuAvisa('conc_banco.conciliar')) return;
   const l = _cb.lanc.find(x => x.id === lancId), m = _cb.movs.find(x => x.id === movId);
   if (!l || !m) return;
   try { await _cbLigar([l], m); } catch (e) { alert('Erro: ' + (e.message || e)); return; }
@@ -490,6 +493,7 @@ async function cbConciliarPar(lancId, movId) {
 }
 
 async function cbAprovarSugestoes() {
+  if (!podeOuAvisa('conc_banco.aprovar_sugestoes')) return;
   const sug = _cbSugestoes();
   const pares = Object.entries(sug);
   if (!pares.length || !confirm(`Conciliar ${pares.length} lançamento(s) com a linha do banco de mesmo valor (até 3 dias de diferença)?`)) return;
@@ -517,6 +521,7 @@ async function _cbDesligar(lancs) {
 }
 
 async function cbDesconciliar() {
+  if (!podeOuAvisa('conc_banco.desconciliar')) return;
   const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id) && l.conciliado);
   if (!lancs.length || !confirm(`Desfazer a conciliação de ${lancs.length} lançamento(s)? O lançamento continua no livro.`)) return;
   try { await _cbDesligar(lancs); } catch (e) { alert('Erro: ' + (e.message || e)); }
@@ -578,6 +583,7 @@ function _cbClassificaEncargo(dif, vencimento, dataPgto) {
 // baixa o título com o débito do banco: vale o que SAIU DA CONTA, encargo no
 // próprio título, observação acrescentada (nunca apagada — a chave da NF mora lá)
 async function cbBaixarTitulo() {
+  if (!podeOuAvisa('conc_banco.baixar_titulo')) return;
   const d = window._cbForm || {};
   const id = document.getElementById('cbf-titulo').value;
   const m = _cb.movs.find(x => x.id === d.movId);
@@ -686,6 +692,7 @@ function cbFormTipo() {
 }
 
 async function cbSalvarForm() {
+  if (!podeOuAvisaAlgum(['conc_banco.incluir', 'conc_banco.alterar'])) return;
   const d = window._cbForm || {};
   const g = id => document.getElementById(id);
   const msg = t => { g('cbf-msg').textContent = t; };
@@ -741,6 +748,7 @@ async function cbSalvarForm() {
 }
 
 async function cbExcluir() {
+  if (!podeOuAvisa('conc_banco.excluir')) return;
   const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id));
   if (!lancs.length) return;
   if (lancs.some(l => l.conciliado)) { alert('Desconcilie antes de excluir.'); return; }
@@ -757,6 +765,7 @@ async function cbExcluir() {
 }
 
 async function cbSaldoInicial() {
+  if (!podeOuAvisa('conc_banco.saldo_inicial')) return;
   const c = _cbConta();
   const v = prompt(`Saldo de "${c.nome}" no INÍCIO do dia ${_cbDt(c.saldo_inicial_em || _CB_INICIO)} (R$):`, String(c.saldo_inicial || 0).replace('.', ','));
   if (v === null) return;

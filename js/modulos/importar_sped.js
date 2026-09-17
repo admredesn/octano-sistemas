@@ -237,6 +237,7 @@ async function buscarDocsExistentes(tabela, coluna, empresaId) {
 
 // --- GRAVAÇÃO ---
 async function importarSpedSelecionados() {
+  if (!podeOuAvisa('importar_sped.importar')) return;
   const chks = [...document.querySelectorAll('.imp-chk:checked')].map(c => c.dataset.reg);
   if (!chks.length) { alert('Selecione ao menos um tipo para importar.'); return; }
   const div = document.getElementById('imp-preview');

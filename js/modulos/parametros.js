@@ -175,6 +175,7 @@ async function parCarregar(empresaId) {
 }
 
 async function parGravar(ch, ligado) {
+  if (!podeOuAvisa('parametros.alterar')) return;
   if (!_parEmpresa) return;
   const { data: s } = await sb.auth.getSession();
   const quem = (s && s.session && s.session.user && s.session.user.email) || 'retaguarda';
@@ -217,6 +218,7 @@ async function parToggle(ch, el) {
 // teste e espera a resposta -- que traz o erro do servidor sem traducao, porque
 // e' o texto do servidor que resolve o problema.
 async function parTestarEmail() {
+  if (!podeOuAvisa('parametros.testar_email')) return;
   const de = String(_parAtual['cobranca_email_remetente'] || '').trim();
   if (!de) { _parToast('Preencha e salve o e-mail que envia a cobrança antes de testar.', 'erro'); return; }
   const destino = prompt('Enviar o teste para qual endereço?', de);

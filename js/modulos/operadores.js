@@ -380,6 +380,7 @@ function opNovoForm() {
 }
 
 async function opSalvar() {
+  if (!podeOuAvisa('operadores.incluir')) return;
   if (!_opEhMaster()) { alert('Só o administrador cadastra usuários.'); return; }
   const nome = document.getElementById('op-nome').value.trim();
   const usuario = document.getElementById('op-usuario').value.trim().toLowerCase();
@@ -508,6 +509,7 @@ function opSenhaForm(id, nome) {
 }
 
 async function opTrocarSenha(id, nome) {
+  if (!podeOuAvisa('operadores.trocar_senha')) return;
   const s1 = document.getElementById('op-nova-senha').value;
   const s2 = document.getElementById('op-nova-senha2').value;
   const msg = document.getElementById('op-msg');
@@ -543,6 +545,7 @@ async function opTrocarSenha(id, nome) {
 // intacto. A view de login ignora quem esta inativo, e o nucleo espelha isso
 // a cada 5min para o bloqueio valer tambem OFFLINE.
 async function opAlternarAtivo(id, ativar, nome) {
+  if (!podeOuAvisa('operadores.ativar')) return;
   const acao = ativar ? 'liberar' : 'bloquear';
   if (!confirm(`Confirma ${acao} o acesso de ${nome} ao PDV?`)) return;
   const { error } = await sb.from('oct_perfis').update({ ativo: !!ativar }).eq('id', id);

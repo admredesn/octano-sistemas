@@ -325,6 +325,7 @@ function _dispCardPosto(p) {
 }
 
 async function _dispInformar(eid, conta) {
+  if (!podeOuAvisa('bi.informar_saldo')) return;
   const p = (window._dispPostos || []).find(x => x.eid === eid);
   const c = p && p.contas.find(x => x.conta === conta);
   const txt = prompt('Saldo ATUAL de "' + (c ? c.rotulo : conta) + '" em ' + (p ? p.nome : '') + '.\nDigite o valor que aparece agora no app/extrato (ex.: 12345,67):');

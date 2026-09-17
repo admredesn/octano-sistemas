@@ -130,6 +130,7 @@ function cfBicoProduto(i, j, codigo) {
 }
 
 async function cfSalvar() {
+  if (!podeOuAvisa('config_fiscal.alterar')) return;
   const btn = document.getElementById('cf-btn-salvar');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
   try {

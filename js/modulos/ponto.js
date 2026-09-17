@@ -318,6 +318,7 @@ function _pontoLerCampos() {
 }
 
 async function _pontoGravar(linhas) {
+  if (!podeOuAvisa('ponto.ajustar')) return;
   const msg = document.getElementById('pt-aj-msg');
   const btn = document.getElementById('pt-aj-salvar');
   const motivo = (document.getElementById('pt-aj-motivo').value || '').trim();
@@ -535,6 +536,7 @@ function _pontoNomeAba(nome, usados) {
 }
 
 async function pontoExportarXLSX() {
+  if (!podeOuAvisa('ponto.exportar')) return;
   const regs = window._pontoRegistros || [];
   if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
 
@@ -614,6 +616,7 @@ async function pontoExportarXLSX() {
 }
 
 function pontoExportarCSV() {
+  if (!podeOuAvisa('ponto.exportar')) return;
   const regs = window._pontoRegistros || [];
   if (!regs.length) { alert('Nenhum registro para exportar.'); return; }
 

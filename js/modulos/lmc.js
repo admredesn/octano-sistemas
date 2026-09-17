@@ -333,6 +333,7 @@ function _lmcFormEntrada() {
 }
 
 async function _lmcSalvarEntrada() {
+  if (!podeOuAvisa('lmc.lancar_descarga')) return;
   const msg = document.getElementById("lmc-i-msg");
   const data = document.getElementById("lmc-i-data").value;
   const tid = document.getElementById("lmc-i-tanque").value;
@@ -357,6 +358,7 @@ async function _lmcSalvarEntrada() {
 
 // salva as linhas geradas (saldo/saída/medição/diferença) em oct_lmc — preserva entrada manual
 async function _lmcSalvarLivro() {
+  if (!podeOuAvisa('lmc.salvar_livro')) return;
   if (!confirm("Gravar o livro do período em oct_lmc (uma linha por tanque/dia)? A medição de hoje é capturada da sonda.")) return;
   const linhas = window._lmcLinhas || [];
   let ok = 0;

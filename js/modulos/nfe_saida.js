@@ -552,6 +552,7 @@ function nfeSaidaRodapeStatus(nota, somenteLeitura) {
 }
 
 async function nfeSaidaCancelar() {
+  if (!podeOuAvisa('nfe_saida.cancelar')) return;
   const n = _saidaNotaAtual || {};
   const justEl = document.getElementById('ns-cancel-just');
   const msg = document.getElementById('ns-cancel-msg');
@@ -983,6 +984,7 @@ function nfeSaidaMsg(txt, tipo) {
 }
 
 async function nfeSaidaSalvar() {
+  if (!podeOuAvisa('nfe_saida.alterar')) return;
   nfeSaidaCapturarCampos();
   const n = _saidaNotaAtual || {};
   const destId = n.destinatario_id;
@@ -1068,6 +1070,7 @@ async function nfeSaidaSalvar() {
 }
 
 async function nfeSaidaTransmitir() {
+  if (!podeOuAvisa('nfe_saida.transmitir')) return;
   const ambiente = document.getElementById('ns-ambiente')?.value || 'homologacao';
   if (!_saidaEditId) { nfeSaidaMsg('Salve o rascunho antes de transmitir.', 'erro'); return; }
   if (!_saidaItens.length) { nfeSaidaMsg('Adicione ao menos um item.', 'erro'); return; }
@@ -1200,6 +1203,7 @@ async function nfeSaidaTransmitir() {
 }
 
 async function nfeSaidaExcluir(id) {
+  if (!podeOuAvisa('nfe_saida.excluir')) return;
   if (!confirm('Excluir este rascunho de NF-e de saída?')) return;
   await sb.from('oct_nfe_saida_itens').delete().eq('nfe_saida_id', id);
   await sb.from('oct_nfe_saida').delete().eq('id', id);

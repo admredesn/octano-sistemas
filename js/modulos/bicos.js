@@ -146,6 +146,7 @@ function editarBico(b, tanqueId, tanqueNumero, combustivel) {
 }
 
 async function salvarBico() {
+  if (!podeOuAvisa('tanques.bicos')) return;
   const msg = document.getElementById('bico-msg');
   msg.textContent = 'Salvando...'; msg.style.color = '#aaa';
 
@@ -216,6 +217,7 @@ async function gerarQrTodosBicos() {
 }
 
 async function excluirBico(id, tanqueId, tanqueNumero, combustivel) {
+  if (!podeOuAvisa('tanques.bicos')) return;
   if (!confirm('Excluir este bico? O agente deixará de reconhecer o código hex vinculado a ele.')) return;
   await sb.from('oct_bicos').delete().eq('id', id);
   abrirBicosTanque(tanqueId, tanqueNumero, combustivel);

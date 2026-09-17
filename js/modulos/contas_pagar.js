@@ -236,6 +236,7 @@ async function pagarConta(id){
 }
 
 async function confirmarPagamento(id){
+  if (!podeOuAvisa('contas_pagar.baixar')) return;
   const msg=document.getElementById('pg-msg');msg.textContent='Salvando...';msg.style.color='#aaa';
   const{error}=await sb.from('oct_contas_pagar').update({status:'pago',data_pagamento:document.getElementById('pg-data').value,valor_pago:parseFloat(document.getElementById('pg-valor').value)||0,forma_pagamento:document.getElementById('pg-forma').value,banco_id:document.getElementById('pg-banco').value||null}).eq('id',id);
   if(error){msg.textContent='Erro: '+error.message;msg.style.color='#f44';return;}
@@ -243,7 +244,7 @@ async function confirmarPagamento(id){
   setTimeout(()=>moduloContasPagar(),600);
 }
 
-async function excluirConta(id){if(!confirm('Excluir este título?'))return;await sb.from('oct_contas_pagar').delete().eq('id',id);moduloContasPagar();}
+async function excluirConta(id){if(!podeOuAvisa('contas_pagar.excluir'))return;if(!confirm('Excluir este título?'))return;await sb.from('oct_contas_pagar').delete().eq('id',id);moduloContasPagar();}
 
 // ---- CONTAS FIXAS/RECORRENTES (aluguel, contador, sistemas, manutenção) ----
 // O sync 6/6h materializa um título por mês (mês atual até dezembro) em
@@ -289,6 +290,7 @@ async function abrirGerenciarFixas(eId){
 }
 
 async function salvarFixa(eId){
+  if (!podeOuAvisa('contas_pagar.fixas')) return;
   const msg=document.getElementById('fx-msg');
   const desc=document.getElementById('fx-desc').value.trim();
   const valor=parseFloat(document.getElementById('fx-valor').value);
@@ -302,6 +304,7 @@ async function salvarFixa(eId){
 }
 
 async function excluirFixa(id,eId){
+  if (!podeOuAvisa('contas_pagar.fixas')) return;
   if(!confirm('Desativar esta conta fixa? Os títulos já lançados permanecem.'))return;
   await sb.from('oct_contas_recorrentes').update({ativo:false}).eq('id',id);
   abrirGerenciarFixas(eId);abrirGerenciarFixas(eId);
@@ -320,6 +323,7 @@ async function abrirGerenciarBancos(eId){
 }
 
 async function salvarBanco(eId){
+  if (!podeOuAvisa('contas_pagar.bancos')) return;
   const msg=document.getElementById('nb-msg');const banco=document.getElementById('nb-banco').value.trim();
   if(!banco){msg.textContent='Nome obrigatorio.';msg.style.color='#f44';return;}
   msg.textContent='Salvando...';msg.style.color='#aaa';
@@ -329,7 +333,7 @@ async function salvarBanco(eId){
   msg.textContent='Salvo!';msg.style.color='#4caf50';setTimeout(()=>moduloContasPagar(),600);
 }
 
-async function excluirBanco(id){if(!confirm('Excluir banco?'))return;await sb.from('oct_bancos').update({ativo:false}).eq('id',id);moduloContasPagar();}
+async function excluirBanco(id){if(!podeOuAvisa('contas_pagar.bancos'))return;if(!confirm('Excluir banco?'))return;await sb.from('oct_bancos').update({ativo:false}).eq('id',id);moduloContasPagar();}
 
 async function abrirGerenciarPlano(eId){
   const div=document.getElementById('form-plano');div.style.display=div.style.display==='none'?'block':'none';if(div.style.display==='none')return;
@@ -343,6 +347,7 @@ async function abrirGerenciarPlano(eId){
 }
 
 async function salvarPlanoConta(eId){
+  if (!podeOuAvisa('contas_pagar.plano')) return;
   const msg=document.getElementById('pc-msg');const codigo=document.getElementById('pc-codigo').value.trim();const descricao=document.getElementById('pc-desc').value.trim();
   if(!codigo||!descricao){msg.textContent='Codigo e descricao obrigatorios.';msg.style.color='#f44';return;}
   msg.textContent='Salvando...';msg.style.color='#aaa';
@@ -362,6 +367,7 @@ async function abrirFormConta(id,eId){
 }
 
 async function salvarConta(id,eId){
+  if (!podeOuAvisaAlgum(['contas_pagar.incluir', 'contas_pagar.alterar'])) return;
   const msg=document.getElementById('fc-msg');const desc=document.getElementById('fc-desc').value.trim();const valor=parseFloat(document.getElementById('fc-valor').value);const venc=document.getElementById('fc-venc').value;
   if(!desc||!valor||!venc){msg.textContent='Descricao, valor e vencimento obrigatorios.';msg.style.color='#f44';return;}
   msg.textContent='Salvando...';msg.style.color='#aaa';

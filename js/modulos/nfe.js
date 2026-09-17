@@ -402,6 +402,7 @@ async function _reverterImportacaoNfe(id) {
 }
 
 async function excluirNfe(id) {
+  if (!podeOuAvisa('nfe.excluir')) return;
   const reverter = confirm(
     'Excluir esta NF-e do sistema?\n\n' +
     'Clique OK para excluir E reverter o estoque (tanques e produtos).\n' +
@@ -639,6 +640,7 @@ function mostrarAba(id){document.querySelectorAll('.nfe-aba-conteudo').forEach(e
 function fecharDetalheNfe(){document.getElementById('nfe-detalhe').style.display='none';}
 
 async function salvarEdicaoNfe(id){
+  if (!podeOuAvisa('nfe.alterar')) return;
   const msg=document.getElementById('nfe-detalhe-msg');
   msg.textContent='Salvando...';msg.style.color='#aaa';
   const{error}=await sb.from('oct_nfe_entrada').update({
@@ -661,6 +663,7 @@ async function salvarEdicaoNfe(id){
 }
 
 async function confirmarNfeImportada(id){
+  if (!podeOuAvisa('nfe.alterar')) return;
   await sb.from('oct_nfe_entrada').update({status:'confirmada'}).eq('id',id);
   document.getElementById('nfe-detalhe-msg').textContent='✓ Confirmada!';
   document.getElementById('nfe-detalhe-msg').style.color='#4caf50';
@@ -679,6 +682,7 @@ function fecharManifestar(){document.getElementById('nfe-manifestar-painel').sty
 function limparSenhaSessao(){setCertSenha(null);moduloNfe().then(()=>abrirManifestar());}
 
 async function executarManifestar(){
+  if (!podeOuAvisa('nfe.manifestar')) return;
   const msg=document.getElementById('manifest-msg');
   const erroDiv=document.getElementById('manifest-erro-sefaz');
   const ambiente=document.getElementById('manifest-ambiente').value;
@@ -729,6 +733,7 @@ async function baixarXmlManifestado(id,nsu){
 }
 
 async function cienciaManifestado(chave){
+  if (!podeOuAvisa('nfe.manifestar')) return;
   const senha=getCertSenha();const ambiente=document.getElementById('manifest-ambiente')?.value||'producao';
   if(!senha){alert('Informe a senha no painel de manifestação.');return;}
   try{
@@ -946,6 +951,7 @@ function renderPreviewNfe(){
 function cancelarNfe(){nfeXmlDados=null;document.getElementById('nfe-preview').style.display='none';document.getElementById('nfe-importar').style.display='none';}
 
 async function confirmarNfe(){
+  if (!podeOuAvisa('nfe.importar')) return;
   const msg=document.getElementById('nfe-msg');
   msg.textContent='Salvando...';msg.style.color='#aaa';
   const d=nfeXmlDados;

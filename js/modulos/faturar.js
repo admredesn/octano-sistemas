@@ -298,6 +298,7 @@ function fatLimparF() {
 
 // ---------- COBRAR cliente (WhatsApp via wa.me + copiar p/ e-mail) ----------
 async function fatCobrar(clienteId) {
+  if (!podeOuAvisa('faturar.cobrar')) return;
   const abertos = (window._fatTitulos || []).filter(t => t.cliente_id === clienteId && (!t.status || t.status === "aberto"));
   if (!abertos.length) { alert("Sem títulos em aberto para este cliente."); return; }
   let cli = {};
@@ -347,6 +348,7 @@ function fatCobrarCopiar() {
 // ============================================================
 const _FAT_SEFAZ = (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://octano-sefaz-production-66d4.up.railway.app";
 async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
+  if (!podeOuAvisa('faturar.emitir_nfe')) return;
   // no lote quem manda no que aparece na tela e' a barra de progresso
   const recusa = (motivo) => {
     if (silencioso) return { ok: false, erro: motivo };
@@ -514,6 +516,7 @@ function _fatBolFaltando(p) {
 }
 
 async function fatBoleto(id) {
+  if (!podeOuAvisa('faturar.boleto')) return;
   _fatModal(`<div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0">
       🏦 Boleto</div><div style="padding:22px;color:#9aa">Carregando...</div>`);
   // o botao aparece na lista de TITULOS e na de FATURAS: aceita os dois
@@ -902,6 +905,7 @@ async function fatFaturaDetalhes(faturaId) {
 
 // Gerar NF consolidada a partir de uma FATURA (usa os títulos dela)
 async function fatGerarNfFatura(faturaId) {
+  if (!podeOuAvisa('faturar.emitir_nfe')) return;
   const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
     .eq("empresa_id", window._fatEid).eq("fatura_id", faturaId);
   if (!ts || !ts.length) { alert("Fatura sem títulos."); return; }
@@ -1049,6 +1053,7 @@ function _fatDocPath(empresaId, dataIso, nome) {
 }
 
 async function fatAnexarNfeConfirmar() {
+  if (!podeOuAvisa('faturar.anexar_nfe')) return;
   const st = window._fatNfe || {};
   const d = st.dados, fat = st.fatura;
   const msg = document.getElementById("fat-nfe-msg");
@@ -1184,6 +1189,7 @@ async function fatEnviar(faturaId) {
 }
 
 async function fatEnviarOk(faturaId) {
+  if (!podeOuAvisa('faturar.enviar')) return;
   const canais = document.getElementById("fen-canais").value;
   const btn = document.getElementById("fen-ok");
   const msg = document.getElementById("fen-msg");
@@ -1342,6 +1348,7 @@ async function fatLiquidarTitulo(id) {
 }
 
 async function fatLiquidarTituloOk(id) {
+  if (!podeOuAvisa('faturar.receber_titulo')) return;
   const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
   const msg = document.getElementById("flt-msg");
   const valor = parseFloat((document.getElementById("flt-valor").value || "0").replace(",", "."));
@@ -1480,6 +1487,7 @@ function fatParcelarPreview(id) {
     </table>`;
 }
 async function fatParcelarOk(id) {
+  if (!podeOuAvisa('faturar.parcelar')) return;
   const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
   const msg = document.getElementById("fpc-msg");
   const saldo = Number(t.valor || 0);
@@ -1619,6 +1627,7 @@ async function _fatProximoNumero() {
 }
 
 async function fatGerarFaturaOk() {
+  if (!podeOuAvisa('faturar.gerar_fatura')) return;
   const st = window._fatNovaFat; if (!st) return;
   const msg = document.getElementById("fgf-msg");
   const btn = document.getElementById("fgf-ok");
@@ -1766,6 +1775,7 @@ function _fatEditCalc() {
 }
 
 async function fatEditarFaturaOk(faturaId) {
+  if (!podeOuAvisa('faturar.alterar_fatura')) return;
   const st = window._fatEdit; if (!st) return;
   const msg = document.getElementById("fed-msg");
   const venc = document.getElementById("fed-venc").value || null;
@@ -2083,6 +2093,7 @@ function _fatSelecionadas() {
 
 // ---------- LOTE: gerar NF-e ----------
 async function fatLoteNf() {
+  if (!podeOuAvisa('faturar.emitir_nfe')) return;
   const alvo = _fatSelecionadas();
   if (!alvo.length) return;
   if (!confirm(`Emitir NF-e de ${alvo.length} fatura(s), em HOMOLOGAÇÃO?\n\n` +
@@ -2106,6 +2117,7 @@ async function fatLoteNf() {
 // Enfileira TODOS e depois acompanha. Um a um seria 20s de espera vezes o número
 // de faturas -- o worker do gateway processa a fila em paralelo com a espera.
 async function fatLoteBoleto() {
+  if (!podeOuAvisa('faturar.boleto')) return;
   const alvo = _fatSelecionadas();
   if (!alvo.length) return;
   const semVenc = alvo.filter(f => !f.vencimento);
@@ -2160,6 +2172,7 @@ async function fatLoteBoleto() {
 // insistir com quem ja' recebeu a fatura e nao pagou. O que se pula e' quem nao
 // deve mais nada.
 async function fatLoteCobrar() {
+  if (!podeOuAvisa('faturar.cobrar')) return;
   const alvo = _fatSelecionadas();
   if (!alvo.length) return;
   const hoje = _fatHojeIso();
@@ -2221,6 +2234,7 @@ async function fatLoteCobrar() {
 
 // ---------- LOTE: enviar ----------
 async function fatLoteEnviar() {
+  if (!podeOuAvisa('faturar.enviar')) return;
   const alvo = _fatSelecionadas();
   if (!alvo.length) return;
   const jaEnviadas = alvo.filter(f => f.enviada_em).length;
@@ -2531,6 +2545,7 @@ async function _fatRecebidoDa(faturaId) {
 }
 
 async function fatConfirmarRecebimento(faturaId) {
+  if (!podeOuAvisa('faturar.receber_fatura')) return;
   const msg = document.getElementById("fr-msg");
   const valor = Number(document.getElementById("fr-valor").value || 0);
   const juros = Number(document.getElementById("fr-juros").value || 0);

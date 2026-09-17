@@ -55,6 +55,7 @@ function _comPreverPcts() {
   _comRenderTabela();
 }
 async function _comSalvarPcts() {
+  if (!podeOuAvisa('comissoes.alterar')) return;
   const p = _comLerPctsDaTela();
   _comPctsCache = p;
   localStorage.setItem(_comPctKey(), JSON.stringify(p));   // fallback local
@@ -158,6 +159,7 @@ async function _comCategorias() {
 }
 
 async function _comCategoriaSet(cat, paga) {
+  if (!podeOuAvisa('comissoes.alterar')) return;
   const eid = empresaAtiva();
   let q = sb.from('oct_produtos').update({ paga_comissao: paga }).eq('empresa_id', eid);
   // "(sem categoria)" cobre NULL e vazio — dois updates, o filtro or do

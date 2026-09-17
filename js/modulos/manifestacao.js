@@ -339,6 +339,7 @@ function manifStatusConsulta(texto, tipo) {
 }
 
 async function manifConsultarSefaz() {
+  if (!podeOuAvisa('manifestacao.consultar')) return;
   const senha = getCertSenha();
   if (!senha) { manifStatusConsulta('⚠️ Senha do certificado não encontrada. Configure na tela Empresa.', 'erro'); return; }
   const ambiente = document.getElementById('manif-ambiente').value;
@@ -417,6 +418,7 @@ async function manifConsultarSefaz() {
 
 // ─── ENVIAR MANIFESTACAO EM LOTE ────────────────────────────
 async function manifEnviarLote() {
+  if (!podeOuAvisa('manifestacao.ciencia')) return;
   if (_manifSelecionadas.size === 0) return;
   const senha = getCertSenha();
   if (!senha) { manifMsg('Senha do certificado não encontrada.', 'erro'); return; }
@@ -471,6 +473,7 @@ async function manifEnviarLote() {
 
 // ─── ACOES DE LINHA ─────────────────────────────────────────
 async function manifIncluirNota(id) {
+  if (!podeOuAvisa('manifestacao.incluir_nota')) return;
   // reaproveita o fluxo de importacao do nfe.js (preview + confirmarNfe)
   if (typeof importarDoManifestado === 'function') {
     await importarDoManifestado(id);
@@ -536,6 +539,7 @@ function manifImprimir(id) {
 }
 
 async function manifExcluirImportacao(id, chave) {
+  if (!podeOuAvisa('manifestacao.excluir')) return;
   const n = _manifDados.find(x => x.id === id);
   const ok = confirm(
     'Excluir a IMPORTAÇÃO desta nota?\n\n' +
@@ -577,6 +581,7 @@ async function manifExcluirImportacao(id, chave) {
 }
 
 async function manifDesfazer(id) {
+  if (!podeOuAvisa('manifestacao.excluir')) return;
   const n = _manifDados.find(x => x.id === id);
   const ok = confirm(
     'Devolver esta nota para "Sem Manifestação"?\n\n' +

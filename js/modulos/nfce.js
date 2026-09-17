@@ -181,6 +181,7 @@ async function nfceFilaCarregar() {
 }
 
 async function nfceFilaSalvar(i) {
+  if (!podeOuAvisa('nfce.fila_alterar')) return;
   const f = (window._nfceFila || [])[i];
   if (!f) return;
   const desc = Math.max(0, Number(document.getElementById('nfce-fd-' + i)?.value || 0));
@@ -270,6 +271,7 @@ async function nfceProximoNumero() {
 }
 
 async function nfceEmitir() {
+  if (!podeOuAvisa('nfce.emitir')) return;
   if (!_nfceItens.length) { nfceMsg('Adicione ao menos um item.', 'erro'); return; }
   if (!_nfceEmpresa?.cert_path) { nfceMsg('Certificado não configurado (tela Empresa).', 'erro'); return; }
   if (!_nfceEmpresa?.csc || !_nfceEmpresa?.csc_id) { nfceMsg('CSC não configurado na empresa.', 'erro'); return; }
@@ -433,6 +435,7 @@ async function nfceImprimirCupom(xmlOverride, chaveOverride) {
 
 // Cancela a NFC-e (evento 110111). Pede justificativa (15-255 chars).
 async function nfceCancelar(chave, protocolo, ambienteOverride) {
+  if (!podeOuAvisa('nfce.cancelar')) return;
   const msgEl = document.getElementById('nfce-acao-msg');
   const setMsg = (t, c) => { if (msgEl) { msgEl.textContent = t; msgEl.style.color = c; } };
   if (!chave || !protocolo) { setMsg('Chave/protocolo ausentes para cancelar.', '#f87171'); return; }
@@ -559,6 +562,7 @@ async function nfceImprimirCupomHist(xml, chave) {
 }
 
 async function nfceHistCancelar(i) {
+  if (!podeOuAvisa('nfce.cancelar')) return;
   const n = (window._nfceHist || [])[i];
   if (!n) return;
   const msg = document.getElementById('nfce-hist-msg');
@@ -639,6 +643,7 @@ async function recOrfaosCarregar() {
 }
 
 async function recOrfaosDispensar() {
+  if (!podeOuAvisa('nfce.dispensar_recebimento')) return;
   const sel = Array.from(document.querySelectorAll('.ro-ck')).filter(c => c.checked).map(c => Number(c.dataset.i));
   const lista = window._recOrfaos || [];
   const alvos = sel.map(i => lista[i]).filter(Boolean);

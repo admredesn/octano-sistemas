@@ -195,6 +195,7 @@ function fecharFormTanque() {
 }
 
 async function salvarTanque() {
+  if (!podeOuAvisa('tanques.alterar')) return;
   const msg = document.getElementById('tanque-msg');
   msg.textContent = 'Salvando...'; msg.style.color = '#aaa';
 
@@ -230,6 +231,7 @@ async function salvarTanque() {
 }
 
 async function excluirTanque() {
+  if (!podeOuAvisa('tanques.excluir')) return;
   if (!confirm('Excluir este tanque? Os bicos vinculados também serão desvinculados.')) return;
   const id = document.getElementById('tanque-id').value;
   await sb.from('oct_tanques').delete().eq('id', id);

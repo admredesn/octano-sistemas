@@ -33,6 +33,7 @@ function chaveC175(it) {
 }
 
 async function gerarSpedPisCofinsV2() {
+  if (!podeOuAvisa('contabilidade.gerar_sped')) return;
   const ano = parseInt(document.getElementById('spis-ano').value);
   const mes = parseInt(document.getElementById('spis-mes').value);
   const empresaId = window._contab_empresa_id;

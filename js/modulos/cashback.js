@@ -181,6 +181,7 @@ function cbSetF(k, v) { window._cbFiltro[k] = v; cbListar(); }
 
 // ---- reprocessar: volta pro worker (pendente + zera tentativas/erro) ----
 async function cbReprocessar(id) {
+  if (!podeOuAvisa('cashback.reprocessar')) return;
   if (!confirm('Reenviar este cashback pro worker pagar? (a chave Pix precisa estar correta)')) return;
   const { error } = await sb.from('oct_cashback').update({ status: 'pendente', tentativas: 0, erro: null }).eq('id', id);
   if (error) { alert('Erro: ' + (error.message || error)); return; }
@@ -189,6 +190,7 @@ async function cbReprocessar(id) {
 
 // ---- cancelar um pendente (não paga) ----
 async function cbCancelar(id) {
+  if (!podeOuAvisa('cashback.cancelar')) return;
   if (!confirm('Cancelar este cashback? O worker não vai pagá-lo.')) return;
   const { error } = await sb.from('oct_cashback').update({ status: 'cancelado' }).eq('id', id);
   if (error) { alert('Erro: ' + (error.message || error)); return; }
@@ -238,6 +240,7 @@ function cbManualCliChange() {
 function cbFecharManual() { const d = document.getElementById('cb-modal-bg'); if (d) d.remove(); }
 
 async function cbSalvarManual() {
+  if (!podeOuAvisa('cashback.incluir')) return;
   const eid = window._cbEmp;
   const id = document.getElementById('cb-m-cli').value;
   const chave = document.getElementById('cb-m-chave').value.trim();

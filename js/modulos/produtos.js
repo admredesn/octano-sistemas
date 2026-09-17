@@ -354,6 +354,7 @@ async function salvarProduto(id, empresaId) {
 }
 
 async function _salvarProdutoInterno(id, empresaId) {
+  if (!podeOuAvisa('produtos.alterar')) return;
   const msg = document.getElementById('fp-msg');
   const nome = document.getElementById('fp-nome').value.trim();
   if (!nome) { msg.textContent = 'Nome obrigatório.'; msg.style.color = '#f44'; return; }
@@ -438,6 +439,7 @@ async function _salvarProdutoInterno(id, empresaId) {
 }
 
 async function excluirProduto(id) {
+  if (!podeOuAvisa('produtos.excluir')) return;
   if (!confirm('Excluir este produto?')) return;
   await sb.from('oct_produto_nfe').delete().eq('produto_id', id);
   await sb.from('oct_produtos').update({ ativo: false }).eq('id', id);
@@ -460,6 +462,7 @@ function produtoToggleComb() {
 // ---------- #3 PRECIFICAÇÃO POR MARGEM ----------
 // Margem sobre o custo: venda = custo * (1 + margem/100)
 function produtoAplicarMargem() {
+  if (!podeOuAvisa('produtos.alterar_preco')) return;
   const custo = parseFloat(document.getElementById('fp-custo')?.value) || 0;
   const margem = parseFloat(document.getElementById('fp-margem')?.value);
   const vendaEl = document.getElementById('fp-venda');
@@ -559,6 +562,7 @@ function loteCampo(key, label, inputHtml) {
   </div>`;
 }
 async function salvarEdicaoLote(empresaId) {
+  if (!podeOuAvisa('produtos.alterar_lote')) return;
   const msg = document.getElementById('lote-msg');
   const ids = window._loteIds || [];
   if (!ids.length) { msg.textContent = 'Nenhum produto selecionado.'; msg.style.color = '#f44'; return; }

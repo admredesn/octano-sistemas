@@ -384,6 +384,7 @@ async function ctbGarantirContasFornecedor(eId, docs) {
 }
 
 async function ctbContabilizar() {
+  if (!podeOuAvisa('contabilidade.contabilizar')) return;
   const out = document.getElementById('ctb-out');
   const eId = window._contab_empresa_id;
   const comp = (document.getElementById('ctb-comp').value || '').trim();

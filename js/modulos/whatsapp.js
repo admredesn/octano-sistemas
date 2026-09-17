@@ -84,6 +84,7 @@ async function _wppRender(silent) {
 }
 
 async function wppDesconectar() {
+  if (!podeOuAvisa('whatsapp.desconectar')) return;
   if (!confirm("Desconectar o WhatsApp da rede? O número atual será desvinculado e um QR novo será gerado para você conectar outro número.")) return;
   try {
     const { error } = await sb.from("oct_wpp_status").update({ comando: "logout" }).eq("session_id", WPP_SESSION_ID);

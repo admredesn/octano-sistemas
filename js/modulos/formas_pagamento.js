@@ -109,6 +109,7 @@ function fpReceberForm(f) {
 }
 
 async function fpReceberSalvar(id) {
+  if (!podeOuAvisa('formas_pagamento.alterar')) return;
   const eid = window._fpEmpresaId;
   const nome = document.getElementById('fpr-nome').value.trim();
   const msg = document.getElementById('fpr-msg');
@@ -130,6 +131,7 @@ async function fpReceberSalvar(id) {
 }
 
 async function fpReceberExcluir(id) {
+  if (!podeOuAvisa('formas_pagamento.excluir')) return;
   if (!confirm('Excluir esta forma de recebimento?')) return;
   const { error } = await sb.from('oct_formas_pagamento').delete().eq('id', id);
   if (error) { alert('Erro: ' + error.message); return; }
@@ -403,6 +405,7 @@ function fpCalcular(base, tipo, modo, valor) {
 }
 
 async function fpPrecoSalvar(id) {
+  if (!podeOuAvisa('formas_pagamento.negociacao')) return;
   const eid = window._fpEmpresaId;
   const nome = document.getElementById('fpp-nome').value.trim();
   const msg = document.getElementById('fpp-msg');
@@ -459,6 +462,7 @@ async function fpPrecoSalvar(id) {
 }
 
 async function fpPrecoExcluir(id) {
+  if (!podeOuAvisa('formas_pagamento.negociacao')) return;
   if (!confirm('Excluir esta condição? As exceções por produto também serão removidas.')) return;
   const { error } = await sb.from('oct_tabelas_preco').delete().eq('id', id);
   if (error) { alert('Erro: ' + error.message); return; }

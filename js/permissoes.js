@@ -294,6 +294,12 @@ function pode(chave) {
   return PERM.master || PERM.set.has(chave);
 }
 
+// quando a mesma tela serve para incluir E alterar: basta uma das permissões
+function podeOuAvisaAlgum(chaves) {
+  if (chaves.some(c => pode(c))) return true;
+  return podeOuAvisa(chaves[0]);
+}
+
 // para ações: avisa e devolve false quando não pode
 function podeOuAvisa(chave) {
   if (pode(chave)) return true;

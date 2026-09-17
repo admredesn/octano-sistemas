@@ -1054,6 +1054,7 @@ function _fcTravado(avisa) {
   return trav;
 }
 async function fcReabrirCaixa(turnoId) {
+  if (!podeOuAvisa('fcaixa.reabrir')) return;
   if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.')) return;
   const { error } = await sb.from('oct_pdv_turnos').update({ conferido_em: null, conferido_por: null }).eq('id', turnoId);
   if (error) { alert('Erro: ' + error.message); return; }
@@ -1131,6 +1132,7 @@ function fcConfEspaco() {
 
 // F9/F10 — conferir/desconferir TODAS as linhas do modal aberto (upsert em lote)
 async function fcConfTodos(v) {
+  if (!podeOuAvisa('fcaixa.conferir')) return;
   if (_fcTravado()) return;
   // se há linhas MARCADAS (☑), age só nelas; sem marcação, age em todas
   let rows = [...document.querySelectorAll('#fc-modal tr[data-fcref]')];
@@ -1398,6 +1400,7 @@ function fcmAbastToggle(radio, valor, desc) {
 }
 
 async function fcLancIncluirSalvar(secao) {
+  if (!podeOuAvisa('fcaixa.lanc_incluir')) return;
   const valor = parseFloat(document.getElementById('fcm-valor').value);
   if (isNaN(valor) || valor <= 0) { alert('Informe o valor.'); return; }
   const ajuste = {
@@ -1450,6 +1453,7 @@ async function fcLancExcluirGrupo(idsCsv) {
 }
 
 async function fcLancExcluir(marcados, alvosDiretos) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
   if (_fcTravado()) return;
   let alvos = alvosDiretos || [];
   if (!alvos.length && marcados) alvos = [...window._fcSel];
@@ -1590,6 +1594,7 @@ function fcLancEditar(refTipo, refId) {
 }
 
 async function fcLancSalvar(refTipo, refId, desfazer) {
+  if (!podeOuAvisa('fcaixa.lanc_alterar')) return;
   if (_fcTravado()) return;
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
@@ -2203,6 +2208,7 @@ function _fcFormaNome(cod) {
 
 // salva troco inicial/final editado direto no turno e recalcula tudo
 async function fcTrocoSalvar(campo) {
+  if (!podeOuAvisa('fcaixa.alterar_troco')) return;
   if (_fcTravado()) return;
   const val = parseFloat(document.getElementById('fc-troco-inp').value);
   if (isNaN(val) || val < 0) { alert('Valor inválido.'); return; }
@@ -2262,6 +2268,7 @@ async function _fcTituloDifExistente(turnoId) {
 }
 
 async function fcDifLancar(dif) {
+  if (!podeOuAvisa('fcaixa.lancar_diferenca')) return;
   const sel = document.getElementById('fc-dif-pessoa').value || '';
   const pid = sel.split('|')[0];
   const pnome = sel.split('|').slice(1).join('|');
@@ -2587,6 +2594,7 @@ function _fcTitRender() {
 }
 
 async function fcTitBaixar() {
+  if (!podeOuAvisa('fcaixa.baixar_titulo')) return;
   if (_fcTravado()) return;
   const cks = Array.prototype.slice.call(document.querySelectorAll('.fctit-ck:checked'));
   const msg = document.getElementById('fctit-msg');
@@ -2887,6 +2895,7 @@ function fcIVPreco() {
 }
 
 async function fcItemVendidoSalvar() {
+  if (!podeOuAvisa('fcaixa.item_vendido')) return;
   const sel = document.getElementById('fciv-prod');
   const nome = (sel.selectedOptions[0] || {}).textContent || '';
   const qtd = parseFloat(document.getElementById('fciv-qtd').value) || 1;
@@ -2987,6 +2996,7 @@ function _fcDifStatus(turnoId, difApurada) {
 }
 
 async function fcConfirmarCaixa(turnoId) {
+  if (!podeOuAvisa('fcaixa.fechar')) return;
   const d = (window._fcCache && window._fcCache.porTurno || {})[turnoId];
   if (!d) { alert('Dados do turno ainda carregando — tente de novo.'); return; }
   const dif = d.diferenca_caixa || 0;
@@ -3363,6 +3373,7 @@ async function _fcExtratoAlvos(turnoId, d0) {
 }
 
 async function fcExtratoSubstituir() {
+  if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
   if (_fcTravado()) return;
   const turnoId = window._fcTurnoAtual;
   const eid = window._fcEmpresaId;
@@ -3444,6 +3455,7 @@ async function fcExtratoSubstituir() {
 }
 
 async function fcExtratoDesfazer() {
+  if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
   if (_fcTravado()) return;
   const turnoId = window._fcTurnoAtual, eid = window._fcEmpresaId;
   const anulados = [], criados = [];

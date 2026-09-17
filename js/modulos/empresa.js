@@ -400,6 +400,7 @@ async function empSicoobCarregar() {
 }
 
 async function salvarSicoob() {
+  if (!podeOuAvisa('empresa.integracoes')) return;
   const msg = document.getElementById('sic-msg');
   const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
   if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
@@ -422,6 +423,7 @@ async function salvarSicoob() {
 
 // ─── Chave geral do CASHBACK por posto (pedido Ronan 20/08) ─────────────────
 async function salvarCashbackChave() {
+  if (!podeOuAvisa('empresa.integracoes')) return;
   const msg = document.getElementById('cb-chave-msg');
   const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
   if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
@@ -594,6 +596,7 @@ async function validarCertificado() {
 }
 
 async function uploadCertificado() {
+  if (!podeOuAvisa('empresa.certificado')) return;
   if (!certFile || !certDados) return;
   const senha = document.getElementById('cert-senha').value;
   const msg = document.getElementById('cert-msg');
@@ -642,6 +645,7 @@ async function uploadCertificado() {
 }
 
 async function removerCertificado() {
+  if (!podeOuAvisa('empresa.certificado')) return;
   if (!confirm('Remover certificado digital?')) return;
   const session = await getSession();
   const _eid = (typeof empresaAtiva==='function') ? empresaAtiva() : null;
@@ -655,6 +659,7 @@ async function removerCertificado() {
 
 // ─── SALVAR EMPRESA ───────────────────────────────────────────────────────────
 async function salvarEmpresa() {
+  if (!podeOuAvisa('empresa.alterar')) return;
   const msg = document.getElementById('emp-msg');
   msg.textContent = 'Salvando...'; msg.style.color = '#aaa';
   const session = await getSession();

@@ -103,6 +103,7 @@ async function afeListar(silencioso) {
 }
 
 async function afeAutorizar(id) {
+  if (!podeOuAvisa('afericoes.autorizar')) return;
   const { error } = await sb.from('oct_pdv_abastecimentos')
     .update({ tipo: 'afericao', status: 'afericao_autorizada', preco_litro: 0, valor: 0,
               observacao: 'Aferição autorizada - combustível retornado ao tanque' })
@@ -113,6 +114,7 @@ async function afeAutorizar(id) {
 
 // cancela a aferição: volta o abastecimento para 'pendente' (reaparece normal no PDV)
 async function afeCancelar(id) {
+  if (!podeOuAvisa('afericoes.recusar')) return;
   if (!confirm('Cancelar esta aferição? O abastecimento volta para a lista normal do PDV e poderá ser transmitido ou cancelado.')) return;
   const { error } = await sb.from('oct_pdv_abastecimentos')
     .update({ tipo: 'abastecimento', status: 'pendente', observacao: null })
@@ -122,6 +124,7 @@ async function afeCancelar(id) {
 }
 
 async function afeAutorizarTodas() {
+  if (!podeOuAvisa('afericoes.autorizar')) return;
   const empresaId = window._afeEmpresaId;
   if (!confirm('Autorizar todas as aferições pendentes?')) return;
   const { error } = await sb.from('oct_pdv_abastecimentos')
