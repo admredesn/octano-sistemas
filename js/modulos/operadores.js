@@ -208,7 +208,7 @@ function opNovoForm() {
         <div><label style="color:#888;font-size:0.78rem">Usuário (login)</label>
           <input id="op-usuario" autocapitalize="off" placeholder="ex: joao" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
         <div><label style="color:#888;font-size:0.78rem">Senha</label>
-          <input id="op-senha" type="password" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+          <input id="op-senha" type="password" autocomplete="new-password" placeholder="PIN de 4 números ou 6+ caracteres" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
         <div><label style="color:#888;font-size:0.78rem">Perfil</label>
           <select id="op-perfil" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
             <option value="operador">Operador</option><option value="gerente">Gerente</option></select></div>
@@ -232,7 +232,7 @@ async function opSalvar() {
 
   if (!nome || !usuario || !senha) { msg.style.color = '#f87171'; msg.textContent = 'Preencha nome, usuário e senha.'; return; }
   if (!/^[a-z0-9._-]+$/.test(usuario)) { msg.style.color = '#f87171'; msg.textContent = 'Usuário só pode ter letras minúsculas, números, ponto, hífen e underline.'; return; }
-  if (senha.length < 6) { msg.style.color = '#f87171'; msg.textContent = 'A senha deve ter ao menos 6 caracteres.'; return; }
+  if (!octSenhaValida(senha)) { msg.style.color = '#f87171'; msg.textContent = 'Use um PIN de 4 números ou uma senha de 6 caracteres ou mais.'; return; }
 
   // verifica usuário duplicado na empresa
   const { data: jaTem } = await sb.from('oct_perfis').select('id').eq('empresa_id', empresaId).ilike('usuario', usuario).maybeSingle();
@@ -254,7 +254,7 @@ async function opSalvar() {
     });
   } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao iniciar criação: ' + e.message; return; }
 
-  const { data: signUpData, error: errSignUp } = await sb2.auth.signUp({ email: emailLogin, password: senha });
+  const { data: signUpData, error: errSignUp } = await sb2.auth.signUp({ email: emailLogin, password: octSenhaAuth(senha) });
   if (errSignUp) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao criar login: ' + errSignUp.message; return; }
   const novoUid = signUpData?.user?.id;
   if (!novoUid) { msg.style.color = '#f87171'; msg.textContent = 'Não foi possível obter o ID do novo usuário (verifique confirmação de e-mail no Supabase).'; return; }
@@ -329,7 +329,7 @@ function opSenhaForm(id, nome) {
       </p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:520px">
         <div><label style="color:#888;font-size:0.78rem">Nova senha</label>
-          <input id="op-nova-senha" type="password" autocomplete="new-password" placeholder="mínimo 6 caracteres"
+          <input id="op-nova-senha" type="password" autocomplete="new-password" placeholder="PIN de 4 números ou 6+ caracteres"
             style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
         <div><label style="color:#888;font-size:0.78rem">Repita a nova senha</label>
           <input id="op-nova-senha2" type="password" autocomplete="new-password"
@@ -348,7 +348,7 @@ async function opTrocarSenha(id, nome) {
   const s1 = document.getElementById('op-nova-senha').value;
   const s2 = document.getElementById('op-nova-senha2').value;
   const msg = document.getElementById('op-msg');
-  if (s1.length < 6) { msg.style.color = '#f87171'; msg.textContent = 'A senha deve ter ao menos 6 caracteres.'; return; }
+  if (!octSenhaValida(s1)) { msg.style.color = '#f87171'; msg.textContent = 'Use um PIN de 4 números ou uma senha de 6 caracteres ou mais.'; return; }
   if (s1 !== s2) { msg.style.color = '#f87171'; msg.textContent = 'As duas senhas não conferem.'; return; }
 
   msg.style.color = '#888'; msg.textContent = 'Trocando a senha...';
@@ -356,7 +356,7 @@ async function opTrocarSenha(id, nome) {
   try {
     const r = await fetch(SEFAZ_URL + '/operador/senha', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: session?.access_token, alvo_uid: id, senha: s1 }),
+      body: JSON.stringify({ token: session?.access_token, alvo_uid: id, senha: octSenhaAuth(s1) }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {

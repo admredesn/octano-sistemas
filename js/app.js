@@ -150,8 +150,16 @@ async function fazerLogin(){
   const s = document.getElementById('login-senha').value;
   const e = document.getElementById('login-erro');
   if(!u||!s){ e.textContent='Preencha usuario e senha.'; return; }
-  const email = u.includes('@') ? u : u+'@octano.interno';
-  const { error } = await sb.auth.signInWithPassword({ email, password: s });
+  let email = u.includes('@') ? u : u+'@octano.interno';
+  // operador criado na tela Operadores tem e-mail interno próprio
+  // (usuario.empresa@octano.local): acha pelo usuário, como o PDV faz
+  if (!u.includes('@')) {
+    try {
+      const { data: lk } = await sb.from('oct_login_lookup').select('email_login').eq('usuario', u.toLowerCase()).limit(1).maybeSingle();
+      if (lk && lk.email_login) email = lk.email_login;
+    } catch (_) { /* segue com @octano.interno */ }
+  }
+  const { error } = await sb.auth.signInWithPassword({ email, password: octSenhaAuth(s) });
   if(error){ e.textContent='Usuario ou senha invalidos.'; return; }
   init();
 }
