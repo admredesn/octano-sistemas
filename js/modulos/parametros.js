@@ -67,6 +67,8 @@ const PARAM_DEFS = [
         desc: 'Bloqueia fechar a prazo sem escolher o cliente (F3).' },
       { chave: 'checar_limite_prazo', rot: 'Checar limite de crédito do cliente', pad: true,
         desc: 'Consulta o limite antes de fechar. Sem internet, a venda passa e fica registrada.' },
+      { chave: 'frota_exige_autorizacao', rot: 'Cartão frota exige nº de autorização', pad: true,
+        desc: 'Ligado: o PDV só fecha a venda no cartão frota com o nº de autorização do comprovante (é ele que casa com a operadora e permite a nota de frota). Desligado: o campo fica opcional.' },
       { chave: 'lista_negra_placa', rot: 'Bloquear placa em lista negra', pad: true,
         desc: 'Avisa e impede a venda a prazo para placas bloqueadas.' },
     ],
