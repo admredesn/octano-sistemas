@@ -35,7 +35,8 @@ const _CB_TIPOS = {
 };
 
 const _cb = { contas: [], contaId: null, lanc: [], movs: [], saldoAntes: 0, selL: new Set(), selM: null,
-              filtro: { status: 'todos', nat: 'todos', busca: '' }, sincronizado: {} };
+              filtro: { status: 'todos', nat: 'todos', busca: '' }, sincronizado: {},
+              cursor: null, visIds: [], sug: {}, ocupado: false };   // cursor = linha do teclado
 
 function _cbMoney(v) { return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function _cbNum(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -175,8 +176,8 @@ function _cbRender() {
   const trL = vis.slice(0, _CB_MAX_LINHAS).map(({ l, saldo: s, seq }) => {
     const sel = _cb.selL.has(l.id);
     const sg = sug[l.id];
-    const bg = sel ? '#1e3a5f' : l.conciliado ? '#0f1f17' : sg ? '#2a2310' : 'transparent';
-    return `<tr data-id="${l.id}" style="background:${bg};cursor:pointer" onclick="cbSelLanc('${l.id}', event)" ondblclick="cbEditar('${l.id}')">
+    const cls = 'cbl-lin' + (l.conciliado ? ' conc' : sg ? ' sug' : '') + (sel ? ' sel' : '') + (l.id === _cb.cursor ? ' cur' : '');
+    return `<tr data-id="${l.id}" class="${cls}" style="cursor:pointer" onclick="cbSelLanc('${l.id}', event)" ondblclick="cbEditar('${l.id}')">
       <td class="cbl-td"><input type="checkbox" ${sel ? 'checked' : ''} onclick="event.stopPropagation();cbSelLanc('${l.id}', event, true)"></td>
       <td class="cbl-td cbl-mut">${seq}</td>
       <td class="cbl-td" title="${_cbEsc(l.pessoa)}">${_cbEsc(l.pessoa || '')}</td>
@@ -187,7 +188,7 @@ function _cbRender() {
       <td class="cbl-td cbl-r" style="color:#4ade80">${l.natureza === 'C' ? _cbNum(l.valor) : ''}</td>
       <td class="cbl-td cbl-r" style="color:#f87171">${l.natureza === 'D' ? _cbNum(l.valor) : ''}</td>
       <td class="cbl-td cbl-r" style="color:${s >= 0 ? '#86efac' : '#fca5a5'};font-weight:600">${_cbNum(s)}</td>
-      <td class="cbl-td" style="text-align:center">${l.conciliado ? '<b style="color:#4ade80" title="conciliado">S</b>'
+      <td class="cbl-td" style="text-align:center">${l.conciliado ? '<b style="color:#facc15" title="conciliado — espaço desfaz">S</b>'
         : sg ? `<button class="cbl-mini" title="Sugestão: ${_cbEsc(sg.descricao)} ${_cbDt(sg.data)}" onclick="event.stopPropagation();cbConciliarPar('${l.id}','${sg.id}')">✓?</button>` : '<span style="color:#667">N</span>'}</td>
     </tr>`;
   }).join('');
@@ -195,9 +196,9 @@ function _cbRender() {
   const trM = _cb.movs.map(m => {
     const ligados = lancPorMov[m.id] || [];
     const sel = _cb.selM === m.id;
-    const bg = sel ? '#1e3a5f' : ligados.length ? '#0f1f17' : m.conciliado ? '#161a22' : 'transparent';
+    const bg = sel ? '#1e3a5f' : ligados.length ? '#3d3108' : m.conciliado ? '#161a22' : 'transparent';
     const v = _cbSinalMov(m);
-    const st = ligados.length ? `<span style="color:#4ade80" title="${_cbEsc(ligados.map(x => x.descricao).join(' | '))}">✓ ${ligados.length > 1 ? ligados.length + ' lanç.' : 'livro'}</span>`
+    const st = ligados.length ? `<span style="color:#facc15" title="${_cbEsc(ligados.map(x => x.descricao).join(' | '))}">✓ ${ligados.length > 1 ? ligados.length + ' lanç.' : 'livro'}</span>`
       : m.conciliado ? '<span style="color:#889" title="conciliado fora do livro (antes de 01/07 ou por outra tela)">✓</span>'
       : `<button class="cbl-mini" onclick="event.stopPropagation();cbLancarDoBanco('${m.id}')">＋ Lançar</button>`;
     return `<tr style="background:${bg};cursor:pointer" onclick="cbSelMov('${m.id}')">
@@ -209,6 +210,9 @@ function _cbRender() {
     </tr>`;
   }).join('');
 
+  _cb.sug = sug;
+  _cb.visIds = vis.slice(0, _CB_MAX_LINHAS).map(x => x.l.id);
+  if (_cb.cursor && !_cb.visIds.includes(_cb.cursor)) _cb.cursor = null;
   const nSug = Object.keys(sug).length;
   const saldoFim = saldo;
   const selSoma = _cb.lanc.filter(l => _cb.selL.has(l.id)).reduce((s, l) => s + _cbSinal(l), 0);
@@ -218,6 +222,7 @@ function _cbRender() {
 
   // tela cheia: ocupa do fim do menu até o rodapé da janela
   const topo = Math.max(0, Math.round(raiz.getBoundingClientRect().top + window.scrollY));
+  const rolL = document.getElementById('cb-scrL')?.scrollTop || 0, rolM = document.getElementById('cb-scrM')?.scrollTop || 0;
   raiz.innerHTML = `
   <style>
     #cb-raiz{position:fixed;left:0;right:0;bottom:0;top:${topo}px;z-index:20;background:#0b0d13;display:flex;flex-direction:column;color:#e0e0e0;font-size:0.8rem}
@@ -241,6 +246,15 @@ function _cbRender() {
     .cbl-tot div{background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;padding:4px 10px;min-width:130px}
     .cbl-tot span{display:block;color:#7c8698;font-size:0.64rem;text-transform:uppercase;letter-spacing:.3px}
     .cbl-tot b{font-variant-numeric:tabular-nums}
+    .cbl-lin.conc{background:#3d3108}
+    .cbl-lin.conc .cbl-td{color:#fde68a}
+    .cbl-lin.sug{background:#1b1830}
+    .cbl-lin.sel{background:#1e3a5f}
+    .cbl-lin.conc.sel{background:#5c4a0c}
+    .cbl-lin.cur .cbl-td{box-shadow:inset 0 2px 0 #f97316,inset 0 -2px 0 #f97316}
+    .cbl-lin.cur .cbl-td:first-child{box-shadow:inset 3px 0 0 #f97316,inset 0 2px 0 #f97316,inset 0 -2px 0 #f97316}
+    .cbl-kbd{font-size:0.62rem;color:#7c8698}
+    .cbl-kbd kbd{background:#1f2937;border:1px solid #334155;border-radius:3px;padding:0 4px;color:#cbd5e1;font-family:inherit}
     .cbl-menu{position:absolute;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:4px;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.5)}
     .cbl-menu button{display:block;width:100%;text-align:left;padding:6px 12px;background:none;border:none;color:#cbd5e1;cursor:pointer;border-radius:5px;font-size:0.78rem}
     .cbl-menu button:hover{background:#1e293b}
@@ -276,15 +290,16 @@ function _cbRender() {
         <div class="cbl-bar" style="border-radius:0;gap:6px">
           <b style="color:#fdba74">📒 Livro — ${_cbEsc(conta.nome)}</b>
           <span class="cbl-mut">${vis.length} de ${_cb.lanc.length}</span>
+          <span class="cbl-kbd"><kbd>↑</kbd><kbd>↓</kbd> navega · <kbd>Shift</kbd> marca vários · <kbd>Espaço</kbd> concilia / desfaz</span>
           <span style="flex:1"></span>
           <button class="cbl-btn" onclick="cbMenuNovo(this)">＋ Novo ▾</button>
-          <button class="cbl-btn" ${_cb.selL.size === 1 ? '' : 'disabled'} onclick="cbEditar()">✏️ Alterar</button>
-          <button class="cbl-btn" ${_cb.selL.size ? '' : 'disabled'} onclick="cbExcluir()">🗑 Excluir</button>
-          <button class="cbl-btn" ${_cb.selL.size && selMov ? '' : 'disabled'} onclick="cbConciliar()" title="Liga os lançamentos marcados à linha do banco selecionada">🔗 Conciliar</button>
-          <button class="cbl-btn" ${_cb.lanc.some(l => _cb.selL.has(l.id) && l.conciliado) ? '' : 'disabled'} onclick="cbDesconciliar()">↩ Desconciliar</button>
+          <button id="cb-bt-alt" class="cbl-btn" ${_cb.selL.size === 1 ? '' : 'disabled'} onclick="cbEditar()">✏️ Alterar</button>
+          <button id="cb-bt-exc" class="cbl-btn" ${_cb.selL.size ? '' : 'disabled'} onclick="cbExcluir()">🗑 Excluir</button>
+          <button id="cb-bt-conc" class="cbl-btn" ${_cb.selL.size && selMov ? '' : 'disabled'} onclick="cbConciliar()" title="Liga os lançamentos marcados à linha do banco selecionada">🔗 Conciliar</button>
+          <button id="cb-bt-desc" class="cbl-btn" ${_cb.lanc.some(l => _cb.selL.has(l.id) && l.conciliado) ? '' : 'disabled'} onclick="cbDesconciliar()">↩ Desconciliar</button>
           <button class="cbl-btn" ${nSug ? '' : 'disabled'} onclick="cbAprovarSugestoes()" style="${nSug ? 'border-color:#a16207;color:#fbbf24' : ''}">✓ Sugestões (${nSug})</button>
         </div>
-        <div class="cbl-scroll"><table class="cbl-tab">
+        <div class="cbl-scroll" id="cb-scrL"><table class="cbl-tab">
           <colgroup><col style="width:26px"><col style="width:42px"><col style="width:17%"><col style="width:13%"><col><col style="width:70px"><col style="width:78px"><col style="width:86px"><col style="width:86px"><col style="width:92px"><col style="width:42px"></colgroup>
           <thead><tr><th></th><th>Seq</th><th>Pessoa</th><th>Detalhe</th><th>Descrição</th><th>Doc</th><th>Data</th><th style="text-align:right">Crédito</th><th style="text-align:right">Débito</th><th style="text-align:right">Saldo</th><th>Conc</th></tr></thead>
           <tbody>
@@ -299,7 +314,7 @@ function _cbRender() {
           <span class="cbl-mut">${_cb.movs.length} movimentos</span>
           ${selMov ? `<span style="flex:1"></span><span class="cbl-mut">selecionado: <b style="color:#e0e0e0">${_cbMoney(_cbSinalMov(selMov))}</b> · marcados no livro: <b style="color:${Math.abs(selSoma - _cbSinalMov(selMov)) < 0.005 ? '#4ade80' : '#fbbf24'}">${_cbMoney(selSoma)}</b></span>` : ''}
         </div>
-        <div class="cbl-scroll">${conta.extrato_banco ? `<table class="cbl-tab">
+        <div class="cbl-scroll" id="cb-scrM">${conta.extrato_banco ? `<table class="cbl-tab">
           <colgroup><col style="width:80px"><col><col style="width:78px"><col style="width:100px"><col style="width:76px"></colgroup>
           <thead><tr><th>Data</th><th>Descrição</th><th>Doc</th><th style="text-align:right">Valor</th><th></th></tr></thead>
           <tbody>${trM || '<tr><td class="cbl-td" colspan="5" style="color:#777;padding:14px">Sem movimentos no período.</td></tr>'}</tbody></table>`
@@ -318,10 +333,13 @@ function _cbRender() {
       ${difBanco !== null ? `<div><span>Banco − livro</span><b style="color:${Math.abs(difBanco) < 0.01 ? '#4ade80' : '#f87171'}">${_cbMoney(difBanco)}</b></div>` : ''}
     </div>
   </div>`;
+  const sL = document.getElementById('cb-scrL'), sM = document.getElementById('cb-scrM');
+  if (sL) sL.scrollTop = rolL;
+  if (sM) sM.scrollTop = rolM;
 }
 
 // ---------- navegação / seleção ----------
-function cbTrocarConta(id) { _cb.contaId = id; _cb.selL.clear(); _cb.selM = null; _cbCarregar(false); }
+function cbTrocarConta(id) { _cb.contaId = id; _cb.selL.clear(); _cb.selM = null; _cb.cursor = null; _cbCarregar(false); }
 function cbAplicarPeriodo() {
   const ini = document.getElementById('cb-ini').value, fim = document.getElementById('cb-fim').value;
   window._cbPer = { ini: ini < _CB_INICIO ? _CB_INICIO : ini, fim };
@@ -334,11 +352,105 @@ function cbFiltro(digitando) {
   if (digitando) { const b = document.getElementById('cb-busca'); b.focus(); b.setSelectionRange(b.value.length, b.value.length); }
 }
 function cbSelLanc(id, ev, soToggle) {
+  _cb.cursor = id;
   if (soToggle || (ev && (ev.ctrlKey || ev.metaKey))) { _cb.selL.has(id) ? _cb.selL.delete(id) : _cb.selL.add(id); }
   else { const so = _cb.selL.size === 1 && _cb.selL.has(id); _cb.selL.clear(); if (!so) _cb.selL.add(id); }
   _cbRender();
 }
 function cbSelMov(id) { _cb.selM = _cb.selM === id ? null : id; _cbRender(); }
+
+// ---------- teclado (17/09/2026, pedido do Ronan) ----------
+// ↑/↓ andam no livro (PgUp/PgDn de 20 em 20), Shift+seta marca vários,
+// Espaço concilia a linha e pula para a próxima; na linha conciliada, desfaz.
+function _cbRepintarSelecao() {
+  document.querySelectorAll('#cb-raiz tr.cbl-lin').forEach(tr => {
+    const id = tr.dataset.id;
+    tr.classList.toggle('sel', _cb.selL.has(id));
+    tr.classList.toggle('cur', id === _cb.cursor);
+    const ck = tr.querySelector('input[type=checkbox]');
+    if (ck) ck.checked = _cb.selL.has(id);
+  });
+  const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id));
+  const liga = (id, on) => { const b = document.getElementById(id); if (b) b.disabled = !on; };
+  liga('cb-bt-alt', _cb.selL.size === 1);
+  liga('cb-bt-exc', _cb.selL.size > 0);
+  liga('cb-bt-conc', _cb.selL.size > 0 && !!_cb.selM);
+  liga('cb-bt-desc', lancs.some(l => l.conciliado));
+}
+
+function _cbMostrarCursor() {
+  if (!_cb.cursor) return;
+  const tr = document.querySelector(`#cb-raiz tr.cbl-lin[data-id="${CSS.escape(String(_cb.cursor))}"]`);
+  if (tr) tr.scrollIntoView({ block: 'nearest' });
+}
+
+function _cbMoverCursor(passo, somar) {
+  const ids = _cb.visIds;
+  if (!ids.length) return;
+  let i = ids.indexOf(_cb.cursor);
+  i = i < 0 ? (passo > 0 ? 0 : ids.length - 1) : Math.max(0, Math.min(ids.length - 1, i + passo));
+  _cb.cursor = ids[i];
+  if (!somar) _cb.selL.clear();
+  _cb.selL.add(_cb.cursor);
+  _cbRepintarSelecao();
+  _cbMostrarCursor();
+}
+
+// Espaço: com a linha do banco selecionada (ou a sugestão única de mesmo valor)
+// liga as duas; sem ela, só marca como conferido (dinheiro, conta sem extrato).
+async function cbAlternarConciliado() {
+  const l = _cb.lanc.find(x => x.id === _cb.cursor);
+  if (!l || _cb.ocupado) return;
+  _cb.ocupado = true;
+  const ids = _cb.visIds, pos = ids.indexOf(l.id);
+  try {
+    if (l.conciliado) {
+      await _cbDesligar([l]);
+    } else {
+      const mov = (_cb.selM && _cb.movs.find(m => m.id === _cb.selM)) || _cb.sug[l.id] || null;
+      if (mov) {
+        await _cbLigar([l], mov);
+        l.banco_mov_id = mov.id; mov.conciliado = true;
+        _cb.selM = null;
+      } else {
+        const { error } = await sb.from('oct_fin_lancamentos').update({ conciliado: true, atualizado_em: new Date().toISOString() }).eq('id', l.id);
+        if (error) throw error;
+      }
+      l.conciliado = true;
+      // pula para a próxima linha (na lista "não conciliados" a atual some)
+      const prox = ids[pos + 1] || null;
+      if (prox) _cb.cursor = prox;
+    }
+  } catch (e) {
+    alert('Erro: ' + (e.message || e));
+  } finally {
+    _cb.ocupado = false;
+  }
+  _cb.selL.clear();
+  if (_cb.cursor) _cb.selL.add(_cb.cursor);
+  _cbRender();
+  _cbMostrarCursor();
+}
+
+if (!window._cbTeclado) {
+  window._cbTeclado = true;
+  document.addEventListener('keydown', ev => {
+    if (!document.getElementById('cb-raiz') || document.getElementById('cb-modal') || document.getElementById('cb-menu')) return;
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    const t = ev.target;
+    const campo = t && (t.isContentEditable || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' ||
+      (t.tagName === 'INPUT' && t.type !== 'checkbox'));
+    if (campo) return;
+    const passo = { ArrowDown: 1, ArrowUp: -1, PageDown: 20, PageUp: -20 }[ev.key];
+    if (passo) { ev.preventDefault(); _cbMoverCursor(passo, ev.shiftKey); return; }
+    if (ev.key === ' ' || ev.code === 'Space') {
+      ev.preventDefault();
+      if (t && (t.tagName === 'BUTTON' || t.tagName === 'INPUT')) t.blur();   // espaço não "clica" o botão/checkbox focado
+      if (!_cb.cursor && _cb.visIds.length) { _cbMoverCursor(1); return; }
+      cbAlternarConciliado();
+    }
+  });
+}
 
 // ---------- conciliar ----------
 async function _cbLigar(lancs, mov) {
@@ -387,16 +499,27 @@ async function cbAprovarSugestoes() {
   _cbCarregar(false);
 }
 
+async function _cbDesligar(lancs) {
+  const ids = new Set(lancs.map(l => l.id));
+  for (const l of lancs) {
+    const { error } = await sb.from('oct_fin_lancamentos').update({ conciliado: false, banco_mov_id: null, atualizado_em: new Date().toISOString() }).eq('id', l.id);
+    if (error) throw error;
+    if (l.banco_mov_id) {
+      const outros = _cb.lanc.filter(x => x.banco_mov_id === l.banco_mov_id && !ids.has(x.id));
+      if (!outros.length) {
+        await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null }).eq('id', l.banco_mov_id);
+        const m = _cb.movs.find(x => x.id === l.banco_mov_id);
+        if (m) { m.conciliado = false; m.conta_pagar_id = null; }
+      }
+    }
+    l.conciliado = false; l.banco_mov_id = null;
+  }
+}
+
 async function cbDesconciliar() {
   const lancs = _cb.lanc.filter(l => _cb.selL.has(l.id) && l.conciliado);
   if (!lancs.length || !confirm(`Desfazer a conciliação de ${lancs.length} lançamento(s)? O lançamento continua no livro.`)) return;
-  for (const l of lancs) {
-    await sb.from('oct_fin_lancamentos').update({ conciliado: false, banco_mov_id: null, atualizado_em: new Date().toISOString() }).eq('id', l.id);
-    if (l.banco_mov_id) {
-      const outros = _cb.lanc.filter(x => x.banco_mov_id === l.banco_mov_id && x.id !== l.id && !_cb.selL.has(x.id));
-      if (!outros.length) await sb.from('oct_banco_movimentos').update({ conciliado: false, conta_pagar_id: null }).eq('id', l.banco_mov_id);
-    }
-  }
+  try { await _cbDesligar(lancs); } catch (e) { alert('Erro: ' + (e.message || e)); }
   _cb.selL.clear();
   _cbCarregar(false);
 }
