@@ -15,7 +15,8 @@ async function moduloPessoas() {
 
   const { data: pessoas } = await sb
     .from('oct_pessoas').select('*')
-    .eq('empresa_id', empresaId)
+    // 17/09/2026: também o que outro posto do grupo compartilhou com este
+    .or(`empresa_id.eq.${empresaId},compartilhado_com.cs.{${empresaId}}`)
     .order('nome');
 
   window._todasPessoas = pessoas || [];
@@ -88,6 +89,11 @@ async function abrirFormPessoa(id, empresaId) {
   }
 
   const CLASSIFICACOES = ['cliente','fornecedor','funcionario','contador','transportadora'];
+  // compartilhar com outro posto do grupo: o cliente abastece lá e pede nota.
+  // Quem recebe USA o cadastro; alterar continua só no posto dono.
+  const _dono = p?.empresa_id || empresaId;
+  const _ehDono = _dono === empresaId;
+  window._pessoaCompart = Array.isArray(p?.compartilhado_com) ? p.compartilhado_com.slice() : [];
   // classificacoes ja marcadas: usa o array novo, ou migra do 'tipo' antigo
   let marcadas = Array.isArray(p?.classificacoes) ? p.classificacoes.slice() : [];
   if (!marcadas.length && p?.tipo) {
@@ -102,6 +108,7 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
       <div class="form-grid">
         <div class="form-group span2"><label>Nome / Razão Social *</label><input id="fpe-nome" type="text" value="${p?.nome||''}" /></div>
+        <div class="form-group span2" id="fpe-compart-box"></div>
         <div class="form-group span2">
           <label>Classificação (pode marcar mais de uma)</label>
           <div style="display:flex;flex-wrap:wrap;gap:14px;padding:8px 2px">
@@ -196,6 +203,7 @@ async function abrirFormPessoa(id, empresaId) {
   `;
   if (id) { colabInit(id, empresaId); frotaInit(id, empresaId); }
   pessoaTabelaInit(id || '', empresaId);
+  _pessoaMontarCompart(_dono, _ehDono);
 }
 
 // dropdown "Tabela de preço" do cadastro: lista as negociações da empresa e o
@@ -379,8 +387,10 @@ async function salvarPessoa(id, empresaId) {
     if (classif.includes(t)) { tipoCompat = t; break; }
   }
 
+  const compart = Array.from(document.querySelectorAll('.fpe-compart:checked')).map(c => c.value);
   const dados = {
     empresa_id: empresaId, nome,
+    compartilhado_com: compart,
     classificacoes: classif,
     tipo:        tipoCompat,
     cartao_idf:  document.getElementById('fpe-idf').value.trim() || null,
@@ -459,6 +469,30 @@ async function pessoaSetAtivo(id, ativo) {
   await sb.from('oct_pessoas').update({ ativo }).eq('id', id);
   moduloPessoas();
 }
+// caixa "compartilhar com": os outros postos que o usuário acessa
+async function _pessoaMontarCompart(dono, ehDono) {
+  const box = document.getElementById('fpe-compart-box');
+  if (!box) return;
+  const lista = (typeof EMPRESA !== 'undefined' && EMPRESA.lista) ? EMPRESA.lista : [];
+  const outros = lista.filter(e => e.id !== dono);
+  if (!outros.length) { box.innerHTML = ''; return; }
+  const nomeDono = (lista.find(e => e.id === dono) || {}).nome || 'outro posto';
+  if (!ehDono) {
+    box.innerHTML = `<div style="background:#101826;border:1px solid #2a4a6a;border-radius:8px;padding:10px;color:#93c5fd;font-size:0.82rem">
+      Cadastro do posto <b>${pessoaEsc(nomeDono)}</b>, compartilhado com este. Alterações só no posto de origem.</div>`;
+    return;
+  }
+  box.innerHTML = `<label>Compartilhar com outro posto do grupo</label>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;padding:6px 2px">
+      ${outros.map(e => `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:#ddd;font-size:0.85rem">
+        <input type="checkbox" class="fpe-compart" value="${e.id}" ${(window._pessoaCompart || []).includes(e.id) ? 'checked' : ''} style="cursor:pointer">
+        ${pessoaEsc(e.nome_fantasia || e.nome)}</label>`).join('')}
+    </div>
+    <span style="font-size:0.72rem;color:#888">O posto marcado passa a achar este cliente na venda, na nota e no faturamento. O cadastro continua sendo deste posto.</span>`;
+}
+
+function pessoaEsc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
 function pessoaFiltrar(f) { window._pessoaFiltro = f; moduloPessoas(); }
 
 
