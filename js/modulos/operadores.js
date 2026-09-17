@@ -25,7 +25,7 @@ async function opListar() {
   const conteudo = document.getElementById('conteudo');
   const empresaId = window._opEmpresaId;
   const { data: ops } = await sb.from('oct_perfis')
-    .select('id,nome,usuario,email_login,perfil,master,ativo,criado_em,acessa_gerencial,papel_gerencial,modulos_mais,modulos_menos')
+    .select('*')
     .eq('empresa_id', empresaId).order('nome');
 
   conteudo.innerHTML = `
@@ -40,7 +40,7 @@ async function opListar() {
         <table style="width:100%;border-collapse:collapse;font-size:0.86rem">
           <thead><tr style="color:#888;text-align:left;background:#0f1119">
             <th style="padding:10px 12px">Nome</th><th style="padding:10px 12px">Usuário</th>
-            <th style="padding:10px 12px">Perfil</th><th style="padding:10px 12px">Gerencial</th>
+            <th style="padding:10px 12px">Perfil</th><th style="padding:10px 12px">${PERM.legado ? 'Gerencial' : 'Exceções'}</th>
             <th style="padding:10px 12px">Situação</th><th></th>
           </tr></thead>
           <tbody>
@@ -48,14 +48,16 @@ async function opListar() {
             <tr style="border-top:1px solid #1c1f2e;color:#ddd">
               <td style="padding:9px 12px;font-weight:600">${opEsc(o.nome)}</td>
               <td style="padding:9px 12px;font-family:monospace;color:#f97316">${opEsc(o.usuario) || '<span style="color:#666">— sem usuário —</span>'}</td>
-              <td style="padding:9px 12px">${opEsc(o.perfil || (o.master ? 'gerente' : 'operador'))}</td>
-              <td style="padding:9px 12px">${_opGerencialCel(o)}</td>
+              <td style="padding:9px 12px">${opEsc(_opPapelRot(o))}</td>
+              <td style="padding:9px 12px">${PERM.legado ? _opGerencialCel(o) : _opExcecoesCel(o)}</td>
               <td style="padding:9px 12px">${o.ativo ? '<span style="color:#4caf50">ativo</span>' : '<span style="color:#888">inativo</span>'}</td>
               <td style="padding:9px 12px;text-align:right;white-space:nowrap">
                 ${o.usuario ? '' : `<button onclick="opDefinirUsuarioForm('${o.id}','${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem">Definir usuário</button>`}
                 ${o.usuario ? `<button onclick="opSenhaForm('${o.id}','${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem">🔑 Senha</button>` : ''}
                 ${o.usuario ? `<button onclick="opAlternarAtivo('${o.id}', ${o.ativo ? 'false' : 'true'}, '${opEsc(o.nome)}')" class="nfe-aba" style="font-size:0.76rem;color:${o.ativo ? '#f87171' : '#4caf50'}">${o.ativo ? '🚫 Bloquear' : '✓ Liberar'}</button>` : ''}
-                ${(o.usuario && _opEhMaster()) ? `<button onclick="opAcessoForm('${o.id}')" class="nfe-aba" style="font-size:0.76rem;color:#60a5fa">🖥 Gerencial</button>` : ''}
+                ${(o.usuario && _opEhMaster()) ? (PERM.legado
+                  ? `<button onclick="opAcessoForm('${o.id}')" class="nfe-aba" style="font-size:0.76rem;color:#60a5fa">🖥 Gerencial</button>`
+                  : `<button onclick="opPerfilForm('${o.id}')" class="nfe-aba" style="font-size:0.76rem;color:#60a5fa">🛡️ Perfil</button>`) : ''}
               </td>
             </tr>`).join('') : '<tr><td colspan="6" style="padding:20px;text-align:center;color:#666">Nenhum operador cadastrado.</td></tr>'}
           </tbody>
@@ -68,7 +70,118 @@ async function opListar() {
     </div>`;
 }
 
-// ---------- ACESSO AO GERENCIAL ----------
+// ---------- PERFIL + EXCEÇÕES (17/09/2026) ----------
+function _opPapelRot(o) {
+  const p = PERFIS_OCTANO.find(x => x.id === o.papel);
+  if (p) return p.rot;
+  return o.master ? 'Gerente' : 'Operador / caixa';
+}
+
+function _opExcecoesCel(o) {
+  const n = (o.perm_mais || []).length + (o.perm_menos || []).length;
+  return n ? `<span style="color:#60a5fa">${n} exceção(ões)</span>` : '<span style="color:#555">—</span>';
+}
+
+const _opPf = { id: null, papel: null, padrao: new Set(), marcado: new Set(), busca: '' };
+
+async function opPerfilForm(id) {
+  if (!_opEhMaster()) { alert('Só o Master define perfil e exceções.'); return; }
+  const { data: o } = await sb.from('oct_perfis').select('*').eq('id', id).single();
+  if (!o) return;
+  _opPf.id = id; _opPf.nome = o.nome; _opPf.usuario = o.usuario; _opPf.busca = '';
+  _opPf.papel = o.papel || (o.master ? 'gerente' : 'operador');
+  await _opPfPadrao();
+  const mais = new Set(o.perm_mais || []), menos = new Set(o.perm_menos || []);
+  _opPf.marcado = new Set([..._opPf.padrao].filter(c => !menos.has(c)));
+  mais.forEach(c => _opPf.marcado.add(c));
+  _opPfRender();
+}
+
+async function _opPfPadrao() {
+  if (_opPf.papel === 'master') { _opPf.padrao = permPadrao('master'); return; }
+  const { data } = await sb.from('oct_perfis_permissoes').select('chave').eq('perfil', _opPf.papel).eq('liberado', true);
+  _opPf.padrao = new Set((data || []).map(r => r.chave));
+}
+
+async function opPfTrocarPapel(papel) {
+  _opPf.papel = papel;
+  await _opPfPadrao();
+  _opPf.marcado = new Set(_opPf.padrao);   // perfil novo começa sem exceções
+  _opPfRender();
+}
+
+function opPfMarcar(c, on) { on ? _opPf.marcado.add(c) : _opPf.marcado.delete(c); _opPfRender(); }
+function opPfBuscar(v) {
+  _opPf.busca = v; _opPfRender();
+  const b = document.getElementById('opp-busca'); if (b) { b.focus(); b.setSelectionRange(v.length, v.length); }
+}
+
+function _opPfRender() {
+  const master = _opPf.papel === 'master';
+  const busca = _opPf.busca.toLowerCase();
+  const nExc = [...PERM_CATALOGO.flatMap(g => g.itens)].filter(i => _opPf.marcado.has(i.c) !== _opPf.padrao.has(i.c)).length;
+  const grupos = PERM_CATALOGO.map(g => {
+    const itens = g.itens.filter(i => !busca || (i.d + ' ' + i.c + ' ' + g.grupo).toLowerCase().includes(busca));
+    if (!itens.length) return '';
+    return `<div style="margin-top:8px"><div style="color:#94a3b8;font-size:0.74rem;font-weight:600">${opEsc(g.area)} · ${opEsc(g.grupo)}</div>
+      ${itens.map(i => {
+        const exc = _opPf.marcado.has(i.c) !== _opPf.padrao.has(i.c);
+        return `<label style="display:flex;align-items:center;gap:8px;padding:2px 6px;border-radius:4px;${exc ? 'background:#1a2030' : ''}">
+          <input type="checkbox" style="width:auto" ${_opPf.marcado.has(i.c) || master ? 'checked' : ''} ${master ? 'disabled' : ''} onchange="opPfMarcar('${i.c}', this.checked)">
+          <span style="color:#cdd6e0;font-size:0.8rem;flex:1">${opEsc(i.d)}</span>
+          <span style="color:${exc ? '#60a5fa' : '#556'};font-size:0.68rem">${exc ? 'exceção' : (_opPf.padrao.has(i.c) ? 'do perfil' : '')}</span>
+        </label>`;
+      }).join('')}</div>`;
+  }).join('');
+  document.getElementById('op-form').innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:18px">
+      <h3 style="color:#ddd;margin-bottom:4px">🛡️ Perfil de ${opEsc(_opPf.nome)}</h3>
+      <p style="color:#667;font-size:0.78rem;margin-bottom:12px">usuário <b style="color:#f97316">${opEsc(_opPf.usuario || '')}</b> ·
+        o perfil define o padrão (Perfis); marque aqui só o que for diferente para esta pessoa</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <select id="opp-papel" onchange="opPfTrocarPapel(this.value)" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+          ${PERFIS_OCTANO.map(p => `<option value="${p.id}" ${p.id === _opPf.papel ? 'selected' : ''}>${opEsc(p.rot)}</option>`).join('')}</select>
+        <input id="opp-busca" placeholder="Filtrar permissão..." value="${opEsc(_opPf.busca)}" oninput="opPfBuscar(this.value)"
+          style="flex:1;min-width:180px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+        <span style="color:${nExc ? '#60a5fa' : '#667'};font-size:0.8rem">${nExc} exceção(ões)</span>
+      </div>
+      ${master ? '<p style="color:#fbbf24;font-size:0.8rem;margin-top:8px">Master vê todos os postos e tem tudo liberado.</p>' : ''}
+      <div style="max-height:380px;overflow:auto;background:#0b0d14;border:1px solid #1c2130;border-radius:8px;padding:4px 10px 10px;margin-top:10px">${grupos}</div>
+      <div id="op-msg" style="margin-top:10px;font-size:0.84rem"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button onclick="opPerfilSalvar()" class="btn-salvar">Salvar perfil</button>
+        <button onclick="document.getElementById('op-form').innerHTML=''" class="nfe-aba">Cancelar</button>
+      </div>
+    </div>`;
+}
+
+async function opPerfilSalvar() {
+  const msg = document.getElementById('op-msg');
+  const papel = _opPf.papel;
+  if (papel === 'master' && !confirm(`${_opPf.nome} vai ver e alterar TODOS os postos. Confirma o perfil Master?`)) return;
+  const mais = [], menos = [];
+  if (papel !== 'master') {
+    PERM_CATALOGO.flatMap(g => g.itens).forEach(i => {
+      if (_opPf.marcado.has(i.c) && !_opPf.padrao.has(i.c)) mais.push(i.c);
+      if (!_opPf.marcado.has(i.c) && _opPf.padrao.has(i.c)) menos.push(i.c);
+    });
+  }
+  msg.style.color = '#888'; msg.textContent = 'Salvando...';
+  const { error } = await sb.from('oct_perfis').update({
+    papel, master: papel === 'master', acessa_gerencial: papel !== 'operador',
+    perm_mais: mais, perm_menos: menos,
+  }).eq('id', _opPf.id);
+  if (error) {
+    msg.style.color = '#f87171';
+    msg.textContent = /papel|perm_/.test(error.message || '') ? 'Falta rodar repo/sql/SQL-PERFIS-PERMISSOES.sql no Supabase.' : 'Erro: ' + error.message;
+    return;
+  }
+  msg.style.color = '#4caf50';
+  msg.textContent = 'Perfil salvo. Vale no próximo login da pessoa.';
+  setTimeout(() => opListar(), 1200);
+}
+
+// ---------- ACESSO AO GERENCIAL (modelo antigo, até rodar o SQL novo) ----------
 // So' o master cadastra e concede: se o gerente do posto pudesse, ele se
 // promoveria sozinho liberando Contabilidade e Parametros para a propria conta.
 function _opEhMaster() {
@@ -211,7 +324,7 @@ function opNovoForm() {
           <input id="op-senha" type="password" autocomplete="new-password" placeholder="PIN de 4 números ou 6+ caracteres" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
         <div><label style="color:#888;font-size:0.78rem">Perfil</label>
           <select id="op-perfil" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
-            <option value="operador">Operador</option><option value="gerente">Gerente</option></select></div>
+            ${PERFIS_OCTANO.map(p => `<option value="${p.id}" ${p.id === 'operador' ? 'selected' : ''}>${opEsc(p.rot)}</option>`).join('')}</select></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:14px">
         <button onclick="opSalvar()" class="btn-salvar">Criar operador</button>
@@ -263,11 +376,16 @@ async function opSalvar() {
   // A coluna 'perfil' tem check constraint que aceita 'master'; o nível de acesso
   // (gerente x operador) é distinguido pelo boolean 'master'.
   // Usa upsert para ser idempotente (permite retry se um login ficou órfão antes).
-  const ehGerente = (perfil === 'gerente');
-  const { error: errPerfil } = await sb.from('oct_perfis').upsert({
+  // 17/09/2026: o nível vem de `papel` (master | gerente | financeiro |
+  // contabilidade | operador). `master` fica verdadeiro só para o dono da rede.
+  const novo = {
     id: novoUid, empresa_id: empresaId, nome, usuario, email_login: emailLogin,
-    perfil: 'master', master: ehGerente, ativo: true,
-  }, { onConflict: 'id' });
+    perfil: 'master', master: perfil === 'master', ativo: true,
+    acessa_gerencial: perfil !== 'operador',
+  };
+  if (!PERM.legado) novo.papel = perfil;
+  else if (perfil === 'gerente') { novo.master = true; novo.papel_gerencial = 'gerente'; }
+  const { error: errPerfil } = await sb.from('oct_perfis').upsert(novo, { onConflict: 'id' });
   if (errPerfil) { msg.style.color = '#f87171'; msg.textContent = 'Login criado, mas falhou ao gravar o perfil: ' + errPerfil.message; return; }
 
   msg.style.color = '#4caf50'; msg.textContent = `Operador "${nome}" criado! Usuário: ${usuario}`;

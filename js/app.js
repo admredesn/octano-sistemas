@@ -24,6 +24,7 @@ const MODULOS = [
   { id: 'notas_prazo',   label: 'Notas a Prazo',  breve: false },
   { id: 'operadores',    label: 'Operadores',     breve: false },
   { id: 'parametros',    label: '⚙️ Parâmetros',  breve: false },
+  { id: 'perfis',        label: '🛡️ Perfis',      breve: false },
   { id: 'config_fiscal', label: '🧾 Config. Fiscal', breve: false },
   { id: 'pessoas',       label: 'Pessoas',        breve: false },
   { id: 'ponto',         label: 'Ponto',          breve: false },
@@ -73,6 +74,12 @@ function podeVer(idModulo) {
   // enquanto o perfil nao chegou, nao esconde nada: piscar o menu e' pior que
   // mostrar por um instante o que a pessoa ja' via ontem
   if (!_acesso.carregado) return true;
+  // 17/09/2026: com o SQL de perfis rodado, vale a permissão "<tela>.ver"
+  if (typeof PERM !== 'undefined' && PERM.carregado && !PERM.legado) {
+    if (idModulo === 'perfis') return PERM.master;
+    return pode(idModulo + '.ver');
+  }
+  if (idModulo === 'perfis') return false;
   if (_acesso.master) return true;
   if (_acesso.menos.includes(idModulo)) return false;
   if (_acesso.mais.includes(idModulo)) return true;
@@ -169,6 +176,12 @@ async function fazerLogout(){
   renderLogin();
 }
 
+// canto superior direito: o nome da pessoa (oct_perfis.nome), não o e-mail interno
+function _nomeUsuarioTopo(session) {
+  const nome = (typeof EMPRESA !== 'undefined' && EMPRESA.usuarioNome) || String(session.user.email || '').split('@')[0];
+  return String(nome).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 async function renderApp(session){
   // carrega o contexto multi-empresa (perfil, lista de empresas, empresa ativa)
   await empresaCarregarContexto(session);
@@ -176,7 +189,7 @@ async function renderApp(session){
     '<div class="topbar">' +
       '<div class="logo">OCTANO SISTEMAS</div>' +
       '<div class="empresa-info" id="empresa-seletor"></div>' +
-      '<div class="usuario"><span>' + (session.user.email?.replace('@octano.interno','')) + '</span>' +
+      '<div class="usuario"><span>' + _nomeUsuarioTopo(session) + '</span>' +
       '<button onclick="fazerLogout()">Sair</button></div>' +
     '</div>' +
     '<div class="toolbar" id="toolbar"></div>' +
@@ -299,6 +312,7 @@ function navegarPara(modulo){
     whatsapp:      moduloWhatsapp,
     cashback:      moduloCashback,
     comissoes:     moduloComissoes,
+    perfis:        moduloPerfis,
   };
   if(fns[modulo]) _abrirModulo(modulo, fns[modulo], conteudo);
   else conteudo.innerHTML = '<p style="color:#888;padding:24px">Modulo <strong>' + modulo + '</strong> em breve.</p>';

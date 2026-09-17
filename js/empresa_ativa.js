@@ -25,10 +25,12 @@ async function empresaCarregarContexto(session) {
   // 1) perfil do usuario logado
   const { data: perfil } = await sb
     .from('oct_perfis')
-    .select('empresa_id, master, acessa_gerencial, papel_gerencial, modulos_mais, modulos_menos')
+    .select('nome, empresa_id, master, acessa_gerencial, papel_gerencial, modulos_mais, modulos_menos')
     .eq('id', session.user.id).single();
 
   EMPRESA.perfilEmpresaId = perfil?.empresa_id || null;
+  EMPRESA.usuarioNome = (perfil?.nome || '').trim() || null;   // canto superior direito: só o nome
+  if (typeof permCarregar === 'function') await permCarregar();
   EMPRESA.ehMaster = perfil?.master === true;
 
   // acesso as telas do gerencial. Sem linha em oct_perfis (logins antigos, como
