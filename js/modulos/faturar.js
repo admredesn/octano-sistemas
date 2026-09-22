@@ -1339,34 +1339,118 @@ async function fatLiquidarTitulo(id) {
       </div>
       <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
       <input id="flt-autor" placeholder="nome" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+      <div id="flt-vinc" style="margin-top:12px"></div>
       <div id="flt-msg" style="color:#f87171;font-size:0.78rem;text-align:center;margin-top:8px"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
         <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Cancelar</button>
         <button class="fat-btn azul" onclick="fatLiquidarTituloOk('${id}')" style="flex:2">Confirmar recebimento</button>
       </div>
     </div>`);
+  window._fltReceb = null;
+  window._fltTituloId = id;
+  fatCarregarRecebPendentes(t);
+}
+
+// ---- LOCALIZAR RECEBIMENTO PENDENTE (maquininha/Pix/cofre) p/ o título ----
+// A notinha paga no cartão/Pix chega como recebimento pendente no painel do
+// posto e é espelhada em oct_recebimentos (conciliado=0). Aqui o escritório
+// LOCALIZA esse recebimento e o vincula ao título — mesmo efeito do PDV. Como a
+// retaguarda não fala com o núcleo, grava o vínculo na nuvem (recebimento_id +
+// origem 'faturar'); o núcleo lê isso no ciclo e tira do painel do frentista.
+function _fatFormaReceb(r) {
+  const f = `${r.forma || ""} ${r.bandeira || ""} ${r.origem || ""}`.toLowerCase();
+  if (/pix/.test(f)) return "Pix";
+  if (/d[eé]b|cr[eé]d|cart/.test(f)) return "Cartão";
+  if (/dinh|cofre/.test(f)) return "Dinheiro";
+  if (/transf/.test(f)) return "Transferência";
+  return "Cartão";
+}
+
+async function fatCarregarRecebPendentes(t) {
+  const el = document.getElementById("flt-vinc");
+  if (!el) return;
+  let recebs = [], usados = new Set();
+  try {
+    const [{ data: r1 }, { data: r2 }] = await Promise.all([
+      sb.from("oct_recebimentos")
+        .select("id,valor,forma,bandeira,origem,recebido_em,dia,hora")
+        .eq("empresa_id", window._fatEid).eq("conciliado", false).is("abastecimento_id", null)
+        .order("recebido_em", { ascending: false }).limit(80),
+      sb.from("oct_recebimentos_titulo").select("recebimento_id")
+        .eq("empresa_id", window._fatEid).not("recebimento_id", "is", null).limit(2000),
+    ]);
+    recebs = r1 || [];
+    (r2 || []).forEach(x => x.recebimento_id && usados.add(String(x.recebimento_id)));
+  } catch (e) { el.innerHTML = ""; return; }
+  const lista = recebs.filter(x => !usados.has(String(x.id))).slice(0, 60);
+  window._fltRecebs = lista;
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const hora = x => `${esc(x.dia || (x.recebido_em || "").slice(0, 10))} ${esc(x.hora || (x.recebido_em || "").slice(11, 16))}`;
+  const item = x => `<label style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid #1c2130;cursor:pointer;font-size:0.8rem;color:#e5e7eb">
+      <input type="radio" name="flt-receb" value="${esc(x.id)}" onchange="fatEscolherReceb(this.value)">
+      <span style="flex:1">${hora(x)} · ${esc(x.bandeira || "")} ${esc(x.forma || "")} <span style="color:#7b8598">(${esc(x.origem || "")})</span></span>
+      <b>R$ ${_fatMoney(x.valor)}</b></label>`;
+  el.innerHTML = `<div style="border:1px solid #23406b;background:#0d1a2e;border-radius:8px;padding:10px">
+      <div style="font-weight:600;color:#93c5fd;font-size:0.82rem;margin-bottom:6px">💳 Pagou na maquininha, Pix ou cofre? Localize o recebimento</div>
+      <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid #1c2130;cursor:pointer;font-size:0.8rem;color:#e5e7eb">
+        <input type="radio" name="flt-receb" value="" checked onchange="fatEscolherReceb('')"> Não — informar a forma manualmente (dinheiro, cheque…)</label>
+      <div style="max-height:20vh;overflow:auto">${lista.map(item).join("") || '<p style="color:#7b8598;font-size:0.78rem;padding:6px 8px">Nenhum recebimento pendente no painel deste posto.</p>'}</div>
+      <div id="flt-vinc-status" style="font-size:0.78rem;margin-top:6px"></div>
+    </div>`;
+}
+
+function fatEscolherReceb(id) {
+  const r = id ? (window._fltRecebs || []).find(x => String(x.id) === String(id)) : null;
+  window._fltReceb = r || null;
+  const elV = document.getElementById("flt-valor");
+  const elF = document.getElementById("flt-forma");
+  const st = document.getElementById("flt-vinc-status");
+  if (r) {
+    if (elV) { elV.value = Number(r.valor || 0).toFixed(2); elV.readOnly = true; }
+    if (elF) { elF.value = _fatFormaReceb(r); elF.disabled = true; }
+    if (st) {
+      const t = (window._fatTitulos || []).find(x => x.id === window._fltTituloId);
+      const saldo = t ? Number(t.valor || 0) : 0;
+      const dif = +(Number(r.valor || 0) - saldo).toFixed(2);
+      st.innerHTML = Math.abs(dif) < 0.01
+        ? '<span style="color:#7ee2a0">✓ Bate com o saldo do título.</span>'
+        : dif < 0
+          ? `<span style="color:#f59e0b">Recebimento menor: baixa parcial de R$ ${_fatMoney(r.valor)}, saldo fica R$ ${_fatMoney(-dif)}.</span>`
+          : `<span style="color:#f87171">Recebimento maior que o saldo (sobra R$ ${_fatMoney(dif)}): vincule pelo PDV a várias notas, ou baixe manual.</span>`;
+    }
+  } else {
+    if (elV) elV.readOnly = false;
+    if (elF) elF.disabled = false;
+    if (st) st.innerHTML = "";
+  }
 }
 
 async function fatLiquidarTituloOk(id) {
   if (!podeOuAvisa('faturar.receber_titulo')) return;
   const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
   const msg = document.getElementById("flt-msg");
-  const valor = parseFloat((document.getElementById("flt-valor").value || "0").replace(",", "."));
+  const receb = window._fltReceb || null;                 // recebimento pendente vinculado (opcional)
+  const valor = receb ? Number(receb.valor || 0) : parseFloat((document.getElementById("flt-valor").value || "0").replace(",", "."));
   const juros = parseFloat((document.getElementById("flt-juros").value || "0").replace(",", ".")) || 0;
   const desconto = parseFloat((document.getElementById("flt-desc").value || "0").replace(",", ".")) || 0;
-  const forma = document.getElementById("flt-forma").value;
+  const forma = receb ? _fatFormaReceb(receb) : document.getElementById("flt-forma").value;
   const autor = (document.getElementById("flt-autor").value || "").trim();
   if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu."; return; }
   const saldo = Number(t.valor || 0);
-  if (valor > saldo + 0.005) { msg.textContent = "Valor maior que o saldo do título."; return; }
+  if (valor > saldo + 0.005) {
+    msg.textContent = receb
+      ? "Recebimento maior que o saldo: vincule pelo PDV a várias notas, ou baixe manual."
+      : "Valor maior que o saldo do título."; return;
+  }
   msg.style.color = "#9aa"; msg.textContent = "Registrando...";
   try {
-    // 1) baixa vinculada ao título
+    // 1) baixa vinculada ao título (com recebimento_id quando veio do painel)
     await sb.from("oct_recebimentos_titulo").insert({
       empresa_id: window._fatEid, nota_prazo_id: id, cliente_id: t.cliente_id || null,
       cliente_nome: t.cliente_nome, valor: Number(valor.toFixed(2)), juros, desconto, forma,
       data_recebimento: new Date().toISOString().slice(0, 10), autor, origem: "faturar",
+      recebimento_id: receb ? receb.id : null,
     });
     // 2) atualiza o título (reduz saldo; quita se zerou)
     const novoSaldo = Number((saldo - valor).toFixed(2));
@@ -1374,6 +1458,11 @@ async function fatLiquidarTituloOk(id) {
       ? { valor: 0, status: "pago", pago_em: new Date().toISOString() }
       : { valor: novoSaldo };
     await sb.from("oct_pdv_notas_prazo").update(patch).eq("id", id);
+    // 3) marca o recebimento como consumido para não reaparecer no painel do
+    //    escritório antes do núcleo reconciliar (o núcleo confirma pelo vínculo).
+    if (receb) {
+      try { await sb.from("oct_recebimentos").update({ conciliado: true }).eq("id", receb.id); } catch (e) { /* o núcleo reconcilia pelo oct_recebimentos_titulo mesmo assim */ }
+    }
   } catch (e) {
     msg.style.color = "#f87171";
     msg.textContent = /nota_prazo_id|column|does not exist/i.test(e.message || "")
