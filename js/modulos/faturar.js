@@ -2608,6 +2608,10 @@ async function fatLiquidar(id) {
           <input id="fr-data" type="date" value="${hoje}"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
       </div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Conta (onde o dinheiro caiu) — já entra na conciliação</label>
+      <select id="fr-conta" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+        <option value="">Padrão pela forma (dinheiro→Caixa, cartão→PagBank, Pix→Sicoob)</option>
+      </select>
       <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
       <input id="fr-autor" placeholder="seu nome (fica registrado)"
         style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
@@ -2622,6 +2626,18 @@ async function fatLiquidar(id) {
   (box || document.body).appendChild(div);
   document.getElementById("fr-valor").focus();
   document.getElementById("fr-valor").select();
+  // carrega as contas do posto para escolher onde o dinheiro caiu (conciliação)
+  (async () => {
+    try {
+      const { data } = await sb.from("oct_fin_contas")
+        .select("id,nome,tipo").eq("empresa_id", window._fatEid).eq("ativo", true).order("ordem");
+      const selC = document.getElementById("fr-conta");
+      if (selC && (data || []).length) {
+        selC.innerHTML = '<option value="">Padrão pela forma (dinheiro→Caixa, cartão→PagBank, Pix→Sicoob)</option>'
+          + data.map(c => `<option value="${c.id}">${_fatEsc(c.nome)}</option>`).join("");
+      }
+    } catch (e) { /* sem contas cadastradas: fica só o padrão pela forma */ }
+  })();
 }
 
 function _fatBRL(v) { return "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -2642,6 +2658,8 @@ async function fatConfirmarRecebimento(faturaId) {
   const forma = document.getElementById("fr-forma").value;
   const dataRec = document.getElementById("fr-data").value;
   const autor = (document.getElementById("fr-autor").value || "").trim();
+  const contaSel = document.getElementById("fr-conta");
+  const contaId = contaSel && contaSel.value ? Number(contaSel.value) : null;
   if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu (fica registrado)."; return; }
   msg.style.color = "#9aa"; msg.textContent = "Registrando...";
@@ -2649,6 +2667,7 @@ async function fatConfirmarRecebimento(faturaId) {
   const { error } = await sb.from("oct_recebimentos_titulo").insert({
     empresa_id: window._fatEid, fatura_id: faturaId,
     valor, juros, desconto, forma, data_recebimento: dataRec, autor,
+    conta_id: contaId,   // onde caiu (null = padrão pela forma, resolvido no oct_fin_sincronizar)
   });
   if (error) {
     msg.style.color = "#f87171";
