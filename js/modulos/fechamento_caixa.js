@@ -1673,6 +1673,7 @@ const FC_DETALHES = {
   diferenca:      { titulo: 'Diferença de Caixa', especial: 'diferenca' },
   fila:           { titulo: '⏳ Fila de transmissão (PDV)', especial: 'fila' },
   cancelados:     { titulo: '🗑 Cancelamentos de Pista', especial: 'cancelados' },
+  encerrantes:    { titulo: '🔢 Encerrantes por bico', especial: 'encerrantes' },
 };
 
 async function fcNodeDetalhe(tipo) {
@@ -1705,6 +1706,71 @@ async function fcNodeDetalhe(tipo) {
   }
 
   // cancelamentos de pista: abastecimentos cancelados na janela do turno
+  // ENCERRANTES POR BICO (23/09/2026, pedido Ronan): a régua da pista, como no
+  // fechamento do TecnoX. Encerrante = totalizador do bico: inicial = menor
+  // venc_ini e final = maior venc_fin dos abastecimentos da JANELA do turno
+  // (turno_id vem nulo em boa parte das linhas, então a janela é por hora).
+  // O encerrante conta TUDO que saiu do bico (venda, aferição, cancelado);
+  // "Vendido" é só o vendido — a diferença mostra o que saiu sem virar venda.
+  if (cfg.especial === 'encerrantes') {
+    const ini0 = t.aberto_em, fim0 = t.fechado_em || new Date().toISOString();
+    let ab = [], cad = [];
+    try {
+      const r = await _fcTudo(() => sb.from('oct_pdv_abastecimentos')
+        .select('bico,bomba,combustivel,litros,venc_ini,venc_fin,status,tipo,data_abast')
+        .eq('empresa_id', window._fcEmpresaId).gte('data_abast', ini0).lte('data_abast', fim0)
+        .order('data_abast'));
+      ab = r.data || [];
+    } catch (e) { /* segue vazio */ }
+    try {
+      const b = await sb.from('oct_bicos').select('numero,bomba,combustivel').eq('empresa_id', window._fcEmpresaId);
+      cad = b.data || [];
+    } catch (e) { /* sem cadastro: usa o que veio da pista */ }
+    const cadDe = n => cad.find(c => Number(c.numero) === Number(n)) || {};
+    const por = {};
+    ab.forEach(a => {
+      if (a.bico == null) return;
+      const e = por[a.bico] || (por[a.bico] = { bico: Number(a.bico), bomba: a.bomba, comb: a.combustivel, ini: null, fim: null, vendido: 0, afer: 0, canc: 0, n: 0 });
+      const vi = Number(a.venc_ini), vf = Number(a.venc_fin);
+      if (vi > 0 && (e.ini == null || vi < e.ini)) e.ini = vi;
+      if (vf > 0 && (e.fim == null || vf > e.fim)) e.fim = vf;
+      const st = String(a.status || '').toLowerCase(), tp = String(a.tipo || '').toLowerCase();
+      const l = Number(a.litros || 0);
+      if (st === 'cancelado') e.canc += l;
+      else if (tp.indexOf('afer') === 0) e.afer += l;
+      else e.vendido += l;
+      e.n++;
+    });
+    const lista = Object.values(por).sort((a, b) => a.bico - b.bico);
+    const tot = { enc: 0, vendido: 0, afer: 0, canc: 0 };
+    const linhas = lista.map(e => {
+      const c = cadDe(e.bico);
+      const enc = (e.ini != null && e.fim != null) ? e.fim - e.ini : null;
+      const dif = enc != null ? enc - e.vendido - e.afer - e.canc : null;
+      if (enc != null) tot.enc += enc;
+      tot.vendido += e.vendido; tot.afer += e.afer; tot.canc += e.canc;
+      const difCor = dif == null ? '#777' : Math.abs(dif) < 0.05 ? '#86efac' : '#f87171';
+      return `<tr><td class="fc-td">B${e.bico}</td>
+        <td class="fc-td">${c.bomba ?? e.bomba ?? '—'}</td>
+        <td class="fc-td">${fcEsc(c.combustivel || e.comb) || '—'}</td>
+        <td class="fc-td fc-r">${e.ini != null ? fcNum(e.ini, 2) : '—'}</td>
+        <td class="fc-td fc-r">${e.fim != null ? fcNum(e.fim, 2) : '—'}</td>
+        <td class="fc-td fc-r"><b>${enc != null ? fcNum(enc, 3) : '—'}</b></td>
+        <td class="fc-td fc-r">${fcNum(e.vendido, 3)}</td>
+        <td class="fc-td fc-r">${e.afer ? fcNum(e.afer, 3) : '—'}</td>
+        <td class="fc-td fc-r">${e.canc ? fcNum(e.canc, 3) : '—'}</td>
+        <td class="fc-td fc-r" style="color:${difCor}">${dif != null ? fcNum(dif, 3) : '—'}</td>
+        <td class="fc-td fc-r">${e.n}</td></tr>`;
+    });
+    const difT = tot.enc - tot.vendido - tot.afer - tot.canc;
+    fcModal(cfg.titulo, lista.length
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Encerrante = totalizador do bico (inicial = 1º abastecimento do turno, final = último). Ele conta tudo que saiu da bomba; <b>Diferença</b> = encerrante − vendido − aferição − cancelado (deveria ficar em ~0).</p>
+         <div class="fc-gridwrap"><table class="fc-grid"><thead><tr><th>Bico</th><th>Bomba</th><th>Combustível</th><th>Enc. inicial</th><th>Enc. final</th><th>Encerrante (L)</th><th>Vendido (L)</th><th>Aferição</th><th>Cancelado</th><th>Diferença</th><th>Abast.</th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Total</b></td><td class="fc-td fc-r"><b>${fcNum(tot.enc, 3)}</b></td><td class="fc-td fc-r"><b>${fcNum(tot.vendido, 3)}</b></td><td class="fc-td fc-r">${tot.afer ? fcNum(tot.afer, 3) : '—'}</td><td class="fc-td fc-r">${tot.canc ? fcNum(tot.canc, 3) : '—'}</td><td class="fc-td fc-r" style="color:${Math.abs(difT) < 0.05 ? '#86efac' : '#f87171'}"><b>${fcNum(difT, 3)}</b></td><td class="fc-td"></td></tr></tbody></table></div>`
+      : '<p style="padding:24px;color:#777">Nenhum abastecimento na janela deste turno.</p>');
+    return;
+  }
+
   if (cfg.especial === 'cancelados') {
     const ini0 = t.aberto_em, fim0 = t.fechado_em || new Date().toISOString();
     let cs = [];
