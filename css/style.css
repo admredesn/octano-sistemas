@@ -133,7 +133,11 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
 /* ── JANELAS (23/09/2026): várias telas ao mesmo tempo — ver js/janelas.js ── */
-.app-shell.janela > .conteudo { padding: 14px 16px; }
+.app-shell.janela > .conteudo { padding: 14px 16px; overscroll-behavior: contain; }
+/* dentro de uma janela a rolagem NAO encadeia para a pagina de tras: quando o
+   conteudo acaba (modulo curto ou ja' no fim), o Chrome passaria a roda do mouse
+   para o documento pai e a tela principal rolava "sozinha" (23/09) */
+html:has(#app.app-shell.janela), body:has(> #app.app-shell.janela) { overscroll-behavior: none; }
 .toolbar-item .oct-abrir-jan { display: none; margin-left: 2px; padding: 0 4px; border-radius: 4px; font-size: 0.8rem; line-height: 1; color: #8892a0; }
 .toolbar-item:hover .oct-abrir-jan { display: inline-block; }
 .toolbar-item .oct-abrir-jan:hover { color: #fff; background: #f97316; }

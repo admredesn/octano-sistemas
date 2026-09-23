@@ -65,6 +65,23 @@
   function zDe(j) { return Number(j.el.style.zIndex) || 0; }
   function maisAlta() { return JAN.lista.filter(x => !x.min).sort((a, b) => zDe(b) - zDe(a))[0] || null; }
 
+  // ---------- "mexendo" (arrastando / redimensionando) ----------
+  // Enquanto mexe, os iframes ficam surdos ao mouse (cinto e suspensório: o
+  // titulo ja' tem pointer capture) e a selecao de texto e' desligada.
+  // ARMADILHA (23/09): se a classe FICA no body, o scroll do mouse por cima de
+  // qualquer janela vai pra pagina de tras. Por isso ela cai em QUALQUER
+  // pointerup/pointercancel (no pai ou dentro das janelas), no blur e no wheel
+  // -- nao so' no pointerup do titulo.
+  let _arrastando = false;
+  function mexendo(on) {
+    _arrastando = !!on;
+    document.body.classList.toggle('oct-jan-mexendo', !!on);
+  }
+  document.addEventListener('pointerup', () => mexendo(false), true);
+  document.addEventListener('pointercancel', () => mexendo(false), true);
+  window.addEventListener('blur', () => mexendo(false));
+  document.addEventListener('wheel', () => { if (!_arrastando) mexendo(false); }, { capture: true, passive: true });
+
   // ---------- geometria ----------
   function aplicarRect(j) {
     const r = j.rect, s = j.el.style, topo = topoArea();
@@ -167,7 +184,7 @@
       ativo = true; deMax = j.max; x0 = ev.clientX; y0 = ev.clientY;
       dx = ev.clientX - j.rect.left; dy = ev.clientY - j.rect.top;
       try { tit.setPointerCapture(ev.pointerId); } catch (e) { /* segue sem captura */ }
-      document.body.classList.add('oct-jan-mexendo');
+      mexendo(true);
       ev.preventDefault();
     });
     tit.addEventListener('pointermove', ev => {
@@ -190,10 +207,10 @@
       aplicarRect(j);
     });
     const fim = ev => {
+      mexendo(false);
       if (!ativo) return;
       ativo = false;
       try { tit.releasePointerCapture(ev.pointerId); } catch (e) { /* já solta */ }
-      document.body.classList.remove('oct-jan-mexendo');
       salvar();
     };
     tit.addEventListener('pointerup', fim);
@@ -207,7 +224,7 @@
         if (ev.button !== 0 || j.max) return;
         ativo = true; x0 = ev.clientX; y0 = ev.clientY; w0 = j.rect.width; h0 = j.rect.height;
         try { h.setPointerCapture(ev.pointerId); } catch (e) { /* segue */ }
-        document.body.classList.add('oct-jan-mexendo');
+        mexendo(true);
         ev.preventDefault(); ev.stopPropagation();
         focar(j);
       });
@@ -218,10 +235,10 @@
         aplicarRect(j);
       });
       const fim = ev => {
+        mexendo(false);
         if (!ativo) return;
         ativo = false;
         try { h.releasePointerCapture(ev.pointerId); } catch (e) { /* já solta */ }
-        document.body.classList.remove('oct-jan-mexendo');
         salvar();
       };
       h.addEventListener('pointerup', fim);
@@ -259,7 +276,12 @@
     iframe.addEventListener('load', () => {
       try {
         const doc = iframe.contentDocument;
-        if (doc) doc.addEventListener('pointerdown', () => { if (JAN.ativa !== j) focar(j); }, true);
+        if (doc) {
+          doc.addEventListener('pointerdown', () => { if (JAN.ativa !== j) focar(j); }, true);
+          // soltou o botao em cima da janela: garante que o "mexendo" cai
+          doc.addEventListener('pointerup', () => mexendo(false), true);
+          doc.addEventListener('pointercancel', () => mexendo(false), true);
+        }
       } catch (e) { /* origem diferente: não acontece */ }
     });
     // cascata, abaixo da toolbar
