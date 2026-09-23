@@ -24,7 +24,7 @@ async function moduloPonto() {
   // dizia "nenhum funcionário" — mentira que já causou chamado. Erro agora
   // aparece como erro, com botão de tentar de novo.
   const { data: pessoas, error: erroPessoas } = await sb.from('oct_pessoas')
-    .select('id,nome,classificacoes,tipo,ativo')
+    .select('id,nome,classificacoes,tipo,ativo,tipo_pessoa,documento,cartao_idf')
     .eq('empresa_id', empresaId).eq('ativo', true).order('nome');
   if (erroPessoas) {
     conteudo.innerHTML = `<div style="padding:26px;text-align:center">
@@ -34,9 +34,19 @@ async function moduloPonto() {
     </div>`;
     return;
   }
+  // mesma regra do PDV (23/09/2026): funcionário OU quem tem cartão de
+  // frentista; nunca pessoa jurídica (a marca "funcionário" veio suja do TecnoX)
+  const _vistos = new Set();
   const funcionarios = (pessoas || []).filter(p => {
     const lista = Array.isArray(p.classificacoes) ? p.classificacoes : (p.tipo ? [p.tipo] : []);
-    return lista.includes('funcionario');
+    const doc = String(p.documento || '').replace(/[^0-9]/g, '');
+    const pj = p.tipo_pessoa === 'juridica' || doc.length === 14 || /(^|\s)(LTDA|S\.?A\.?|EIRELI|ME|EPP|BANCO|DISTRIBUIDORA)(\s|$|\.)/i.test(p.nome || '');
+    if (pj) return false;
+    if (!(lista.includes('funcionario') || (p.cartao_idf && String(p.cartao_idf).trim()))) return false;
+    const chave = String(p.nome || '').trim().toUpperCase().replace(/[(][^)]*[)]\s*$/, '').trim();
+    if (_vistos.has(chave)) return false;
+    _vistos.add(chave);
+    return true;
   });
   window._pontoFuncionarios = funcionarios;
   window._pontoAutorNome = perfil?.nome || session.user.email || '';
