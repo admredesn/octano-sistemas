@@ -115,8 +115,25 @@ async function init(){
     return;
   }
   const session = await getSession();
-  if(!session){ renderLogin(); return; }
-  await renderApp(session);
+  // MODO JANELA (?janela=1&modulo=X, 23/09/2026): este documento e' o MIOLO de
+  // uma janela do gerenciador (js/janelas.js) -- um iframe da propria pagina,
+  // so' com o conteudo do modulo, sem topbar/toolbar. Sem sessao, avisa o pai
+  // (que mostra o login) em vez de abrir um login dentro da janelinha.
+  const _janela = _ehJanela();
+  if(!session){
+    if(_janela) _janelaAvisar('sessao');
+    renderLogin();
+    return;
+  }
+  // sessao valida de novo (login sem F5): destrava o aviso de sessao expirada.
+  // Sem isto a 2a queda era ignorada (a trava so' ligava) e a tela ficava no
+  // "Carregando..." -- e uma janela mostrava o login dentro dela.
+  _avisouSessao = false;
+  // ?modulo=X abre direto numa tela (link direto; as janelas usam)
+  const _modUrl = _params.get('modulo');
+  if(_modUrl && MODULOS.some(m => m.id === _modUrl && !m.breve)) _moduloAtual = _modUrl;
+  if(_janela) await renderJanela(session);
+  else await renderApp(session);
   // abrir numa tela que a pessoa nao pode ver daria "modulo nao encontrado"
   // logo no login; cai na primeira permitida
   if (!podeVer(_moduloAtual)) {
@@ -198,11 +215,36 @@ async function renderApp(session){
     '<div class="conteudo" id="conteudo"></div>';
   empresaRenderSeletor();
   renderToolbar();
-  if(!document.getElementById('style-extra')){
-    const s=document.createElement('style');s.id='style-extra';
-    s.textContent='.prod-card{background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;transition:all 0.2s;cursor:pointer;}.prod-card:hover{border-color:#f97316;transform:translateY(-2px);}';
-    document.head.appendChild(s);
-  }
+  _estiloExtra();
+}
+
+function _estiloExtra(){
+  if(document.getElementById('style-extra')) return;
+  const s=document.createElement('style');s.id='style-extra';
+  s.textContent='.prod-card{background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;transition:all 0.2s;cursor:pointer;}.prod-card:hover{border-color:#f97316;transform:translateY(-2px);}';
+  document.head.appendChild(s);
+}
+
+// miolo de uma janela (ver init): so' o conteudo, ocupando o iframe inteiro.
+// Mesma sessao e mesma empresa ativa do pai (localStorage/sessionStorage sao
+// compartilhados entre iframes da mesma origem na mesma aba).
+async function renderJanela(session){
+  await empresaCarregarContexto(session);
+  const app = document.getElementById('app');
+  app.className = 'app-shell janela';
+  app.innerHTML = '<div class="conteudo" id="conteudo"></div>';
+  _estiloExtra();
+}
+
+function _ehJanela(){
+  try { return new URLSearchParams(location.search).get('janela') === '1' && window.parent !== window; }
+  catch(e){ return false; }
+}
+
+// fala com o gerenciador de janelas (mesma origem); fora de uma janela e' no-op
+function _janelaAvisar(tipo, dados){
+  if(!_ehJanela()) return;
+  try { window.parent.postMessage(Object.assign({ oct: 'janela-' + tipo }, dados || {}), location.origin); } catch(e) {}
 }
 
 // quem entra sem nenhuma tela liberada nao pode ficar olhando um vazio sem
@@ -278,6 +320,9 @@ function octArrastavel(cx, tit){
 function navegarPara(modulo){
   octAutoRefreshParar();   // para o auto-refresh da tela anterior
   _moduloAtual = modulo;
+  const _mod = MODULOS.find(m => m.id === modulo);
+  if(_mod) document.title = _mod.label + ' — Octano';   // aba do navegador / titulo da janela
+  _janelaAvisar('modulo', { modulo });                   // o gerenciador renomeia a janela
   document.querySelectorAll('.toolbar-item').forEach(el => el.classList.remove('ativo'));
   const tab = document.getElementById('tab-' + modulo);
   if(tab) tab.classList.add('ativo');
@@ -446,6 +491,7 @@ function _sessaoExpirou(){
   if(_avisouSessao) return;
   _avisouSessao = true;
   try { octAutoRefreshParar(); } catch(e) {}
+  _janelaAvisar('sessao');   // dentro de uma janela: quem mostra o login e' o pai
   renderLogin();
   const box = document.querySelector('.login-box');
   if(!box) return;

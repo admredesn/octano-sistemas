@@ -557,9 +557,11 @@ async function cbLancarDoBanco(movId) {   // eslint: async por causa dos título
   // débito: oferece baixar um título em aberto (o mais parecido primeiro)
   let titulos = [];
   if (deb && !interno) {
-    const { data } = await sb.from('oct_contas_pagar').select('id,descricao,valor,vencimento,competencia,observacoes')
+    // 23/09/2026: traz o CREDOR junto (pedido do Ronan) -- e' pelo nome do
+    // fornecedor que se reconhece o boleto, nao pelo numero da NF
+    const { data } = await sb.from('oct_contas_pagar').select('id,descricao,valor,vencimento,competencia,observacoes,fornecedor_id,fornecedor:oct_pessoas!fornecedor_id(nome)')
       .eq('empresa_id', _cb.eid).eq('status', 'aberto').lte('competencia', m.data).order('vencimento').limit(500);
-    titulos = (data || []).map(c => Object.assign(c, { dif: Math.round((Number(m.valor) - Number(c.valor)) * 100) / 100 }))
+    titulos = (data || []).map(c => Object.assign(c, { credor: (c.fornecedor && c.fornecedor.nome) || '', dif: Math.round((Number(m.valor) - Number(c.valor)) * 100) / 100 }))
       .sort((a, b) => Math.abs(a.dif) - Math.abs(b.dif)).slice(0, 40);
   }
   cbAbrirForm({
@@ -669,7 +671,7 @@ async function cbAbrirForm(d) {
     </div>
     ${d.titulos && d.titulos.length ? `<div style="margin-top:12px;padding:10px;border:1px solid #2a3a2a;border-radius:8px;background:#0f1a12">
       <div class="cbl-mut" style="font-size:0.72rem;margin-bottom:6px">…ou este débito é o pagamento de um título em aberto?</div>
-      <div style="display:flex;gap:8px"><select id="cbf-titulo" class="cbl-in" style="flex:1">${d.titulos.map(t => `<option value="${t.id}">${_cbEsc(t.descricao)} · venc ${_cbDt(t.vencimento)} · ${_cbMoney(t.valor)} · ${t.dif === 0 ? 'exato' : (t.dif > 0 ? '+' : '') + _cbNum(t.dif)}</option>`).join('')}</select>
+      <div style="display:flex;gap:8px"><select id="cbf-titulo" class="cbl-in" style="flex:1">${d.titulos.map(t => `<option value="${t.id}">${t.credor ? _cbEsc(t.credor) + ' · ' : ''}${_cbEsc(t.descricao)} · venc ${_cbDt(t.vencimento)} · ${_cbMoney(t.valor)} · ${t.dif === 0 ? 'exato' : (t.dif > 0 ? '+' : '') + _cbNum(t.dif)}</option>`).join('')}</select>
       <button class="cbl-btn" style="border-color:#2f6f3f;color:#86efac" onclick="cbBaixarTitulo()">✓ Baixar título</button></div></div>` : ''}
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
       <span id="cbf-msg" style="flex:1;color:#f87171;font-size:0.76rem;align-self:center"></span>
