@@ -438,12 +438,36 @@ async function fpPrecoSalvar(id) {
     forma_padrao: document.getElementById('fpp-forma').value || null,
     ativo: document.getElementById('fpp-ativo').checked,
   };
+  // 24/09/2026: a tela pode estar aberta com a lista de produtos VELHA (produto
+  // fundido/apagado enquanto isso). Gravar o cabeçalho e só depois falhar nos
+  // itens (FK) deixava um cabeçalho vazio a cada tentativa -- a AC ficou com 3
+  // "CLIENTE A PRAZO AC". Confere ANTES de gravar qualquer coisa.
+  const _prodIds = new Set((window._fpProdutos || []).map(p => p.id));
+  const _sumidos = [...document.querySelectorAll('#fpp-neg-tbody tr')]
+    .map(tr => tr.querySelector('.neg-prod')).filter(sel => sel.value && !_prodIds.has(sel.value))
+    .map(sel => (sel.selectedOptions[0] || {}).textContent || sel.value);
+  if (_sumidos.length) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Produto não existe mais no cadastro (' + _sumidos.join(', ') + '). Recarregue a tela (F5) e escolha de novo.';
+    return;
+  }
   const q = id ? sb.from('oct_tabelas_preco').update(reg).eq('id', id).select().single()
                : sb.from('oct_tabelas_preco').insert(reg).select().single();
   const { data: salvo, error } = await q;
   if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
 
   const tabelaId = salvo.id;
+  // se os itens falharem numa negociação NOVA, desfaz o cabeçalho (senão sobra
+  // um vazio a cada tentativa)
+  const _desfazer = async (motivo) => {
+    if (!id) {
+      try {
+        await sb.from('oct_tabela_preco_formas').delete().eq('tabela_id', tabelaId);
+        await sb.from('oct_tabelas_preco').delete().eq('id', tabelaId);
+      } catch (e) { /* segue */ }
+    }
+    msg.style.color = '#f87171'; msg.textContent = motivo;
+  };
   // clientes NÃO são gravados aqui (17/08): o vínculo cliente→tabela vive no
   // CADASTRO do cliente (Pessoas → 💲 Tabela de preço), modelo TecnoX.
   // grava vínculos de formas (substitui os existentes)
@@ -474,7 +498,11 @@ async function fpPrecoSalvar(id) {
   await sb.from('oct_tabela_preco_itens').delete().eq('tabela_id', tabelaId);
   if (itens.length) {
     const { error: e2 } = await sb.from('oct_tabela_preco_itens').insert(itens);
-    if (e2) { msg.style.color = '#f87171'; msg.textContent = 'Negociações: ' + e2.message; return; }
+    if (e2) {
+      const fk = /foreign key|produto_id_fkey/i.test(e2.message || '');
+      await _desfazer(fk ? 'Um dos produtos não existe mais no cadastro. Recarregue a tela (F5) e escolha de novo.' : 'Negociações: ' + e2.message);
+      return;
+    }
   }
 
   document.getElementById('fp-preco-form').innerHTML = '';
