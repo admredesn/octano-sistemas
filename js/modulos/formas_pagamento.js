@@ -249,7 +249,7 @@ async function fpPrecoForm(t) {
     sb.from('oct_pessoas').select('id,nome,documento,classificacoes,tipo').eq('empresa_id', eid).eq('ativo', true).order('nome'),
     t.id ? sb.from('oct_tabela_preco_clientes').select('cliente_id').eq('tabela_id', t.id) : Promise.resolve({ data: [] }),
     t.id ? sb.from('oct_tabela_preco_formas').select('forma_id').eq('tabela_id', t.id) : Promise.resolve({ data: [] }),
-    sb.from('oct_produtos').select('id,nome,preco_venda_a').eq('empresa_id', eid).eq('ativo', true).order('nome'),
+    sb.from('oct_produtos').select('id,nome,preco_venda_a,categoria,codigo').eq('empresa_id', eid).eq('ativo', true).order('nome'),
     t.id ? sb.from('oct_tabela_preco_itens').select('*').eq('tabela_id', t.id) : Promise.resolve({ data: [] }),
   ]);
   const todosClientes = (cliRes.data || []).filter(p => {
@@ -347,10 +347,32 @@ async function fpPrecoForm(t) {
 }
 
 // ---- grid de negociação: linhas dinâmicas ----
+// 24/09/2026 (pedido Ronan, cadastrando preço a prazo na AC): 458 produtos num
+// select só não dá pra achar nada. Primeiro escolhe a CATEGORIA (Lubrificantes,
+// Filtros, Combustíveis…) e o select de produto mostra só ela; o código do
+// produto vai no rótulo pra bater com a etiqueta/nota.
+function fpNegCat(p) { return String(p.categoria || '').trim().toUpperCase(); }
+function fpNegCategorias() {
+  const set = new Set((window._fpProdutos || []).map(fpNegCat).filter(Boolean));
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+function fpNegOpcoesProduto(cat, selecionado) {
+  const prods = (window._fpProdutos || []).filter(p => !cat || fpNegCat(p) === cat || p.id === selecionado);
+  return '<option value="">— escolha o produto —</option>' + prods.map(p =>
+    `<option value="${p.id}" data-preco="${p.preco_venda_a || 0}" ${p.id === selecionado ? 'selected' : ''}>${fpEsc(p.nome)}${p.codigo ? ' · cód ' + fpEsc(p.codigo) : ''}</option>`).join('');
+}
+function fpNegFiltrar(tr) {
+  const cat = tr.querySelector('.neg-cat').value;
+  const sel = tr.querySelector('.neg-prod');
+  sel.innerHTML = fpNegOpcoesProduto(cat, '');   // trocou a categoria: escolhe de novo
+  fpNegCalc(tr);
+}
 function fpNegAdd(item) {
   const tbody = document.getElementById('fpp-neg-tbody');
   if (!tbody) return;
   const prods = window._fpProdutos || [];
+  const prodItem = item ? prods.find(p => p.id === item.produto_id) : null;
+  const catSel = prodItem ? fpNegCat(prodItem) : '';
   const tr = document.createElement('tr');
   tr.style.borderTop = '1px solid #1c1f2e';
   let tipoSel = 'fixo_preco';
@@ -361,10 +383,8 @@ function fpNegAdd(item) {
     else if (item.tipo_ajuste === 'desconto') { tipoSel = item.modo_ajuste === 'percentual' ? 'desc_pc' : 'desc_rs'; valor = Number(item.valor_ajuste); }
   }
   tr.innerHTML = `
-    <td style="padding:5px"><select class="neg-prod" onchange="fpNegCalc(this.closest('tr'))" style="width:100%;max-width:340px;padding:6px;border-radius:5px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:0.8rem">
-      <option value="">— escolha o produto —</option>
-      ${prods.map(p => `<option value="${p.id}" data-preco="${p.preco_venda_a || 0}" ${item && item.produto_id === p.id ? 'selected' : ''}>${fpEsc(p.nome)}</option>`).join('')}
-    </select></td>
+    <td style="padding:5px"><select class="neg-cat" onchange="fpNegFiltrar(this.closest('tr'))" title="Filtra o produto pela categoria" style="margin-bottom:4px;font-size:0.76rem;color:#9fb0c4;width:100%;max-width:340px;padding:6px;border-radius:5px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:0.8rem"><option value="">— todas as categorias —</option>${fpNegCategorias().map(c => `<option value="${fpEsc(c)}" ${c === catSel ? 'selected' : ''}>${fpEsc(c)}</option>`).join('')}</select>
+    <select class="neg-prod" onchange="fpNegCalc(this.closest('tr'))" style="width:100%;max-width:340px;padding:6px;border-radius:5px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:0.8rem">${fpNegOpcoesProduto(catSel, item ? item.produto_id : '')}</select></td>
     <td style="padding:5px"><select class="neg-tipo" onchange="fpNegCalc(this.closest('tr'))" style="padding:6px;border-radius:5px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:0.8rem">
       <option value="fixo_preco" ${tipoSel === 'fixo_preco' ? 'selected' : ''}>Preço fixo (R$/un)</option>
       <option value="acr_rs" ${tipoSel === 'acr_rs' ? 'selected' : ''}>Acréscimo (R$)</option>
