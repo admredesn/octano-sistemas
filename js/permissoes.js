@@ -169,7 +169,7 @@ const PERM_CATALOGO = [
     { c: 'empresa.ver', d: 'Acessar Cadastro da empresa', p: 'gfc' },
     { c: 'empresa.alterar', d: 'Alterar dados da empresa', p: 'g', s: 1 },
     { c: 'empresa.certificado', d: 'Enviar/remover certificado digital', p: 'g', s: 1 },
-    { c: 'empresa.integracoes', d: 'Configurar Sicoob e cashback do posto', p: 'g', s: 1 },
+    { c: 'empresa.integracoes', d: 'Configurar integrações do posto (EDI, cofre, sangria, Sicoob, cashback) — em Parâmetros', p: 'g', s: 1 },
     { c: 'operadores.ver', d: 'Acessar Operadores', p: 'g' },
     { c: 'operadores.incluir', d: 'Incluir operador', p: 'g', s: 1 },
     { c: 'operadores.trocar_senha', d: 'Trocar senha de operador', p: 'g', s: 1 },

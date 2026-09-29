@@ -233,92 +233,16 @@ async function moduloEmpresa() {
       </div>
 
       <!-- INTEGRAÇÕES -->
+      <!-- INTEGRAÇÕES (29/09/2026): EDI, cofre, sangria obrigatória, Sicoob e
+           cashback moraram aqui até hoje; agora ficam em ⚙️ Parâmetros, em
+           sub-abas. O formulário da empresa NÃO grava mais essas colunas. -->
       <div class="modulo-header" style="margin-top:28px"><h2>🔌 Integrações do Posto</h2></div>
-      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
-        Ligue conforme o que o posto usa. O PDV oculta as formas de pagamento correspondentes
-        (com EDI ligado o cartão entra automático e some do PDV; com Cofre, o dinheiro some).
-      </p>
-      <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
-        <label style="display:flex;align-items:center;gap:10px;color:#ddd;font-size:0.88rem;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 14px;cursor:pointer">
-          <input type="checkbox" id="emp-usa-edi" ${emp.usa_edi ? 'checked' : ''}>
-          <span><strong>EDI (PagBank)</strong> — recebimentos de cartão automáticos. <span style="color:#888">O PDV oculta as formas classificadas como <em>Cartão</em>.</span></span>
-        </label>
-        <label style="display:flex;align-items:center;gap:10px;color:#ddd;font-size:0.88rem;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 14px;cursor:pointer">
-          <input type="checkbox" id="emp-usa-cofre" ${emp.usa_cofre ? 'checked' : ''}>
-          <span><strong>Cofre inteligente</strong> — o dinheiro vai pro cofre. <span style="color:#888">O PDV oculta as formas classificadas como <em>Dinheiro</em>.</span></span>
-        </label>
-
-        <!-- LIMITE DA SANGRIA: só faz sentido SEM cofre (com cofre o dinheiro
-             vai pelo depósito e a sangria nem aparece no PDV). -->
-        <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px 14px">
-          <label style="color:#ddd;font-size:0.88rem;display:block;margin-bottom:4px">
-            💰 <strong>Limite para sangria obrigatória (R$)</strong>
-          </label>
-          <p style="color:#888;font-size:0.8rem;line-height:1.5;margin-bottom:8px">
-            Quando o dinheiro pendente no PDV passar deste valor e continuar acima por
-            10 minutos, o caixa trava e exige a sangria. Os 10 minutos existem para dar
-            tempo de o cartão cair e a nota a prazo ser emitida — o que sobra é dinheiro
-            de verdade. <span style="color:#666"><b>Vazio ou 0 = trava DESLIGADA</b> (a
-            sangria manual continua no PDV). Preencha um valor para ligar a trava.
-            Não se aplica a posto com cofre.</span>
-          </p>
-          <input id="emp-sangria-limite" type="number" step="10" min="0"
-            value="${emp.sangria_limite != null ? emp.sangria_limite : ''}" placeholder="500"
-            style="width:180px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0d1017;color:#ddd" />
-        </div>
-      </div>
-
-      <!-- BANCO SICOOB (extrato -> conciliação de contas a pagar) -->
-      <div class="modulo-header" style="margin-top:28px"><h2>🏦 Banco Sicoob — extrato e conciliação</h2></div>
-      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
-        O gateway lê o extrato desta conta e o sistema baixa sozinho as contas a pagar
-        (juros/multa e desconto separados nas contas certas). O <strong>client_id</strong> sai do
-        portal <em>developers.sicoob.com.br</em> (aplicativo com a API <em>Conta Corrente</em> assinada).
-        O certificado é o mesmo e-CNPJ A1 da NF-e (fica no Railway, não aqui).
-      </p>
-      <div class="form-grid" style="max-width:760px">
-        <div class="form-group">
-          <label>Nº da conta corrente</label>
-          <input id="sic-conta" type="text" placeholder="101789-6" />
-        </div>
-        <div class="form-group span2">
-          <label>client_id (aplicativo do portal)</label>
-          <input id="sic-client" type="text" placeholder="xxxxxxxx-xxxx-..." />
-        </div>
-        <div class="form-group">
-          <label>Ambiente</label>
-          <select id="sic-amb"><option value="producao">Produção</option><option value="sandbox">Sandbox (teste)</option></select>
-        </div>
-        <div class="form-group">
-          <label>Integração ativa</label>
-          <select id="sic-ativo"><option value="true">Sim</option><option value="false">Não</option></select>
-        </div>
-        <div class="form-group span2" style="align-self:end">
-          <button class="btn-salvar" style="background:#0a6e4f" onclick="salvarSicoob()">💾 Salvar integração Sicoob</button>
-          <span id="sic-msg" class="form-msg"></span>
-        </div>
-      </div>
-      <p id="sic-status" style="color:#667;font-size:0.8rem;margin-top:6px">carregando situação…</p>
-
-      <!-- CASHBACK (chave geral por posto) -->
-      <div class="modulo-header" style="margin-top:28px"><h2>💸 Cashback — chave geral do posto</h2></div>
-      <p style="color:#888;font-size:0.85rem;margin:-6px 0 12px">
-        <strong>Desligado</strong> (padrão): o portal do cliente não aceita cadastro nem acionamento
-        deste posto e o pagador <strong>não paga nenhum Pix</strong> de cashback dele — posto que não
-        oferece a função fica 100% protegido. Ligue apenas nos postos que oferecem o benefício.
-      </p>
-      <div class="form-grid" style="max-width:760px">
-        <div class="form-group">
-          <label>Cashback neste posto</label>
-          <select id="cb-ativo">
-            <option value="false" ${emp.cashback_ativo ? '' : 'selected'}>🔴 Desligado</option>
-            <option value="true" ${emp.cashback_ativo ? 'selected' : ''}>🟢 Ligado (R$0,05/litro)</option>
-          </select>
-        </div>
-        <div class="form-group span2" style="align-self:end">
-          <button class="btn-salvar" style="background:#7a4a0a" onclick="salvarCashbackChave()">💾 Salvar chave do cashback</button>
-          <span id="cb-chave-msg" class="form-msg"></span>
-        </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:12px 14px;margin-bottom:6px">
+        <span style="color:#aaa;font-size:0.85rem;flex:1;min-width:260px">EDI do cartão, cofre, sangria obrigatória, banco Sicoob e
+          cashback agora ficam em <b style="color:#ddd">⚙️ Parâmetros</b>, organizados em abas.</span>
+        ${(typeof podeVer !== 'function' || podeVer('parametros'))
+          ? `<button onclick="empAbrirParametros()" style="padding:8px 14px;border-radius:6px;border:1px solid #2a2d3e;background:#1b2130;color:#f97316;cursor:pointer;font-weight:600">⚙️ Abrir Parâmetros</button>`
+          : `<span style="color:#6b7688;font-size:0.8rem">Seu perfil não acessa Parâmetros — peça ao gerente.</span>`}
       </div>
 
       <!-- PERFIL -->
@@ -362,83 +286,6 @@ async function moduloEmpresa() {
     v = v.replace(/(\d{5})(\d)/, '$1-$2');
     this.value = v;
   });
-  empSicoobCarregar();
-}
-
-// ─── Integração Sicoob (extrato → conciliação) ─────────────────────────────
-// prefixo das envs do certificado no Railway, derivado do nome do posto
-function _sicPrefix(nome) {
-  const n = String(nome || '').toUpperCase();
-  if (n.includes('TIJUCO')) return 'TIJ';
-  if (n.includes('FLORESTAL')) return 'FLO';
-  if (n.includes('ANTONIO CARLOS')) return 'AC';
-  if (n.includes('GLORIA')) return 'GLO';
-  return 'POSTO';
-}
-
-async function empSicoobCarregar() {
-  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
-  const st = document.getElementById('sic-status');
-  if (!eid || !document.getElementById('sic-conta')) return;
-  try {
-    const { data, error } = await sb.from('oct_sicoob_contas').select('*').eq('empresa_id', eid).maybeSingle();
-    if (error) { if (st) st.textContent = '⚠ ' + error.message + ' — rode o SQL-SICOOB-EXTRATO.sql.'; return; }
-    if (data) {
-      document.getElementById('sic-conta').value = data.numero_conta || '';
-      document.getElementById('sic-client').value = data.client_id || '';
-      document.getElementById('sic-amb').value = data.ambiente || 'producao';
-      document.getElementById('sic-ativo').value = String(data.ativo !== false);
-    }
-    // situação: último movimento importado do extrato
-    const { data: mov } = await sb.from('oct_banco_movimentos').select('data,criado_em')
-      .eq('empresa_id', eid).order('criado_em', { ascending: false }).limit(1);
-    if (st) st.textContent = (mov && mov.length)
-      ? `✅ Extrato chegando — último movimento importado: ${mov[0].data} (às ${new Date(mov[0].criado_em).toLocaleString('pt-BR')}).`
-      : (data ? '⏳ Cadastro salvo — nenhum movimento importado ainda (worker roda a cada 15 min; confira as variáveis do certificado no Railway).'
-              : 'Sem cadastro ainda — preencha e salve.');
-  } catch (e) { if (st) st.textContent = '⚠ ' + (e.message || e); }
-}
-
-async function salvarSicoob() {
-  if (!podeOuAvisa('empresa.integracoes')) return;
-  const msg = document.getElementById('sic-msg');
-  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
-  if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
-  const conta = document.getElementById('sic-conta').value.trim();
-  if (!conta) { msg.textContent = 'Informe o número da conta.'; msg.style.color = '#f44'; return; }
-  msg.textContent = 'Salvando…'; msg.style.color = '#aaa';
-  let nomeEmp = '';
-  try { const { data: e } = await sb.from('oct_empresas').select('nome').eq('id', eid).single(); nomeEmp = e?.nome || ''; } catch (er) {}
-  const { error } = await sb.from('oct_sicoob_contas').upsert({
-    empresa_id: eid, numero_conta: conta,
-    client_id: document.getElementById('sic-client').value.trim() || null,
-    ambiente: document.getElementById('sic-amb').value,
-    ativo: document.getElementById('sic-ativo').value === 'true',
-    env_prefix: _sicPrefix(nomeEmp),
-  }, { onConflict: 'empresa_id' });
-  if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
-  msg.textContent = 'Salvo! O gateway pega no próximo ciclo (15 min).'; msg.style.color = '#4caf50';
-  empSicoobCarregar();
-}
-
-// ─── Chave geral do CASHBACK por posto (pedido Ronan 20/08) ─────────────────
-async function salvarCashbackChave() {
-  if (!podeOuAvisa('empresa.integracoes')) return;
-  const msg = document.getElementById('cb-chave-msg');
-  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
-  if (!eid) { msg.textContent = 'Selecione a empresa.'; msg.style.color = '#f44'; return; }
-  const ligado = document.getElementById('cb-ativo').value === 'true';
-  msg.textContent = 'Salvando…'; msg.style.color = '#aaa';
-  const { error } = await sb.from('oct_empresas').update({ cashback_ativo: ligado }).eq('id', eid);
-  if (error) {
-    msg.style.color = '#f44';
-    msg.textContent = /cashback_ativo/.test(String(error.message))
-      ? 'Falta a coluna: rode no SQL editor → alter table oct_empresas add column if not exists cashback_ativo boolean default false;'
-      : 'Erro: ' + error.message;
-    return;
-  }
-  msg.textContent = ligado ? '🟢 Cashback LIGADO neste posto.' : '🔴 Cashback DESLIGADO neste posto.';
-  msg.style.color = ligado ? '#4caf50' : '#f0b45c';
 }
 
 // ─── Ativar / Ocultar empresa (master) ──────────────────────────────────────
@@ -681,10 +528,9 @@ async function salvarEmpresa() {
     csc_id: (document.getElementById('emp-csc-id')?.value || '').trim(),
     nfce_serie: parseInt(document.getElementById('emp-nfce-serie')?.value, 10) || 1,
     nfce_proximo_numero: parseInt(document.getElementById('emp-nfce-num')?.value, 10) || 1,
-    usa_edi: !!document.getElementById('emp-usa-edi')?.checked,
-    usa_cofre: !!document.getElementById('emp-usa-cofre')?.checked,
-    // limite da sangria obrigatória: vazio/0 => null, e o PDV usa o padrão dele
-    sangria_limite: (parseFloat(document.getElementById('emp-sangria-limite')?.value) || 0) || null,
+    // usa_edi / usa_cofre / sangria_limite / cashback_ativo: gravados em
+    // ⚙️ Parâmetros (29/09/2026). Salvar a empresa NÃO os toca — antes, sem os
+    // checkboxes na tela, isto desligaria o EDI do posto sem ninguém perceber.
   };
 
   if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
@@ -721,6 +567,23 @@ async function salvarEmpresa() {
   if (typeof empresaCarregarContexto === 'function') { await empresaCarregarContexto(session); empresaRenderSeletor(); }
 
   msg.textContent = '✅ Salvo com sucesso!'; msg.style.color = '#4caf50';
+}
+
+// atalho para as integrações (que moram em ⚙️ Parâmetros desde 29/09/2026).
+// Respeita a permissão de ver a tela e, em modo janela, abre OUTRA janela em
+// vez de trocar esta (quem compara as duas telas não perde o cadastro).
+function empAbrirParametros() {
+  if (typeof podeVer === 'function' && !podeVer('parametros')) {
+    alert('Seu perfil não acessa Parâmetros — peça ao gerente.');
+    return;
+  }
+  try {
+    if (typeof _ehJanela === 'function' && _ehJanela() && window.parent && typeof window.parent.octJanelaAbrir === 'function') {
+      window.parent.octJanelaAbrir('parametros');
+      return;
+    }
+  } catch (e) { /* origem diferente: cai no caminho normal */ }
+  navegarPara('parametros');
 }
 
 // abre o formulario em modo "nova empresa" (vazio)
