@@ -60,7 +60,7 @@ const _AC_FORMAS = { '00': 'Desabilitado', '01': 'Bomba de combustível', '02': 
 const _AC_HW = { '01': 'Loop High', '02': 'Loop Low', '04': 'RS-485' };
 const _AC_DIAG = { R: ['respondendo', '#22c55e'], F: ['não respondendo', '#ef4444'], N: ['não configurado', '#64748b'], '?': ['tipo desconhecido', '#facc15'], '!': ['tipo não autorizado', '#facc15'], '0': ['sem bico', '#64748b'] };
 const _AC_CMD = { pendente: ['⏳ na fila', '#facc15'], executando: ['⚙️ gravando', '#facc15'], ok: ['✅ feito', '#22c55e'], erro: ['❌ erro', '#f87171'], cancelado: ['🚫 cancelado', '#94a3b8'] };
-const _ac = { empresaId: null, icom: 1, estado: null, lidoEm: null, cmds: [], empresas: [], form: null, timer: null };
+const _ac = { empresaId: null, icom: 1, estado: null, lidoEm: null, cmds: [], empresas: [], comPainel: {}, form: null, timer: null };
 
 async function moduloAutomacaoCfg() {
   const el = document.getElementById('conteudo');
@@ -70,9 +70,18 @@ async function moduloAutomacaoCfg() {
     return;
   }
   el.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
-  const { data: emps } = await sb.from('oct_empresas').select('id,nome_fantasia,nome').order('nome_fantasia');
+  const [{ data: emps }, { data: pubs }] = await Promise.all([
+    sb.from('oct_empresas').select('id,nome_fantasia,nome').order('nome_fantasia'),
+    sb.from('oct_automacao_estado').select('empresa_id,lido_em'),
+  ]);
   _ac.empresas = emps || [];
-  _ac.empresaId = _ac.empresaId || (typeof empresaAtiva === 'function' && empresaAtiva()) || (_ac.empresas[0] || {}).id;
+  // postos cujo núcleo já publica a configuração (os outros ainda não têm o painel)
+  _ac.comPainel = Object.fromEntries((pubs || []).map(p => [p.empresa_id, p.lido_em]));
+  const ativa = typeof empresaAtiva === 'function' && empresaAtiva();
+  const primeiroComPainel = _ac.empresas.find(e => _ac.comPainel[e.id]);
+  _ac.empresaId = _ac.empresaId
+    || (ativa && _ac.comPainel[ativa] ? ativa : null)
+    || (primeiroComPainel || {}).id || ativa || (_ac.empresas[0] || {}).id;
   await _acCarregar();
 }
 
@@ -110,12 +119,14 @@ async function _acCarregar() {
 
 function _acRender() {
   const el = _ac.el;
-  const opts = _ac.empresas.map(e => `<option value="${e.id}" ${e.id === _ac.empresaId ? 'selected' : ''}>${_acEsc(e.nome_fantasia || e.nome)}</option>`).join('');
+  const opts = _ac.empresas.map(e => `<option value="${e.id}" ${e.id === _ac.empresaId ? 'selected' : ''}>${_ac.comPainel[e.id] ? '● ' : ''}${_acEsc(e.nome_fantasia || e.nome)}</option>`).join('');
   let corpo;
   if (_ac.semTabela) {
     corpo = '<div style="background:#3b1d0a;border:1px solid #f97316;border-radius:8px;padding:10px;color:#fdba74">Falta rodar o <b>SQL-AUTOMACAO-CONFIG.sql</b> no Supabase.</div>';
   } else if (!_ac.estado) {
-    corpo = '<p style="color:#94a3b8">O núcleo deste posto ainda não publicou a configuração do concentrador (núcleo desatualizado, desligado ou sem automação cadastrada).</p>';
+    const outros = _ac.empresas.filter(e => _ac.comPainel[e.id]);
+    corpo = `<p style="color:#94a3b8">O núcleo deste posto ainda não tem o painel de bombas (precisa da atualização do núcleo), está desligado ou não tem automação cadastrada.</p>`
+      + (outros.length ? `<p style="color:#94a3b8;font-size:0.84rem">Com o painel ativo (● na lista): ${outros.map(e => `<button onclick="_acTrocarPosto('${e.id}')" style="padding:5px 10px;margin:2px;border-radius:6px;border:1px solid #f97316;background:#13151f;color:#fdba74;cursor:pointer">${_acEsc(e.nome_fantasia || e.nome)}</button>`).join('')}</p>` : '');
   } else {
     const ends = _ac.estado.enderecos || [];
     const icoms = [1, 2, 3].filter(i => (_ac.estado.icoms_em_uso || [1]).includes(i) || i === _ac.icom);
