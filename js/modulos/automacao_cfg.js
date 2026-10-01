@@ -72,11 +72,11 @@ async function moduloAutomacaoCfg() {
   el.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
   const [{ data: emps }, { data: pubs }] = await Promise.all([
     sb.from('oct_empresas').select('id,nome_fantasia,nome').order('nome_fantasia'),
-    sb.from('oct_automacao_estado').select('empresa_id,lido_em'),
+    sb.from('oct_automacao_estado').select('empresa_id,lido_em,erro:estado->>erro'),
   ]);
   _ac.empresas = emps || [];
   // postos cujo núcleo já publica a configuração (os outros ainda não têm o painel)
-  _ac.comPainel = Object.fromEntries((pubs || []).map(p => [p.empresa_id, p.lido_em]));
+  _ac.comPainel = Object.fromEntries((pubs || []).filter(p => !p.erro).map(p => [p.empresa_id, p.lido_em]));
   const ativa = typeof empresaAtiva === 'function' && empresaAtiva();
   const primeiroComPainel = _ac.empresas.find(e => _ac.comPainel[e.id]);
   _ac.empresaId = _ac.empresaId
@@ -123,6 +123,8 @@ function _acRender() {
   let corpo;
   if (_ac.semTabela) {
     corpo = '<div style="background:#3b1d0a;border:1px solid #f97316;border-radius:8px;padding:10px;color:#fdba74">Falta rodar o <b>SQL-AUTOMACAO-CONFIG.sql</b> no Supabase.</div>';
+  } else if (_ac.estado && _ac.estado.erro) {
+    corpo = _acMotivo(_ac.estado);
   } else if (!_ac.estado) {
     const outros = _ac.empresas.filter(e => _ac.comPainel[e.id]);
     corpo = `<p style="color:#94a3b8">O núcleo deste posto ainda não tem o painel de bombas (precisa da atualização do núcleo), está desligado ou não tem automação cadastrada.</p>`
@@ -177,6 +179,21 @@ function _acRender() {
     <div>${hist || '<p style="color:#666;font-size:0.85rem">Nenhuma alteração pedida.</p>'}</div>
   </div>`;
   if (_ac.form) _acAbrir(_ac.form.con, _ac.form.end, true);
+}
+
+// o núcleo publicou, mas o concentrador não serve para o painel: diz por quê (em vez de "sem painel")
+function _acMotivo(e) {
+  const outros = _ac.empresas.filter(x => _ac.comPainel[x.id] && x.id !== _ac.empresaId);
+  const txt = {
+    sem_horustech: `O concentrador deste posto tem firmware antigo (<b>${_acEsc(e.firmware || '?')}</b>) e só fala o protocolo Companytec: <b>não aceita configuração de bombas pelo painel</b>. Para configurar por aqui é preciso atualizar o firmware ou trocar o concentrador. As bombas e o TecnoX seguem funcionando normalmente.`,
+    desligado: `O painel de bombas está <b>desligado no núcleo deste posto</b>.${e.obs ? `<br><span style="color:#94a3b8">${_acEsc(e.obs)}</span>` : ''}`,
+    sem_host: 'O núcleo deste posto <b>não tem o concentrador cadastrado</b> (automação sem endereço), então não há bombas para mostrar.',
+    sem_comunicacao: `O núcleo <b>não conseguiu conectar no concentrador</b> (${_acEsc(e.host || '')}:${_acEsc(e.porta || '')}). Ele tenta de novo a cada 5 min.${e.detalhe ? `<br><span style="color:#94a3b8;font-size:0.8rem">${_acEsc(e.detalhe)}</span>` : ''}`,
+    sem_resposta: `O concentrador (${_acEsc(e.host || '')}:${_acEsc(e.porta || '')}) <b>aceita a conexão mas não responde</b> ao protocolo de configuração. O núcleo tenta de novo a cada 5 min.`,
+  }[e.erro] || `O núcleo informou: ${_acEsc(e.erro)}`;
+  return `<div style="background:#2a1d0a;border:1px solid #b45309;border-radius:8px;padding:12px;color:#fde68a;line-height:1.5">${txt}
+    <div style="color:#94a3b8;font-size:0.76rem;margin-top:6px">informado pelo núcleo ${_acHa(_ac.lidoEm)}</div></div>`
+    + (outros.length ? `<p style="color:#94a3b8;font-size:0.84rem">Com o painel ativo (● na lista): ${outros.map(x => `<button onclick="_acTrocarPosto('${x.id}')" style="padding:5px 10px;margin:2px;border-radius:6px;border:1px solid #f97316;background:#13151f;color:#fdba74;cursor:pointer">${_acEsc(x.nome_fantasia || x.nome)}</button>`).join('')}</p>` : '');
 }
 
 function _acTrocarPosto(id) { _ac.empresaId = id; _ac.form = null; _ac.icom = 1; _acCarregar(); }
