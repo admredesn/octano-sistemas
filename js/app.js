@@ -3,6 +3,7 @@
 // módulo novo, inserir na posição alfabética certa.
 const MODULOS = [
   { id: 'afericoes',     label: 'Aferições',      breve: false },
+  { id: 'automacao_cfg', label: '🔧 Automação',   breve: false },
   { id: 'bi',            label: '📈 B.I',        breve: false },
   { id: 'cashback',      label: '💸 Cashback',    breve: false },
   { id: 'comissoes',     label: '💰 Comissões',   breve: false },
@@ -78,11 +79,13 @@ function podeVer(idModulo) {
   // 17/09/2026: com o SQL de perfis rodado, vale a permissão "<tela>.ver"
   if (typeof PERM !== 'undefined' && PERM.carregado && !PERM.legado) {
     if (idModulo === 'perfis') return PERM.master;
+    if (idModulo === 'automacao_cfg') return PERM.master;   // configurar bomba: só master
     // a tela de preço na bomba segue a permissão de reajustar (não tem '.ver' própria)
     if (idModulo === 'preco_bomba') return pode('produtos.reajustar_bomba') || pode('produtos.alterar_preco');
     return pode(idModulo + '.ver');
   }
   if (idModulo === 'perfis') return false;
+  if (idModulo === 'automacao_cfg') return !!_acesso.master;
   if (_acesso.master) return true;
   if (_acesso.menos.includes(idModulo)) return false;
   if (_acesso.mais.includes(idModulo)) return true;
@@ -354,6 +357,7 @@ function navegarPara(modulo){
     importar_sped: moduloImportarSped,
     operadores: moduloOperadores,
     afericoes: moduloAfericoes,
+    automacao_cfg: moduloAutomacaoCfg,
     parametros: moduloParametros,
     config_fiscal: moduloConfigFiscal,
     notas_prazo: moduloNotasPrazo,
