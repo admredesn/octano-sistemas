@@ -159,6 +159,9 @@ function _acRender() {
     const p = c.parametros || {};
     const r = c.resultado || {};
     const desc = c.tipo === 'excluir_endereco' ? `Excluir bomba ${p.icom}${p.conector}${p.endereco}`
+      : c.tipo === 'trocar_ip' ? `Trocar IP do concentrador para ${p.ip}`
+      : c.tipo === 'zerar_concentrador' ? `Zerar concentrador: ${(p.itens || []).join(', ')}`
+      : c.tipo === 'sincronizar_ponteiros' ? 'Descartar pendentes (sincronizar ponteiros)'
       : c.tipo === 'cartao_gravar' ? `Gravar cartão ${p.codigo} (${p.controle === '04' ? 'cliente' : 'frentista'})`
       : c.tipo === 'cartao_excluir' ? `Excluir cartão ${p.codigo}`
       : c.tipo === 'simular_abastecimento' ? `Simular abastecimento ${p.icom}${p.conector}${p.endereco}${r.bico ? ' (bico ' + r.bico + ')' : ''}`

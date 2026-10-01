@@ -8,17 +8,17 @@
 // concentrador (protocolo Horustech, porta 2001). Resultado grande volta em
 // oct_automacao_leituras (partes de 1000 linhas); "Bicos" e "Informações" já vêm no
 // estado que o núcleo publica a cada minuto (oct_automacao_estado).
-// Gravar/excluir cartão: comandos do manual (0D/0E) — a gravação ainda está em
-// validação (na bancada sem sensor o concentrador registra "write card error").
+// Gravar/excluir cartão: comandos do manual (0D/0E), validados na bancada com a
+// captura do HRS-Console (o núcleo repete o 0D na mesma conexão, como o HRS faz).
 // ============================================================
 
 const _af = {
   dados: {}, ocupado: {}, msg: {}, filtro: '',
   de: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   ate: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
-  quantos: 300, pessoas: null, precos: null, vivo: { timer: null, renovar: 0, dados: null, lidoEm: null },
+  quantos: 300, novoIp: '', ipNucleo: true, zerar: { bombas: false, cartoes: false, pendentes: false }, pessoas: null, precos: null, vivo: { timer: null, renovar: 0, dados: null, lidoEm: null },
 };
-const _AF_ABAS = [['bombas', '⛽ Bombas'], ['vivo', '🔴 Ao vivo'], ['abast', '📋 Abastecimentos'], ['cartoes', '💳 Cartões'], ['bicos', '🔢 Bicos / hexa'], ['eventos', '📜 Eventos'], ['info', 'ℹ️ Informações']];
+const _AF_ABAS = [['bombas', '⛽ Bombas'], ['vivo', '🔴 Ao vivo'], ['abast', '📋 Abastecimentos'], ['cartoes', '💳 Cartões'], ['bicos', '🔢 Bicos / hexa'], ['eventos', '📜 Eventos'], ['info', 'ℹ️ Informações'], ['manut', '🛠 Manutenção']];
 const _AF_FUNCAO = { '27': 'Frentista — libera a bomba', '04': 'Cliente — não libera', '14': 'Cliente — não libera', '24': 'Cliente — não libera', '0F': 'Controle total — não libera', '6F': 'Controle total — libera', 'EF': 'Controle total — libera (mestre)' };
 const _AF_EVENTO = {
   'Pump price changed': 'Preço da bomba alterado (à vista)', 'PUMP price changed credit': 'Preço da bomba alterado (a prazo)',
@@ -149,6 +149,7 @@ function _afRender() {
   else if (a === 'bicos') box.innerHTML = _afBicosHtml();
   else if (a === 'eventos') box.innerHTML = _afEventos();
   else if (a === 'info') box.innerHTML = _afInfo();
+  else if (a === 'manut') box.innerHTML = _afManut();
 }
 
 // ---------------------------------------------------------------- AO VIVO
@@ -379,4 +380,74 @@ function _afInfo() {
       ${bloco('Habilitações', [lin('Líquido', sn(h.liquido)), lin('Identfid', sn(h.identfid)), lin('GNV', sn(h.gnv)), lin('Medidor de tanque', sn(h.medidor)), lin('Troca de preço por cartão', sn(i.preco_por_cartao))])}
       ${bloco('Certificado', [lin('Validade', i.cert_validade), lin('Logado agora', i.cert_logado ? 'sim (código ' + _acEsc(i.cert_codigo || '') + ')' : 'não'), lin('Travado', i.cert_travado ? 'sim' : 'não')])}
     </div>`;
+}
+
+// ---------------------------------------------------------------- MANUTENÇÃO
+// Comandos capturados do HRS-Console e validados na bancada: trocar IP (1CA2 + &Ci), excluir todas
+// as bombas (20+bico), apagar todos os cartões (17 5C 00) e sincronizar ponteiros (1CE0).
+function _afPosto() { return (_ac.empresas.find(e => e.id === _ac.empresaId) || {}).nome_fantasia || 'posto'; }
+function _afConfirmaNome(oQue) {
+  const nome = _afPosto();
+  const d = prompt(`${oQue}\n\nPara confirmar, digite o nome do posto: ${nome}`);
+  if (d == null) return false;
+  if (d.trim().toUpperCase() !== nome.trim().toUpperCase()) { alert('O nome não confere. Nada foi enviado.'); return false; }
+  return true;
+}
+function _afManut() {
+  const i = (_ac.estado || {}).info || {};
+  const z = _af.zerar, nBombas = (((_ac.estado || {}).enderecos) || []).filter(e => e.configurado).length;
+  const caixa = (titulo, corpo) => `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:12px;margin-top:10px"><div style="color:#f97316;font-weight:800;margin-bottom:6px">${titulo}</div>${corpo}</div>`;
+  const chk = (k, txt, det) => `<label style="display:block;color:#e2e8f0;font-size:0.88rem;margin:6px 0;cursor:pointer"><input type="checkbox" ${z[k] ? 'checked' : ''} onchange="_af.zerar.${k}=this.checked"> <b>${txt}</b><br><span style="color:#94a3b8;font-size:0.78rem;margin-left:22px;display:inline-block">${det}</span></label>`;
+  return `<p style="color:#fca5a5;font-size:0.82rem;margin:8px 0 0">⚠ Estas ações mexem no equipamento do posto e não têm "desfazer". Cada uma pede o nome do posto para confirmar.</p>
+    ${_afAviso('manut', 'Enviando ao posto e conferindo…')}
+    ${caixa('Trocar o IP do concentrador', `
+      <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 8px">IP atual: <b style="color:#e2e8f0">${_acEsc(i.ip || '?')}</b> (${i.ip_fixo ? 'fixo' : 'DHCP'}). A troca vale na hora: o concentrador sai do endereço antigo e passa a responder no novo. Se a faixa de rede for outra, ele só volta a ser visto quando o PC do posto estiver na mesma rede.</p>
+      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+        <label style="color:#ccc;font-size:0.84rem">Novo IP<br><input value="${_acEsc(_af.novoIp)}" oninput="_af.novoIp=this.value" placeholder="192.168.1.91" ${_afInp('size="16"')}></label>
+        <label style="color:#ccc;font-size:0.82rem;cursor:pointer"><input type="checkbox" ${_af.ipNucleo ? 'checked' : ''} onchange="_af.ipNucleo=this.checked"> apontar o núcleo do posto para o IP novo</label>
+        ${_afBtn('Trocar IP', '_afTrocarIp()', '#dc2626')}
+      </div>`)}
+    ${caixa('Zerar para uma operação nova', `
+      <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 4px">Para o concentrador começar limpo num posto novo. Marque o que zerar:</p>
+      ${chk('bombas', `Excluir todas as bombas (${nBombas} configurada(s))`, 'Apaga a configuração de todos os endereços. Os bicos param de abastecer pela automação até serem cadastrados de novo.')}
+      ${chk('cartoes', 'Apagar todos os cartões Identfid', 'Nenhum cartão libera bomba até ser gravado de novo. Precisa de certificado logado no concentrador — agora: ' + (i.cert_logado ? '<b style="color:#86efac">logado</b>' : '<b style="color:#f87171">não logado</b>') + '.')}
+      ${chk('pendentes', 'Descartar abastecimentos e cartões pendentes de leitura', 'O que ainda não foi lido deixa de ser entregue — para o núcleo e para qualquer outro sistema ligado no concentrador (TecnoX). Num posto em operação isso é venda que não chega ao PDV.')}
+      <div style="margin-top:8px">${_afBtn('Zerar o que está marcado', '_afZerar()', '#dc2626')}</div>
+      <p style="color:#64748b;font-size:0.76rem;margin:8px 0 0">Os abastecimentos antigos e os eventos continuam na memória do concentrador (ele não tem comando para apagá-los); só deixam de estar pendentes.</p>`)}`;
+}
+async function _afManutPedir(tipo, parametros, limiteMs, textoOk) {
+  if (_af.ocupado.manut) return;
+  _af.ocupado.manut = true; _af.msg.manut = null; _afRender();
+  try {
+    const cmd = await _afEsperar(await _afPedir(tipo, parametros), limiteMs);
+    const r = cmd.resultado || {};
+    if (cmd.status !== 'ok') throw new Error(cmd.erro || r.erro || 'o posto devolveu erro');
+    _af.msg.manut = { ok: textoOk(r) };
+  } catch (e) { _af.msg.manut = { erro: e.message || String(e) }; }
+  _af.ocupado.manut = false;
+  await _acCarregar();
+}
+function _afTrocarIp() {
+  const ip = (_af.novoIp || '').trim();
+  const p = ip.split('.');
+  if (p.length !== 4 || !p.every(x => /^\d{1,3}$/.test(x) && +x <= 255)) { _af.msg.manut = { erro: 'IP inválido. Exemplo: 192.168.1.91' }; _afRender(); return; }
+  const atual = ((_ac.estado || {}).info || {}).ip || '?';
+  if (!_afConfirmaNome(`TROCAR o IP do concentrador do ${_afPosto()} de ${atual} para ${ip}?\n\nSe o IP estiver errado o concentrador fica inalcançável e só volta com alguém no local.`)) return;
+  _afManutPedir('trocar_ip', { ip, atualizar_nucleo: _af.ipNucleo, confirmo: true }, 120000,
+    r => r.enviado === false ? 'O concentrador já estava nesse IP.' : `IP trocado: ${r.ip_anterior} → ${r.ip_novo}.${r.nucleo_atualizado ? ' O núcleo do posto já aponta para o IP novo.' : ''}${r.aviso ? ' ' + r.aviso : ''}`);
+}
+function _afZerar() {
+  const itens = Object.keys(_af.zerar).filter(k => _af.zerar[k]);
+  if (!itens.length) { _af.msg.manut = { erro: 'Marque pelo menos um item.' }; _afRender(); return; }
+  const nomes = { bombas: 'EXCLUIR TODAS AS BOMBAS', cartoes: 'APAGAR TODOS OS CARTÕES', pendentes: 'DESCARTAR OS PENDENTES' };
+  if (!_afConfirmaNome(`No concentrador do ${_afPosto()}:\n\n• ${itens.map(k => nomes[k]).join('\n• ')}\n\nNão tem como desfazer.`)) return;
+  _afManutPedir('zerar_concentrador', { itens, confirmo: true }, 300000, r => {
+    const p = r.passos || {};
+    const t = [];
+    if (p.bombas) t.push(`${(p.bombas.excluidas || []).length} bomba(s) excluída(s)`);
+    if (p.cartoes) t.push(`${p.cartoes.antes} cartão(ões) apagado(s)`);
+    if (p.pendentes) t.push('pendentes descartados');
+    _af.zerar = { bombas: false, cartoes: false, pendentes: false };
+    return 'Feito: ' + t.join(', ') + '.';
+  });
 }
