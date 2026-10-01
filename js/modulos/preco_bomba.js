@@ -156,7 +156,9 @@ function _pbRender() {
       const x = res[hx] || {};
       const icone = x.ok ? '✓' : (x.situacao ? '…' : '✗');
       const cor = x.ok ? '#22c55e' : (x.situacao ? '#facc15' : '#f87171');
-      const txt = x.ok ? (x.depois ? _pbR3(x.depois[0]) : 'ok') : _pbEsc(x.situacao || x.erro || '');
+      // 'conferido' = o que a bomba devolveu no nível em uso, já com a vírgula certa
+      // (no Tijuco o nível 0 fica vazio: depois[0] mostraria R$ 0,000)
+      const txt = x.ok ? (x.conferido != null ? _pbR3(x.conferido) : 'ok') : _pbEsc(x.situacao || x.erro || '');
       return `<span style="color:${cor};white-space:nowrap">${icone} bico ${x.numero != null ? x.numero : hx}: ${txt}</span>`;
     }).join(' · ');
     return `<div style="border-top:1px solid #1f2230;padding:10px 2px;display:flex;flex-direction:column;gap:4px">
