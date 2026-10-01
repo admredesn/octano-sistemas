@@ -28,6 +28,7 @@ const MODULOS = [
   { id: 'config_fiscal', label: '🧾 Config. Fiscal', breve: false },
   { id: 'pessoas',       label: 'Pessoas',        breve: false },
   { id: 'ponto',         label: 'Ponto',          breve: false },
+  { id: 'preco_bomba',   label: '⛽ Preço na bomba', breve: false },
   { id: 'prontidao',     label: '🎯 Prontidão',   breve: false },
   { id: 'produtos',      label: 'Produtos',       breve: false },
   { id: 'relatorios',    label: '📊 Relatórios',  breve: false },
@@ -77,6 +78,8 @@ function podeVer(idModulo) {
   // 17/09/2026: com o SQL de perfis rodado, vale a permissão "<tela>.ver"
   if (typeof PERM !== 'undefined' && PERM.carregado && !PERM.legado) {
     if (idModulo === 'perfis') return PERM.master;
+    // a tela de preço na bomba segue a permissão de reajustar (não tem '.ver' própria)
+    if (idModulo === 'preco_bomba') return pode('produtos.reajustar_bomba') || pode('produtos.alterar_preco');
     return pode(idModulo + '.ver');
   }
   if (idModulo === 'perfis') return false;
@@ -343,6 +346,7 @@ function navegarPara(modulo){
     ponto:         moduloPonto,
     produtos:      moduloProdutos,
     prontidao:     moduloProntidao,
+    preco_bomba:   moduloPrecoBomba,
     servicos:      moduloServicos,
     contas_pagar:  moduloContasPagar,
     conc_banco:    moduloConcBanco,

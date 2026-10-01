@@ -646,6 +646,7 @@ function _monHtml(dados, tv, doCache) {
         <div style="font-size:${tv ? '1.7rem' : '1.2rem'};font-weight:800;color:#e2e8f0">📊 Monitor dos Postos</div>
         <div style="flex:1"></div>
         <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">atualizado ${hora} · a cada 30s</div>
+        <button onclick="precoBombaAbrirMonitor()" title="Reajustar o preço na bomba" style="padding:${tv ? '10px 16px' : '6px 12px'};border-radius:8px;border:1px solid #f97316;background:#13151f;color:#f97316;font-weight:700;cursor:pointer">⛽ Preços</button>
         ${tv ? '' : '<button onclick="monitorAtualizar()" style="padding:6px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#ddd;cursor:pointer">↻ Atualizar</button>'}
       </div>`;
     const corpo = cab + secVendas + secTanques;

@@ -142,6 +142,7 @@ const PERM_CATALOGO = [
     { c: 'produtos.alterar_preco', d: 'Alterar preço, custo e margem', p: 'g', s: 1 },
     { c: 'produtos.alterar_lote', d: 'Alterar preços em lote', p: 'g', s: 1 },
     { c: 'produtos.excluir', d: 'Excluir produto', p: 'g', s: 1 },
+    { c: 'produtos.reajustar_bomba', d: 'Reajustar preço na bomba (troca o preço nos bicos)', p: 'g', s: 1 },
     { c: 'servicos.ver', d: 'Acessar Serviços', p: 'gc' },
     { c: 'servicos.alterar', d: 'Incluir/alterar serviço', p: 'gc' },
     { c: 'servicos.excluir', d: 'Excluir serviço', p: 'g', s: 1 },
