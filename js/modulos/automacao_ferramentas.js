@@ -242,12 +242,13 @@ function _afCartoes() {
   if (d) {
     const f = _af.filtro.trim().toUpperCase();
     const noConc = new Set(d.linhas.map(l => l[1]));
+    const vezes = {}; d.linhas.forEach(l => { vezes[l[1]] = (vezes[l[1]] || 0) + 1; });
     const linhas = d.linhas.filter(l => !f || l[1].includes(f) || (_afNomeCartao(l[1]) || '').toUpperCase().includes(f))
-      .map(l => [l[0], `<code>${l[1]}</code>`, _acEsc(_AF_FUNCAO[l[2]] || l[3]) + ` <span style="color:#64748b">(${l[2]})</span>`, _afNomeCartao(l[1]) ? _acEsc(_afNomeCartao(l[1])) : '<span style="color:#64748b">— sem cadastro</span>',
+      .map(l => [l[0], `<code>${l[1]}</code>${vezes[l[1]] > 1 ? ` <span style="color:#facc15;font-size:0.72rem" title="o mesmo cartão está gravado em ${vezes[l[1]]} posições; Excluir tira de todas">×${vezes[l[1]]}</span>` : ''}`, _acEsc(_AF_FUNCAO[l[2]] || l[3]) + ` <span style="color:#64748b">(${l[2]})</span>`, _afNomeCartao(l[1]) ? _acEsc(_afNomeCartao(l[1])) : '<span style="color:#64748b">— sem cadastro</span>',
         `<button onclick="_afCartaoExcluir('${l[1]}')" style="padding:3px 9px;border-radius:6px;border:1px solid #ef4444;background:transparent;color:#f87171;cursor:pointer">Excluir</button>`]);
     const fora = Object.keys(_af.pessoas || {}).filter(c => !noConc.has(c));
     lista = `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:0.88rem;color:#e2e8f0">
-        <span><b>${d.linhas.length}</b> cartão(ões) gravado(s) no concentrador</span>
+        <span><b>${Object.keys(vezes).length}</b> cartão(ões) gravado(s) no concentrador${Object.keys(vezes).length !== d.linhas.length ? ` <span style="color:#94a3b8">(${d.linhas.length} posições; há cartões repetidos)</span>` : ''}</span>
         <input placeholder="Filtrar por código ou nome" value="${_acEsc(_af.filtro)}" oninput="_af.filtro=this.value;_afRender();const i=document.getElementById('af-filtro');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}" id="af-filtro" ${_afInp('size="26"')}>
         <button onclick="_afCartoesExcel()" style="padding:7px 12px;border-radius:7px;border:1px solid #16a34a;background:transparent;color:#4ade80;cursor:pointer;font-weight:700">⬇ Excel</button> ${_afLido(d)}
       </div>
@@ -292,7 +293,7 @@ async function _afCartaoExcluir(cod) {
   if (!confirm(`EXCLUIR o cartão ${cod}${nome ? ' (' + nome + ')' : ''} do concentrador do ${posto}?\n\nEle deixa de liberar bomba${nome ? ' e sai do cadastro de ' + nome : ''}. Use para cartão perdido.`)) return;
   const r = await _afCartaoAcao('cartao_excluir', { codigo: cod, limpar_cadastro: true });
   if (r) {
-    _af.msg.cartao = { ok: r.enviado === false ? `O cartão ${cod} não estava gravado no concentrador.` : `Cartão ${cod} excluído do concentrador${(r.desvinculado_de || []).length ? ' e tirado do cadastro de ' + r.desvinculado_de.join(', ') : ''}.` };
+    _af.msg.cartao = { ok: r.enviado === false ? `O cartão ${cod} não estava gravado no concentrador.` : `Cartão ${cod} excluído do concentrador${r.excluidas > 1 ? ' (estava gravado ' + r.excluidas + ' vezes; saíram todas)' : ''}${(r.desvinculado_de || []).length ? ' e tirado do cadastro de ' + r.desvinculado_de.join(', ') : ''}.` };
     _af.pessoas = null; delete _af.dados.leituras;
     await _afApoio(); _af.ocupado.cartoes = false;
     return _afLer('cartoes', 'cartoes', null, 90000);
