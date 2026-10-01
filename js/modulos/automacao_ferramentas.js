@@ -371,6 +371,19 @@ function _afInfo() {
   const h = i.habilitacoes || {};
   const desvio = i.relogio && i.relogio_pc ? Math.round((new Date(i.relogio) - new Date(i.relogio_pc)) / 1000) : null;
   const con = (i.conexoes || []).map(c => `${c.ip} → porta ${c.porta_local}`).join('<br>');
+  const relogio = bloco('Calendário da placa', [lin('Data e hora', i.relogio ? new Date(i.relogio).toLocaleString('pt-BR') : '—'), lin('Diferença para o PC do posto', desvio == null ? '—' : Math.abs(desvio) < 90 ? '<span style="color:#22c55e">em dia</span>' : `<span style="color:#f87171">${desvio > 0 ? 'adiantado' : 'atrasado'} ${Math.round(Math.abs(desvio) / 60)} min</span>`)]);
+  // CONCEPT (Tijuco): outro equipamento, com o seu próprio comando de informações
+  const c = i.concept;
+  if (c && !c.erro_leitura) {
+    return `<p style="color:#64748b;font-size:0.78rem;margin:6px 0 8px">lido do concentrador ${_acHa(_ac.lidoEm)} · atualiza a cada minuto</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
+      ${bloco('Automação', [lin('Tipo', 'CONCEPT'), lin('Versão', `${_acEsc(c.versao)} · ${_acEsc(c.versao_data)}`), lin('Nº de série da CPU', _acEsc(c.cpu_serie)), lin('Série do cartão SD', _acEsc(c.sd_serie)), lin('CNPJ gravado', _acEsc(c.cnpj)), lin('Protocolo emulado', i.protocolo)].concat((c.icoms || []).map(x => lin('ICOM ' + x.icom, `versão ${_acEsc(x.versao)} · firmware ${_acEsc(x.firmware)} · série ${_acEsc(x.serie)}`))))}
+      ${bloco('Rede', [lin('IP', _acEsc(c.ip)), lin('MAC', _acEsc(c.mac)), lin('Endereço', c.ip_fixo ? 'IP fixo' : 'DHCP')])}
+      ${bloco('Energia', [lin('Rede CA', _acEsc(c.rede_ca)), lin('Bateria de chumbo', _acEsc(c.bateria_chumbo)), lin('Bateria de lítio', _acEsc(c.bateria_litio)), lin('Polaridade da bateria', _acEsc(c.polaridade)), lin('Fonte', `tipo ${_acEsc(c.fonte)} · série ${_acEsc(c.fonte_serie)}`)])}
+      ${relogio}
+      ${bloco('Certificado', [lin('Nome', _acEsc(c.cert_nome) || '—'), lin('Automação bloqueada por certificado', c.bloqueada ? 'sim' : 'não')])}
+    </div>`;
+  }
   return `<p style="color:#64748b;font-size:0.78rem;margin:6px 0 8px">lido do concentrador ${_acHa(_ac.lidoEm)} · atualiza a cada minuto</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
       ${bloco('Automação', [lin('Nº de série', i.serie), lin('Fabricado', i.fabricado), lin('Firmware', `${i.firmware || ''} ${i.firmware_tipo || ''} · ${i.firmware_data || ''}`), lin('Versão do boot', i.boot), lin('Memória', i.memoria), lin('Protocolo emulado', i.protocolo), lin('ICOM 1', (i.icoms || [])[0]), lin('ICOM 2', (i.icoms || [])[1]), lin('ICOM 3', (i.icoms || [])[2]), lin('Tipo', i.tipo), lin('Posições por bomba', i.posicoes)])}
@@ -399,6 +412,7 @@ function _afManut() {
   const caixa = (titulo, corpo) => `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:12px;margin-top:10px"><div style="color:#f97316;font-weight:800;margin-bottom:6px">${titulo}</div>${corpo}</div>`;
   const chk = (k, txt, det) => `<label style="display:block;color:#e2e8f0;font-size:0.88rem;margin:6px 0;cursor:pointer"><input type="checkbox" ${z[k] ? 'checked' : ''} onchange="_af.zerar.${k}=this.checked"> <b>${txt}</b><br><span style="color:#94a3b8;font-size:0.78rem;margin-left:22px;display:inline-block">${det}</span></label>`;
   return `<p style="color:#fca5a5;font-size:0.82rem;margin:8px 0 0">⚠ Estas ações mexem no equipamento do posto e não têm "desfazer". Cada uma pede o nome do posto para confirmar.</p>
+    ${i.tipo === 'CONCEPT' ? '<div style="background:#2a1d0a;border:1px solid #b45309;border-radius:8px;padding:8px 10px;color:#fde68a;font-size:0.82rem;margin-top:8px">Este posto usa um concentrador <b>Concept</b>. Trocar IP, apagar todos os cartões e descartar pendentes ainda não foram validadas no Concept (só no Horustech); num teste ele recusou o comando dessa família. Se recusar, nada é alterado.</div>' : ''}
     ${_afAviso('manut', 'Enviando ao posto e conferindo…')}
     ${caixa('Trocar o IP do concentrador', `
       <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 8px">IP atual: <b style="color:#e2e8f0">${_acEsc(i.ip || '?')}</b> (${i.ip_fixo ? 'fixo' : 'DHCP'}). A troca vale na hora: o concentrador sai do endereço antigo e passa a responder no novo. Se a faixa de rede for outra, ele só volta a ser visto quando o PC do posto estiver na mesma rede.</p>
@@ -410,7 +424,7 @@ function _afManut() {
     ${caixa('Zerar para uma operação nova', `
       <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 4px">Para o concentrador começar limpo num posto novo. Marque o que zerar:</p>
       ${chk('bombas', `Excluir todas as bombas (${nBombas} configurada(s))`, 'Apaga a configuração de todos os endereços. Os bicos param de abastecer pela automação até serem cadastrados de novo.')}
-      ${chk('cartoes', 'Apagar todos os cartões Identfid', 'Nenhum cartão libera bomba até ser gravado de novo. Precisa de certificado logado no concentrador — agora: ' + (i.cert_logado ? '<b style="color:#86efac">logado</b>' : '<b style="color:#f87171">não logado</b>') + '.')}
+      ${chk('cartoes', 'Apagar todos os cartões Identfid', 'Nenhum cartão libera bomba até ser gravado de novo. Precisa de certificado logado no concentrador — agora: ' + (i.cert_logado == null ? 'não informado' : i.cert_logado ? '<b style="color:#86efac">logado</b>' : '<b style="color:#f87171">não logado</b>') + '.')}
       ${chk('pendentes', 'Descartar abastecimentos e cartões pendentes de leitura', 'O que ainda não foi lido deixa de ser entregue — para o núcleo e para qualquer outro sistema ligado no concentrador (TecnoX). Num posto em operação isso é venda que não chega ao PDV.')}
       <div style="margin-top:8px">${_afBtn('Zerar o que está marcado', '_afZerar()', '#dc2626')}</div>
       <p style="color:#64748b;font-size:0.76rem;margin:8px 0 0">Os abastecimentos antigos e os eventos continuam na memória do concentrador (ele não tem comando para apagá-los); só deixam de estar pendentes.</p>`)}`;
