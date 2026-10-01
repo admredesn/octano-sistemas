@@ -267,7 +267,7 @@ function manifRender() {
               ${isManifestadas ? `<td>
                 ${n.status==='importada'
                   ? `<span style="color:#4caf50;font-size:0.75rem;margin-right:6px">✓ Importada</span><button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button><button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button><button class="manif-btn-linha" style="border-color:#5a2a2a;color:#f44" onclick="manifExcluirImportacao('${n.id}','${n.chave_nfe||''}')">🗑 Excluir importação</button>`
-                  : `${n.xml ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`}
+                  : `${(n.xml && n.tipo !== 'resumo' && /<infNFe/.test(n.xml)) ? `<button class="manif-btn-linha manif-btn-incluir" onclick="manifIncluirNota('${n.id}')">📥 Incluir Nota</button>` : (n.tipo === 'resumo' ? `<span style="color:#fbbf24;font-size:0.75rem;margin-right:6px" title="A SEFAZ so libera o XML completo depois de aceitar a ciencia. Se passou de algumas horas, a ciencia nao foi registrada: clique em Desfazer e manifeste de novo na aba Pendentes.">⏳ aguardando XML completo</span>` : `<button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ Baixar XML</button>`)}
                 <button class="manif-btn-linha" onclick="manifBaixarXml('${n.id}','${n.nsu}')">⬇️ XML</button>
                 <button class="manif-btn-linha" onclick="manifImprimir('${n.id}')">🖨 Imprimir</button>
                 <button class="manif-btn-linha" style="border-color:#5a4a2a;color:#fbbf24" onclick="manifDesfazer('${n.id}')">↩ Desfazer</button>`}
@@ -350,7 +350,7 @@ async function manifConsultarSefaz() {
     const buf = await cb.arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
     const cnpj = _manifEmpresa.cnpj?.replace(/\D/g, '');
-    const resp = await fetch(`${SEFAZ_URL}/manifestar`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, cert_base64:b64, cert_senha:senha, ambiente, ultimo_nsu:nsu }) });
+    const resp = await fetch(`${SEFAZ_URL}/manifestar`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ empresa_id: _manifEmpresa.id, cnpj, cert_base64:b64, cert_senha:senha, ambiente, ultimo_nsu:nsu }) });
     const dados = await resp.json();
 
     const cstat = String(dados.cstat || '');
@@ -445,7 +445,7 @@ async function manifEnviarLote() {
     if (!nota?.chave_nfe) { falhas++; motivos.push('sem chave'); continue; }
     if (prog) prog.textContent = `Enviando ${i+1}/${ids.length}...`;
     try {
-      const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, chave_nfe:nota.chave_nfe, cert_base64:b64, cert_senha:senha, ambiente }) });
+      const resp = await fetch(`${SEFAZ_URL}/manifestar/ciencia`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ empresa_id: _manifEmpresa.id, cnpj, chave_nfe:nota.chave_nfe, cert_base64:b64, cert_senha:senha, ambiente }) });
       const dados = await resp.json();
       // 135 = registrado e vinculado; 136 = registrado nao vinculado; 573 = ja manifestado (duplicidade)
       const cstatOk = dados.cstat && ['135','136','573'].includes(String(dados.cstat));
@@ -517,7 +517,7 @@ async function manifBaixarXml(id, nsu) {
     const buf = await cb.arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
     const cnpj = _manifEmpresa.cnpj?.replace(/\D/g, '');
-    const resp = await fetch(`${SEFAZ_URL}/xml/${nsu}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cnpj, cert_base64:b64, cert_senha:senha, ambiente, nsu }) });
+    const resp = await fetch(`${SEFAZ_URL}/xml/${nsu}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ empresa_id: _manifEmpresa.id, cnpj, cert_base64:b64, cert_senha:senha, ambiente, nsu }) });
     const dados = await resp.json();
     if (dados.nfes?.[0]?.xml) {
       const xml = dados.nfes[0].xml;
