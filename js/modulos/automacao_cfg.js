@@ -57,6 +57,7 @@ const _AC_COMB = {
 };
 const _AC_SENSORES = { '00': 'Sem sensor', '15': 'Identfid', '2B': 'Identfid_MS', '32': 'Identfid duplo', '34': 'Identfid STR', '38': 'Identfid Wertco' };
 const _AC_FORMAS = { '00': 'Desabilitado', '01': 'Bomba de combustível', '02': 'Acesso (envia não cadastrados)', '03': 'Acesso (ignora não cadastrados)', '04': 'Cartão ponto', '05': 'Máquina de lavar' };
+const _AC_SIM = ['1B', '27'];   // bomba SIMULADA: o próprio concentrador finge a bomba (bancada de testes)
 const _AC_HW = { '01': 'Loop High', '02': 'Loop Low', '04': 'RS-485' };
 const _AC_DIAG = { R: ['respondendo', '#22c55e'], F: ['não respondendo', '#ef4444'], N: ['não configurado', '#64748b'], '?': ['tipo desconhecido', '#facc15'], '!': ['tipo não autorizado', '#facc15'], '0': ['sem bico', '#64748b'] };
 const _AC_CMD = { pendente: ['⏳ na fila', '#facc15'], executando: ['⚙️ gravando', '#facc15'], ok: ['✅ feito', '#22c55e'], erro: ['❌ erro', '#f87171'], cancelado: ['🚫 cancelado', '#94a3b8'] };
@@ -140,7 +141,7 @@ function _acRender() {
       const bicos = (e.bicos || []).filter(b => b.numero).map(b => b.numero).join(' ');
       const pend = _ac.cmds.find(c => (c.status === 'pendente' || c.status === 'executando') && c.parametros && `${c.parametros.icom}${c.parametros.conector}${c.parametros.endereco}` === _acChave(e));
       return `<div onclick="_acAbrir('${con}',${end})" style="cursor:pointer;background:#13151f;border:1px solid #2a2d3e;border-left:6px solid ${dCor};border-radius:8px;padding:8px;min-height:74px;display:flex;flex-direction:column;gap:3px">
-        <div style="display:flex;justify-content:space-between;gap:6px"><b style="color:${e.configurado ? '#e2e8f0' : '#64748b'};font-size:0.84rem">${e.configurado ? _acEsc(e.modelo || e.tipo) : 'Livre'}</b>${_acSeloIdf(e)}</div>
+        <div style="display:flex;justify-content:space-between;gap:6px"><b style="color:${e.configurado ? '#e2e8f0' : '#64748b'};font-size:0.84rem">${e.configurado ? _acEsc(e.modelo || e.tipo) : 'Livre'}</b><span>${e.configurado && _AC_SIM.includes(String(e.tipo).toUpperCase()) ? '<span title="Bomba simulada" style="background:#1e3a8a;color:#bfdbfe;font-size:0.66rem;padding:1px 5px;border-radius:4px;font-weight:700">SIM</span> ' : ''}${_acSeloIdf(e)}</span></div>
         <div style="color:#cbd5e1;font-size:0.8rem">${bicos ? 'Bicos: ' + bicos : '&nbsp;'}</div>
         <div style="color:${dCor};font-size:0.72rem">${dTxt}${pend ? ' · <span style="color:#facc15">alteração na fila</span>' : ''}</div>
       </div>`;
@@ -158,11 +159,12 @@ function _acRender() {
     const p = c.parametros || {};
     const r = c.resultado || {};
     const desc = c.tipo === 'excluir_endereco' ? `Excluir bomba ${p.icom}${p.conector}${p.endereco}`
+      : c.tipo === 'simular_abastecimento' ? `Simular abastecimento ${p.icom}${p.conector}${p.endereco}${r.bico ? ' (bico ' + r.bico + ')' : ''}`
       : c.tipo === 'gravar_endereco' && p.somente_idf ? `${(p.idf || {}).forma === '00' ? 'Desligar' : 'Ligar'} identificador ${p.icom}${p.conector}${p.endereco}`
       : c.tipo === 'gravar_endereco' ? `Gravar ${p.icom}${p.conector}${p.endereco}: ${_AC_MODELOS[p.tipo] || p.tipo}, bicos ${(p.bicos || []).filter(b => +b.numero).map(b => b.numero).join(' ')}` : c.tipo;
     return `<div style="border-top:1px solid #1f2230;padding:8px 2px;font-size:0.82rem">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span style="color:#e2e8f0">${_acEsc(desc)}${r.enviados && !r.enviados.length ? ' <span style="color:#94a3b8">(já estava assim)</span>' : ''}${!p.somente_idf && r.enviados && r.enviados.join() === '1D' ? ' <span style="color:#94a3b8">(só o identificador mudou)</span>' : ''}</span><b style="color:${st[1]}">${st[0]}</b></div>
-      <div style="color:#888;font-size:0.74rem">${new Date(c.criado_em).toLocaleString('pt-BR')} por ${_acEsc(c.criado_por_nome || '—')}${c.erro ? ` · <span style="color:#f87171">${_acEsc(c.erro)}</span>` : ''}</div>
+      <div style="color:#888;font-size:0.74rem">${new Date(c.criado_em).toLocaleString('pt-BR')} por ${_acEsc(c.criado_por_nome || '—')}${c.erro ? ` · <span style="color:#f87171">${_acEsc(c.erro)}</span>` : ''}${r.aviso && r.enviados && r.enviados.length ? ` · <span style="color:#facc15">${_acEsc(r.aviso)}</span>` : ''}</div>
       ${c.status === 'pendente' ? `<button onclick="_acCancelar('${c.id}')" style="margin-top:4px;padding:4px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#f87171;cursor:pointer">Cancelar</button>` : ''}
     </div>`;
   }).join('');
@@ -250,6 +252,13 @@ function _acAbrir(con, end, manter) {
       <button onclick="_acIdentificador(${idf.forma === '00' ? 'true' : 'false'})" style="padding:7px 12px;border-radius:8px;border:1px solid ${idf.forma === '00' ? '#22c55e' : '#facc15'};background:#13151f;color:${idf.forma === '00' ? '#86efac' : '#fde68a'};font-weight:700;cursor:pointer">${idf.forma === '00' ? 'Ligar identificador' : 'Desligar identificador'}</button>
       <span style="color:#94a3b8;font-size:0.76rem">só o identificador muda — a bomba não é regravada</span>
     </div>` : ''}
+    ${e.configurado && _AC_SIM.includes(String(e.tipo).toUpperCase()) ? `<div style="background:#0b1530;border:1px solid #1d4ed8;border-radius:8px;padding:10px;margin-bottom:10px;font-size:0.84rem;color:#bfdbfe">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <b>🧪 Bomba simulada</b>
+        <button onclick="_acSimular()" style="padding:8px 14px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-weight:800;cursor:pointer">▶ Simular abastecimento${(e.bicos || [])[0] && e.bicos[0].numero ? ' no bico ' + e.bicos[0].numero : ''}</button>
+      </div>
+      <div style="color:#94a3b8;font-size:0.76rem;margin-top:6px">Cada clique autoriza UM abastecimento: leva de 10 a 60 s e sai com valor de centavos. O simulador sempre abastece no bico da posição A e fica bloqueado entre um e outro. Bico sem preço recebe R$ 5,99 de teste.</div>
+    </div>` : ''}
     <div id="ac-resumo" style="font-size:0.84rem;margin-bottom:8px"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="_acSalvar()" style="padding:10px 14px;border-radius:8px;border:none;background:#f97316;color:#fff;font-weight:800;cursor:pointer">Gravar no concentrador</button>
@@ -291,7 +300,7 @@ function _acValidar(p) {
   return null;
 }
 
-async function _acPedir(tipo, parametros, msgOk) {
+async function _acPedir(tipo, parametros, msgOk, manter) {
   const msg = document.getElementById('ac-msg');
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { msg.innerHTML = '<span style="color:#f87171">Sessão expirada — entre de novo.</span>'; return; }
@@ -300,7 +309,13 @@ async function _acPedir(tipo, parametros, msgOk) {
   const { error } = await sb.from('oct_automacao_comandos').insert({ empresa_id: _ac.empresaId, tipo, parametros, criado_por: user.id, criado_por_nome: nome });
   if (error) {
     const semPerm = error.code === '42501' || /row-level security/i.test(error.message || '');
-    msg.innerHTML = `<span style="color:#f87171">${semPerm ? 'Só o master pode alterar a configuração das bombas.' : _acEsc(error.message)}</span>`;
+    const semTipo = /ck_auto_cmd_tipo/i.test(error.message || '');
+    msg.innerHTML = `<span style="color:#f87171">${semPerm ? 'Só o master pode alterar a configuração das bombas.' : semTipo ? 'Falta rodar o SQL-AUTOMACAO-SIMULAR.sql no Supabase.' : _acEsc(error.message)}</span>`;
+    return;
+  }
+  if (manter) {
+    msg.innerHTML = `<span style="color:#86efac">${msgOk}</span>`;
+    _acTimer(true);
     return;
   }
   _ac.form = null;
@@ -346,6 +361,13 @@ A configuração da bomba não é mexida.`;
   if (!confirm(txt)) return;
   await _acPedir('gravar_endereco', { icom: _ac.icom, conector: f.con, endereco: f.end, somente_idf: true, idf: { forma: ligar ? '01' : '00' } },
     `Pedido enviado: ${ligar ? 'ligar' : 'desligar'} o identificador. O posto grava e confere em poucos segundos — acompanhe em "Últimas alterações".`);
+}
+
+// bomba SIMULADA (modelo 1B/27): pede UM abastecimento; o núcleo recusa se a bomba for de verdade
+async function _acSimular() {
+  const f = _ac.form;
+  await _acPedir('simular_abastecimento', { icom: _ac.icom, conector: f.con, endereco: f.end },
+    `Pedido enviado às ${new Date().toLocaleTimeString('pt-BR')}. O abastecimento simulado termina em até 1 minuto e aparece no PDV do posto.`, true);
 }
 
 async function _acExcluir() {
