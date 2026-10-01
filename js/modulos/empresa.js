@@ -306,37 +306,90 @@ async function empToggleAtivo(id, novoAtivo) {
 }
 
 // ─── CNPJ ────────────────────────────────────────────────────────────────────
+// CONSULTA DE CNPJ COM FONTES RESERVA (30/09/2026): o cadastro do SEVEN BH
+// falhou porque a BrasilAPI — a única fonte — devolveu 504 depois de 10 s, e
+// a razão social ficou vazia. Agora: BrasilAPI (6 s) → cnpj.ws → cnpja, todas
+// com CORS liberado para o navegador. O resultado é normalizado num formato só;
+// a cnpj.ws ainda traz a INSCRIÇÃO ESTADUAL ativa do estado.
+async function _cnpjBuscar(url, ms) {
+  const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  const tm = ctl ? setTimeout(() => ctl.abort(), ms) : null;
+  try {
+    const r = await fetch(url, ctl ? { signal: ctl.signal } : {});
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+  finally { if (tm) clearTimeout(tm); }
+}
+
+const _CNPJ_FONTES = [
+  { nome: 'BrasilAPI', url: c => `https://brasilapi.com.br/api/cnpj/v1/${c}`, ms: 6000,
+    ler: d => d && d.razao_social ? {
+      razao: d.razao_social, fantasia: d.nome_fantasia, logradouro: d.logradouro, numero: d.numero,
+      complemento: d.complemento, bairro: d.bairro, cidade: d.municipio, uf: d.uf, cep: d.cep,
+      telefone: d.ddd_telefone_1, email: d.email, simples: !!d.opcao_pelo_simples, ie: '' } : null },
+  { nome: 'cnpj.ws', url: c => `https://publica.cnpj.ws/cnpj/${c}`, ms: 8000,
+    ler: d => {
+      if (!d || !d.razao_social) return null;
+      const e = d.estabelecimento || {};
+      const uf = (e.estado || {}).sigla || '';
+      const ies = (e.inscricoes_estaduais || []).filter(x => x && x.ativo !== false && (!uf || ((x.estado || {}).sigla === uf)));
+      return {
+        razao: d.razao_social, fantasia: e.nome_fantasia,
+        logradouro: [e.tipo_logradouro, e.logradouro].filter(Boolean).join(' '), numero: e.numero,
+        complemento: e.complemento, bairro: e.bairro, cidade: (e.cidade || {}).nome, uf, cep: e.cep,
+        telefone: e.ddd1 && e.telefone1 ? `(${e.ddd1}) ${e.telefone1}` : '', email: e.email,
+        simples: !!(d.simples && d.simples.simples === 'Sim'), ie: ies.length ? ies[0].inscricao_estadual : '' };
+    } },
+  { nome: 'CNPJá', url: c => `https://open.cnpja.com/office/${c}`, ms: 8000,
+    ler: d => {
+      if (!d || !d.company || !d.company.name) return null;
+      const a = d.address || {}; const f = (d.phones || [])[0]; const m = (d.emails || [])[0];
+      return {
+        razao: d.company.name, fantasia: d.alias, logradouro: a.street, numero: a.number,
+        complemento: a.details, bairro: a.district, cidade: a.city, uf: a.state, cep: a.zip,
+        telefone: f ? `(${f.area}) ${f.number}` : '', email: m ? m.address : '',
+        simples: !!(d.company.simples && d.company.simples.optant), ie: '' };
+    } },
+];
+
 async function consultarCNPJ() {
   const cnpj = document.getElementById('emp-cnpj').value.replace(/\D/g, '');
   const status = document.getElementById('cnpj-status');
   if (cnpj.length !== 14) { status.textContent = 'CNPJ inválido.'; status.style.color = '#f44'; return; }
-  status.textContent = '🔄 Consultando Receita Federal...'; status.style.color = '#888';
-  try {
-    const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
-    if (!resp.ok) throw new Error();
-    const d = await resp.json();
-    document.getElementById('emp-nome').value = d.razao_social || '';
-    document.getElementById('emp-fantasia').value = d.nome_fantasia || d.razao_social || '';
-    const end = [d.logradouro, d.numero, d.complemento, d.bairro].filter(Boolean).join(', ');
-    document.getElementById('emp-endereco').value = end;
-    document.getElementById('emp-cidade').value = d.municipio || '';
-    document.getElementById('emp-cep').value = (d.cep || '').replace(/(\d{5})(\d{3})/, '$1-$2');
-    if (d.ddd_telefone_1) document.getElementById('emp-telefone').value = d.ddd_telefone_1;
-    if (d.uf) {
-      const sel = document.getElementById('emp-uf');
-      for (let i = 0; i < sel.options.length; i++) {
-        if (sel.options[i].value === d.uf) { sel.selectedIndex = i; break; }
-      }
-    }
-    if (d.opcao_pelo_simples) document.getElementById('emp-regime').value = 'simples';
-    status.textContent = '✅ Dados preenchidos! Confira a IE manualmente e salve.';
-    status.style.color = '#4caf50';
-    document.getElementById('emp-ie').style.borderColor = '#f97316';
-    document.getElementById('emp-ie').focus();
-  } catch(e) {
-    status.textContent = '❌ CNPJ não encontrado. Preencha manualmente.';
-    status.style.color = '#f44';
+  let d = null, fonte = '';
+  for (const f of _CNPJ_FONTES) {
+    status.textContent = `🔄 Consultando ${f.nome}...`; status.style.color = '#888';
+    d = f.ler(await _cnpjBuscar(f.url(cnpj), f.ms));
+    if (d) { fonte = f.nome; break; }
   }
+  if (!d) {
+    status.textContent = '❌ Nenhuma fonte respondeu (BrasilAPI, cnpj.ws, CNPJá). Preencha manualmente ou tente de novo em 1 minuto.';
+    status.style.color = '#f44';
+    return;
+  }
+  const g = id => document.getElementById(id);
+  g('emp-nome').value = d.razao || '';
+  g('emp-fantasia').value = d.fantasia || d.razao || '';
+  g('emp-endereco').value = [d.logradouro, d.numero, d.complemento, d.bairro].filter(Boolean).join(', ');
+  g('emp-cidade').value = d.cidade || '';
+  const cep = String(d.cep || '').replace(/\D/g, '');
+  g('emp-cep').value = cep.replace(/(\d{5})(\d{3})/, '$1-$2');
+  if (d.telefone) g('emp-telefone').value = d.telefone;
+  if (d.email && !g('emp-email').value) g('emp-email').value = d.email;
+  if (d.uf) {
+    const sel = g('emp-uf');
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === d.uf) { sel.selectedIndex = i; break; }
+    }
+  }
+  if (d.simples) g('emp-regime').value = 'simples';
+  if (d.ie && !g('emp-ie').value) g('emp-ie').value = d.ie;
+  status.textContent = d.ie
+    ? `✅ Dados preenchidos (${fonte}), inclusive a IE. Confira e salve.`
+    : `✅ Dados preenchidos (${fonte})! Confira a IE manualmente e salve.`;
+  status.style.color = '#4caf50';
+  if (!d.ie) { g('emp-ie').style.borderColor = '#f97316'; g('emp-ie').focus(); }
 }
 
 // ─── CERTIFICADO ─────────────────────────────────────────────────────────────
@@ -533,7 +586,15 @@ async function salvarEmpresa() {
     // checkboxes na tela, isto desligaria o EDI do posto sem ninguém perceber.
   };
 
-  if (!dadosEmpresa.nome) { msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44'; return; }
+  if (!dadosEmpresa.nome) {
+    // a mensagem fica lá embaixo, ao lado do botão; o campo está lá em cima —
+    // sem isto parecia que o salvar "não fazia nada" (SEVEN BH, 30/09/2026)
+    msg.textContent = 'Razão Social é obrigatória.'; msg.style.color = '#f44';
+    const n = document.getElementById('emp-nome');
+    if (n) { n.style.borderColor = '#f44'; n.scrollIntoView({ behavior: 'smooth', block: 'center' }); n.focus(); }
+    alert('Preencha a Razão Social antes de salvar.');
+    return;
+  }
 
   const criando = window._empNova === true;
 
