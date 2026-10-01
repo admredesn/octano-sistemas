@@ -61,7 +61,7 @@ const _AC_SIM = ['1B', '27'];   // bomba SIMULADA: o próprio concentrador finge
 const _AC_HW = { '01': 'Loop High', '02': 'Loop Low', '04': 'RS-485' };
 const _AC_DIAG = { R: ['respondendo', '#22c55e'], F: ['não respondendo', '#ef4444'], N: ['não configurado', '#64748b'], '?': ['tipo desconhecido', '#facc15'], '!': ['tipo não autorizado', '#facc15'], '0': ['sem bico', '#64748b'] };
 const _AC_CMD = { pendente: ['⏳ na fila', '#facc15'], executando: ['⚙️ gravando', '#facc15'], ok: ['✅ feito', '#22c55e'], erro: ['❌ erro', '#f87171'], cancelado: ['🚫 cancelado', '#94a3b8'] };
-const _ac = { empresaId: null, icom: 1, estado: null, lidoEm: null, cmds: [], empresas: [], comPainel: {}, form: null, timer: null };
+const _ac = { aba: 'bombas', empresaId: null, icom: 1, estado: null, lidoEm: null, cmds: [], empresas: [], comPainel: {}, form: null, timer: null };
 
 async function moduloAutomacaoCfg() {
   const el = document.getElementById('conteudo');
@@ -98,7 +98,7 @@ function _acTimer(rapido) {
   if (_ac.timer) clearTimeout(_ac.timer);
   _ac.timer = setTimeout(() => {
     if (!_ac.el || !document.body.contains(_ac.el) || !document.getElementById('ac-root')) return;
-    if (_ac.form) { _acTimer(rapido); return; }
+    if (_ac.form || !['bombas', 'bicos', 'info'].includes(_ac.aba)) { _acTimer(rapido); return; }
     _acCarregar();
   }, rapido ? 3000 : 15000);
 }
@@ -154,11 +154,13 @@ function _acRender() {
       <div style="border:1px solid #2a2d3e;border-radius:0 8px 8px 8px;padding:6px;background:#0f1117">${grade}</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.74rem;color:#94a3b8;margin-top:6px">${['R', 'F', 'N'].map(k => [k, _AC_DIAG[k]]).map(([k, [t, c]]) => `<span><span style="display:inline-block;width:10px;height:10px;background:${c};border-radius:2px"></span> ${t}</span>`).join('')}<span>· lido ${_acHa(_ac.lidoEm)}</span></div>`;
   }
-  const hist = _ac.cmds.map(c => {
+  const hist = _ac.cmds.filter(c => !['ler_arquivo', 'ao_vivo', 'ler_agora'].includes(c.tipo)).map(c => {
     const st = _AC_CMD[c.status] || [c.status, '#ddd'];
     const p = c.parametros || {};
     const r = c.resultado || {};
     const desc = c.tipo === 'excluir_endereco' ? `Excluir bomba ${p.icom}${p.conector}${p.endereco}`
+      : c.tipo === 'cartao_gravar' ? `Gravar cartão ${p.codigo} (${p.controle === '04' ? 'cliente' : 'frentista'})`
+      : c.tipo === 'cartao_excluir' ? `Excluir cartão ${p.codigo}`
       : c.tipo === 'simular_abastecimento' ? `Simular abastecimento ${p.icom}${p.conector}${p.endereco}${r.bico ? ' (bico ' + r.bico + ')' : ''}`
       : c.tipo === 'gravar_endereco' && p.somente_idf ? `${(p.idf || {}).forma === '00' ? 'Desligar' : 'Ligar'} identificador ${p.icom}${p.conector}${p.endereco}`
       : c.tipo === 'gravar_endereco' ? `Gravar ${p.icom}${p.conector}${p.endereco}: ${_AC_MODELOS[p.tipo] || p.tipo}, bicos ${(p.bicos || []).filter(b => +b.numero).map(b => b.numero).join(' ')}` : c.tipo;
@@ -168,18 +170,25 @@ function _acRender() {
       ${c.status === 'pendente' ? `<button onclick="_acCancelar('${c.id}')" style="margin-top:4px;padding:4px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#f87171;cursor:pointer">Cancelar</button>` : ''}
     </div>`;
   }).join('');
-  el.innerHTML = `<div id="ac-root" style="max-width:1100px;padding:10px 6px">
+  // abas de ferramentas: só com o concentrador respondendo ao painel (senão vale o aviso do motivo)
+  const ferramentas = typeof _AF_ABAS !== 'undefined' && !_ac.semTabela && _ac.estado && !_ac.estado.erro;
+  if (!ferramentas) _ac.aba = 'bombas';
+  const naAba = ferramentas && _ac.aba !== 'bombas';
+  el.innerHTML = `<div id="ac-root" style="max-width:1200px;padding:10px 6px">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-      <h2 style="color:#f97316;margin:0">🔧 Automação — bombas</h2>
+      <h2 style="color:#f97316;margin:0">🔧 Automação</h2>
       <select onchange="_acTrocarPosto(this.value)" style="padding:8px;border-radius:8px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">${opts}</select>
       <button onclick="_acCarregar()" style="padding:8px 12px;border-radius:8px;border:1px solid #2a2d3e;background:#13151f;color:#ddd;cursor:pointer">↻</button>
     </div>
+    ${ferramentas ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0 6px;border-bottom:1px solid #2a2d3e">${_AF_ABAS.map(([k, t]) => `<button onclick="_acAba('${k}')" style="padding:8px 12px;border-radius:8px 8px 0 0;border:1px solid ${k === _ac.aba ? '#f97316' : '#2a2d3e'};border-bottom:none;background:${k === _ac.aba ? '#13151f' : '#0b0d14'};color:${k === _ac.aba ? '#f97316' : '#cbd5e1'};cursor:pointer;font-weight:700;font-size:0.84rem">${t}</button>`).join('')}</div>` : ''}
+    ${naAba ? '<div id="af-root"></div>' : `
     <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 8px">Configuração gravada no concentrador. Clique num endereço para configurar ou excluir a bomba. Só o master altera; o posto grava, relê e confere.</p>
     <div id="ac-form"></div>
     ${corpo}
     <h3 style="color:#e2e8f0;margin:16px 0 2px;font-size:1rem">Últimas alterações</h3>
-    <div>${hist || '<p style="color:#666;font-size:0.85rem">Nenhuma alteração pedida.</p>'}</div>
+    <div>${hist || '<p style="color:#666;font-size:0.85rem">Nenhuma alteração pedida.</p>'}</div>`}
   </div>`;
+  if (naAba) { _afRender(); return; }
   if (_ac.form) _acAbrir(_ac.form.con, _ac.form.end, true);
 }
 
@@ -198,7 +207,8 @@ function _acMotivo(e) {
     + (outros.length ? `<p style="color:#94a3b8;font-size:0.84rem">Com o painel ativo (● na lista): ${outros.map(x => `<button onclick="_acTrocarPosto('${x.id}')" style="padding:5px 10px;margin:2px;border-radius:6px;border:1px solid #f97316;background:#13151f;color:#fdba74;cursor:pointer">${_acEsc(x.nome_fantasia || x.nome)}</button>`).join('')}</p>` : '');
 }
 
-function _acTrocarPosto(id) { _ac.empresaId = id; _ac.form = null; _ac.icom = 1; _acCarregar(); }
+function _acTrocarPosto(id) { _ac.empresaId = id; _ac.form = null; _ac.icom = 1; if (typeof _afLimpar === 'function') _afLimpar(); _acCarregar(); }
+function _acAba(a) { _ac.aba = a; _ac.form = null; _acRender(); }
 function _acIcom(i) { _ac.icom = i; _ac.form = null; _acRender(); }
 
 function _acSel(id, opcoes, valor, onchange) {
@@ -239,8 +249,8 @@ function _acAbrir(con, end, manter) {
       <label>Casas decimais (total / volume / preço)<br>${_acNum('ac-ct', casas.total, 3)} ${_acNum('ac-cv', casas.volume, 3)} ${_acNum('ac-cp', casas.preco, 3)}</label>
     </div>
     <div style="color:#ccc;font-size:0.84rem;margin-bottom:4px">Bicos (0 = posição vazia)</div>
-    <div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:0.84rem;color:#ddd"><tr style="color:#94a3b8"><th style="padding:3px 8px">Posição</th><th>Bico</th><th>Tanque</th><th>Combustível</th></tr>
-      ${'ABCD'.split('').map((L, i) => `<tr><td style="padding:3px 8px">${L}</td><td>${_acNum('ac-b' + i, (bicos[i] || {}).numero, 99)}</td><td>${_acNum('ac-t' + i, (bicos[i] || {}).tanque, 99)}</td><td>${_acSel('ac-f' + i, _AC_COMB, String((bicos[i] || {}).combustivel || 0).padStart(2, '0'))}</td></tr>`).join('')}
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:0.84rem;color:#ddd"><tr style="color:#94a3b8"><th style="padding:3px 8px">Posição</th><th>Bico</th><th>Tanque</th><th>Combustível</th><th style="padding:3px 8px">Hexa</th></tr>
+      ${'ABCD'.split('').map((L, i) => `<tr><td style="padding:3px 8px">${L}</td><td>${_acNum('ac-b' + i, (bicos[i] || {}).numero, 99)}</td><td>${_acNum('ac-t' + i, (bicos[i] || {}).tanque, 99)}</td><td>${_acSel('ac-f' + i, _AC_COMB, String((bicos[i] || {}).combustivel || 0).padStart(2, '0'))}</td><td style="padding:3px 8px"><code style="color:#fdba74" title="código hexa do bico nesta posição (vai no cadastro do bico)">${typeof _afHexa === 'function' ? _afHexa(_ac.icom, con, end, i) : ''}</code></td></tr>`).join('')}
     </table></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:10px 0;font-size:0.84rem;color:#ccc">
       <label>Sensor Identfid<br>${_acSel('ac-sensor', _AC_SENSORES, (idf.sensor || '00').toUpperCase())}</label>
