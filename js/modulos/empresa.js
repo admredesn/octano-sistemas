@@ -503,8 +503,25 @@ async function uploadCertificado() {
   msg.textContent = '📤 Enviando...'; msg.style.color = '#888';
 
   const session = await getSession();
+  // 30/09/2026 (SEVEN BH): no formulário de EMPRESA NOVA o upload ia para a
+  // empresa ATIVA no seletor (o Florestal) e recarregava a página — o Florestal
+  // passou a assinar NFC-e com o certificado do SEVEN e o cadastro novo se perdia.
+  if (window._empNova === true) {
+    msg.textContent = 'Salve a empresa nova primeiro (botão 💾 Salvar empresa, no fim da página). Depois de salva, ela abre sozinha e aí você importa o certificado.';
+    msg.style.color = '#f44';
+    alert('Salve a empresa nova primeiro. O certificado só pode ser importado depois que ela existir — senão ele iria para a empresa que está selecionada no topo.');
+    return;
+  }
   const empresaId = (typeof empresaAtiva==='function') ? empresaAtiva() : null;
   if (!empresaId) { msg.textContent = 'Salve os dados da empresa primeiro.'; msg.style.color = '#f44'; return; }
+  // o CNPJ do certificado tem de ser o desta empresa (o titular vem como "RAZAO:CNPJ")
+  const cnpjEmp = ((document.getElementById('emp-cnpj') || {}).value || '').replace(/\D/g, '');
+  const cnpjCert = (String(certDados.cert_titular || '').match(/(\d{14})\s*$/) || [])[1] || '';
+  if (cnpjEmp && cnpjCert && cnpjEmp !== cnpjCert) {
+    msg.textContent = `Este certificado é do CNPJ ${cnpjCert}, mas a empresa aberta é ${cnpjEmp}. Nada foi enviado — confira a empresa selecionada no topo.`;
+    msg.style.color = '#f44';
+    return;
+  }
 
   const path = `certificados/${empresaId}/${certFile.name}`;
   const { error: upErr } = await sb.storage.from('octano-certs').upload(path, certFile, { upsert: true });

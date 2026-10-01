@@ -347,7 +347,11 @@ async function buscarCnpjPessoa() {
   try {
     const resp = await fetch(SEFAZ_URL + '/cnpj/' + cnpj);
     if (!resp.ok) {
-      if (msg) { msg.textContent = 'CNPJ não encontrado.'; msg.style.color = '#fbbf24'; }
+      if (msg) {
+        msg.textContent = resp.status === 404 ? 'CNPJ não encontrado.'
+          : 'As consultas de CNPJ não responderam agora — tente de novo em 1 minuto ou preencha à mão.';
+        msg.style.color = '#fbbf24';
+      }
       return;
     }
     const d = await resp.json();
@@ -362,7 +366,10 @@ async function buscarCnpjPessoa() {
     setVal('fpe-cidade', d.municipio);
     setVal('fpe-uf', d.uf);
     if (d.email) setVal('fpe-email', d.email);
-    if (msg) { msg.textContent = '✓ Dados preenchidos pela Receita.'; msg.style.color = '#4caf50'; }
+    // IE ativa no estado (vem da cnpj.ws quando a BrasilAPI cai) — só se vazia
+    const ieEl = document.getElementById('fpe-ie');
+    if (ieEl && !ieEl.value.trim() && d.inscricao_estadual) ieEl.value = d.inscricao_estadual;
+    if (msg) { msg.textContent = '✓ Dados preenchidos pela Receita' + (d._fonte ? ` (${d._fonte})` : '') + '.'; msg.style.color = '#4caf50'; }
   } catch (e) {
     if (msg) { msg.textContent = 'Erro ao consultar: ' + e.message; msg.style.color = '#f44'; }
   }
