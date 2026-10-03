@@ -15,14 +15,18 @@ function _fatData(v) {
   if (m) return m[3] + "/" + m[2] + "/" + m[1];
   return new Date(v).toLocaleDateString("pt-BR");
 }
-// prazo padrão da empresa (dias) — TecnoX define o vencimento no faturamento; aqui
-// estimamos por prazo padrão para mostrar vencimento/atraso do título em aberto.
+// prazo padrão da empresa (dias) — sugestão da 1ª parcela ao parcelar um título.
 function _fatPrazoDias() { return Number(window._fatPrazo || 30); }
+// Vencimento do TÍTULO = o DIA DA VENDA, como no TecnoX (pedido do Ronan,
+// 03/10/2026): o atraso conta desde o abastecimento. Antes era a venda + o prazo
+// padrão (30 dias) -- vencimento inventado, que o TecnoX não usa. O prazo de
+// pagamento de verdade é o da FATURA (gerada com o prazo do cliente).
+// Vencimento gravado no próprio título (parcela de título) continua valendo.
 function _fatVencDe(t) {
-  if (t && t.vencimento) return new Date(t.vencimento + "T00:00:00");
+  if (t && t.vencimento) return new Date(String(t.vencimento).slice(0, 10) + "T00:00:00");
   const base = t && (t.registrado_em || t.criado_em);
   if (!base) return null;
-  const d = new Date(base); d.setDate(d.getDate() + _fatPrazoDias());
+  const d = new Date(base); d.setHours(0, 0, 0, 0);
   return d;
 }
 function _fatAtrasoDias(venc) {
@@ -513,7 +517,9 @@ async function fatCobrar(clienteId) {
   const total = abertos.reduce((s, t) => s + Number(t.valor || 0), 0);
   const emp = (typeof PDV !== "undefined" && PDV.empresa && PDV.empresa.nome) || "Posto";
   const linhasTxt = abertos.map(t => {
-    const v = _fatVencDe(t); const a = _fatAtrasoDias(v);
+    // só título com vencimento próprio (parcela) fala em vencimento/atraso: os
+    // demais vencem no dia da compra e o "atraso" seria só a idade da nota
+    const v = t.vencimento ? _fatVencDe(t) : null, a = v ? _fatAtrasoDias(v) : 0;
     return `• ${_fatData(t.registrado_em)} — R$ ${_fatMoney(t.valor)}${v ? " (venc " + _fatData(v) + (a > 0 ? ", " + a + "d atraso" : "") + ")" : ""}`;
   }).join("\n");
   const msg = `Olá ${cli.nome || abertos[0].cliente_nome || ""}! 👋\n\n` +
