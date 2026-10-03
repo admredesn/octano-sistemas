@@ -1085,8 +1085,11 @@ function _fatBolCaixa(html) {
 
 // ---------- DETALHES DA FATURA (os títulos que a compõem, modelo TecnoX) ----------
 async function fatFaturaDetalhes(faturaId) {
+  // parcela: os títulos continuam na fatura original
+  const { data: fx } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+  const dona = fx && fx.parcela_de ? fx.parcela_de : faturaId;
   const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
-    .eq("empresa_id", window._fatEid).eq("fatura_id", faturaId).order("registrado_em");
+    .eq("empresa_id", window._fatEid).eq("fatura_id", dona).order("registrado_em");
   const titulos = ts || [];
   const tot = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
   const linhas = titulos.map(t => `<tr style="border-bottom:1px solid #1c2130">
@@ -1096,7 +1099,7 @@ async function fatFaturaDetalhes(faturaId) {
     <td style="padding:5px 7px;text-align:right;color:#fff">${_fatMoney(t.valor)}</td></tr>`).join("");
   _fatModal(`
     <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
-      <span>👁 Detalhes da Fatura — ${titulos.length} título(s)</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+      <span>👁 Detalhes da Fatura — ${titulos.length} título(s)${fx && fx.parcela_de ? ` · parcela ${fx.parcela_num}/${fx.parcela_total} (R$ ${_fatMoney(_fatLiquido(fx))})` : ""}</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
     <div style="padding:18px">
       <table style="width:100%;border-collapse:collapse;font-size:0.82rem;color:#cdd6e0">
         <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left"><th style="padding:6px 7px">Emissão</th><th style="padding:6px 7px">NFC-e</th><th style="padding:6px 7px">Forma</th><th style="padding:6px 7px;text-align:right">Valor</th></tr></thead>
@@ -2425,7 +2428,8 @@ function _fatVisiveisF() {
   const entre = (v, de, ate) => (!de || (v && v >= de)) && (!ate || (v && v <= ate));
   const liq = window._fatAba === "liquidadas";
   return lista.filter(f => {
-    if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "")).includes(termo)) return false;
+    if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "") +
+        (f.parcela_de ? " " + (f._origNum ?? "") + "/" + f.parcela_num : "")).includes(termo)) return false;
     if (F.cli && f.cliente_id !== F.cli) return false;
     if (!entre(_fatIsoLocal(f.emissao || f.criado_em), F.de, F.ate)) return false;
     if (!entre(_fatIsoLocal(f.vencimento), F.vde, F.vate)) return false;
@@ -2555,6 +2559,7 @@ async function fatLoteNf() {
     if (window._fatProg.cancelar) { _fatProgPasso(f.cliente_nome || "", "pulou", "cancelado"); continue; }
     _fatProgAgora(`${f.cliente_nome || ""} — fatura ${f.numero ?? ""}`);
     if (f.nfe_chave) { _fatProgPasso(f.cliente_nome || "", "pulou", "já tem NF-e"); continue; }
+    if (f.parcela_de) { _fatProgPasso(f.cliente_nome || "", "pulou", "parcela — a NF-e é da fatura original"); continue; }
     const { data: ts } = await sb.from("oct_pdv_notas_prazo").select("*")
       .eq("empresa_id", window._fatEid).eq("fatura_id", f.id);
     if (!ts || !ts.length) { _fatProgPasso(f.cliente_nome || "", "erro", "fatura sem títulos"); continue; }
@@ -2885,6 +2890,14 @@ async function _fatBuscarFaturas(status) {
       (rr.data || []).forEach(x => { recebidos[x.fatura_id] = (recebidos[x.fatura_id] || 0) + Number(x.valor || 0); });
     } catch (e) { /* tabela de recebimentos pode não existir */ }
   }
+  // parcela: o número da fatura original aparece junto ("39/2", como o TecnoX)
+  const origNum = {};
+  const origIds = [...new Set(faturas.map(f => f.parcela_de).filter(Boolean))];
+  if (origIds.length) {
+    const ro = await _fatPorLotes(origIds, l => sb.from("oct_faturas").select("id,numero").in("id", l));
+    (ro.data || []).forEach(o => { origNum[o.id] = o.numero; });
+  }
+  faturas.forEach(f => { if (f.parcela_de) f._origNum = origNum[f.parcela_de]; });
   return { faturas, bolPorFat, recebidos };
 }
 // a aba que mostra cada status: lista que chega para OUTRA aba só é guardada
@@ -2947,7 +2960,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   const linhas = faturas.map(fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
-    <td class="fat-td">${fatr.numero ?? "—"}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
+    <td class="fat-td">${fatr.numero ?? "—"}${fatr.parcela_de ? ` <span class="fat-parc" title="Parcela ${fatr.parcela_num} de ${fatr.parcela_total} da fatura ${fatr._origNum ?? ""}">${fatr._origNum ?? "?"}/${fatr.parcela_num}</span>` : ""}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
@@ -2959,13 +2972,15 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
       <button class="fat-abtn" style="background:#b45309" onclick="fatVerFatura('${fatr.id}')">📄 Fatura</button>
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
-      ${status === "aberta" ? `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
+      ${status !== "aberta" || rec[fatr.id] > 0 ? `<button class="fat-abtn" style="background:#475569" onclick="fatRecibo('${fatr.id}')" title="Recibo do que foi pago">📃 Recibo</button>` : ""}
+      ${status === "aberta" ? `${fatr.parcela_de ? "" : `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
+      <button class="fat-abtn" style="background:#6d28d9" onclick="fatParcelarFatura('${fatr.id}')" title="Dividir em parcelas: cada uma vira uma fatura com vencimento próprio">🔀 Parcelar</button>`}
       <button class="fat-abtn" style="background:#334155" onclick="fatBoleto('${fatr.id}')">🏦 Boleto</button>
       <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>
       <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarFatura('${fatr.id}')">✏ Editar</button>
       <button class="fat-abtn" style="background:#15803d" onclick="fatEnviar('${fatr.id}')">📤 Enviar</button>` : ""}
       <button class="fat-abtn" style="background:#7f1d1d" onclick="fatExcluirFatura('${fatr.id}')"
-        title="${status === "aberta" ? "Excluir a fatura: os títulos voltam para Títulos em Aberto" : "Excluir a liquidação: a fatura volta para Faturas em Aberto"}">🗑 Excluir</button>
+        title="${status !== "aberta" ? "Excluir a liquidação: a fatura volta para Faturas em Aberto" : fatr.parcela_de ? "Desfazer o parcelamento: a fatura original volta inteira" : "Excluir a fatura: os títulos voltam para Títulos em Aberto"}">🗑 Excluir</button>
     </td>
   </tr>`).join("");
   corpo.innerHTML = `
@@ -3204,6 +3219,8 @@ async function fatExcluirFatura(id) {
     _fatRecarregar();
     return;
   }
+  // parcela em aberto: voltar um passo é desfazer o parcelamento inteiro
+  if (f.parcela_de && f.status === "aberta") { fatDesfazerParcelas(f.parcela_de); return; }
   const liquidada = f.status === "liquidada";
   window._fatExc = { id, status: f.status };
   const travas = _fatExcluirTravas(d);
@@ -3351,6 +3368,420 @@ async function fatExcluirFaturaOk(id) {
   _fatRecarregar();
 }
 
+// ---------- PARCELAR FATURA (03/10/2026) — o "Parcelar" do TecnoX ----------
+// Cada parcela vira uma fatura PRÓPRIA (número novo da série, boleto, envio e
+// recebimento próprios) que aponta para a original em parcela_de -- como o
+// TecnoX, que transforma a 258741 em "258741/1", "258741/2". A original fica
+// 'parcelada': sai das abas e continua dona dos títulos (o extrato/PDF e os
+// Detalhes da parcela mostram os títulos dela). Parcela o SALDO (líquido menos
+// o que já foi recebido). Travas iguais às do Excluir: boleto vivo ou pago no
+// Sicoob -- o boleto do valor inteiro continuaria valendo ao lado das parcelas.
+function _fatSomaMeses(iso, meses) {
+  const [a, m, d] = String(iso).split("-").map(Number);
+  const alvo = new Date(a, m - 1 + meses, 1);
+  const ult = new Date(alvo.getFullYear(), alvo.getMonth() + 1, 0).getDate();   // 31/01 + 1 mês = 28 ou 29/02
+  alvo.setDate(Math.min(d, ult));
+  return _fatIsoLocal(alvo);
+}
+
+async function fatParcelarFatura(id) {
+  if (!podeOuAvisa('faturar.parcelar')) return;
+  _fatModal(`<div style="padding:24px;color:#9aa">Conferindo a fatura...</div>`);
+  const d = await _fatExcluirDados(id);           // fatura + boletos + recebimentos
+  if (d.erro) { _fatFechaModal(); alert(d.erro); return; }
+  const f = d.f;
+  if (!("parcela_de" in f)) { _fatFechaModal(); alert("Falta rodar repo/sql/SQL-FATURA-PARCELAS.sql no Supabase."); return; }
+  if (f.status !== "aberta") { _fatFechaModal(); alert(`Só fatura em aberto se parcela (esta está "${f.status}").`); _fatRecarregar(); return; }
+  if (f.parcela_de) {
+    _fatFechaModal();
+    alert("Esta fatura já é uma parcela. Para parcelar de outro jeito, desfaça o parcelamento (🗑 Excluir na parcela) e parcele a original de novo.");
+    return;
+  }
+  const recebido = d.receb.reduce((a, r) => a + Number(r.valor || 0), 0);
+  const saldo = +(_fatLiquido(f) - recebido).toFixed(2);
+  const travas = [];
+  d.boletos.filter(b => b.status === "registrado" || b.status === "pendente").forEach(b => travas.push(b.status === "pendente"
+    ? "O boleto desta fatura está sendo registrado no Sicoob agora. Espere o registro, baixe o boleto no banco e parcele depois."
+    : `O boleto <b>${_fatEsc(b.nosso_numero || "")}</b> (${_fatBRL(b.valor)}) está <b>registrado no Sicoob</b> com o valor inteiro.
+       Baixe esse boleto no Sicoob antes de parcelar — cada parcela terá o seu. O Octano confere o banco de hora em hora.`));
+  if (d.boletos.some(b => b.status === "liquidado") || d.receb.some(r => r.boleto_id)) {
+    travas.push("O Sicoob já confirmou pagamento de boleto desta fatura.");
+  }
+  if (saldo <= 0.005) travas.push("Esta fatura não tem saldo a parcelar.");
+  window._fatParc = { id, f, saldo };
+  const venc0 = f.vencimento ? String(f.vencimento).slice(0, 10) : _fatHojeIso();
+  const sel = (id2, ops, fn) => `<select id="${id2}" onchange="${fn}" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">${ops}</select>`;
+  _fatModal(`
+    <div style="background:#13151f;color:#c4b5fd;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🔀 Parcelar a fatura Nº ${f.numero ?? ""} — ${_fatEsc(f.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:16px 18px;color:#cdd6e0">
+      <div style="background:#13151f;border-radius:8px;padding:10px 12px;font-size:0.84rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <span>Saldo a parcelar: <b style="color:#f59e0b;font-size:1.05rem">${_fatBRL(saldo)}</b></span>
+        ${recebido > 0 ? `<span style="color:#9aa">já recebido ${_fatBRL(recebido)} de ${_fatBRL(_fatLiquido(f))}</span>` : ""}</div>
+      ${travas.map(t => `<div style="margin-top:10px;background:#2a1215;border:1px solid #7f1d1d;border-radius:8px;padding:10px 12px;font-size:0.8rem;color:#fecaca;line-height:1.45">⛔ ${t}</div>`).join("")}
+      ${travas.length ? `<div style="display:flex;gap:8px;margin-top:14px"><button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Fechar</button></div>` : `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px">
+        <div><label style="color:#9aa;font-size:0.74rem">Parcelas</label>
+          ${sel("fpa-n", [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `<option value="${n}">${n}x</option>`).join(""), "_fatParcMontar()")}</div>
+        <div><label style="color:#9aa;font-size:0.74rem">1º vencimento</label>
+          <input type="date" id="fpa-venc1" value="${venc0}" onchange="_fatParcMontar()"
+            style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Intervalo</label>
+          ${sel("fpa-int", `<option value="m">mensal (mesmo dia)</option><option value="7">a cada 7 dias</option><option value="10">a cada 10 dias</option>
+            <option value="15">a cada 15 dias</option><option value="30">a cada 30 dias</option>`, "_fatParcMontar()")}</div>
+      </div>
+      <div id="fpa-tab" style="margin-top:12px"></div>
+      <div id="fpa-soma" style="font-size:0.8rem;margin-top:6px"></div>
+      <p style="color:#889;font-size:0.76rem;margin:10px 0 0;line-height:1.45">Cada parcela vira uma fatura (número novo) em Faturas em Aberto, com o
+        PDF já pedido. A fatura Nº ${f.numero ?? ""} sai da lista e continua dona dos títulos. Para os boletos, marque as parcelas
+        e use <b>🏦 Gerar boletos</b> no rodapé.</p>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Observação <span style="color:#667">(opcional — fica no histórico)</span></label>
+      <input id="fpa-obs" placeholder="ex.: cliente pediu em 3x" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      <div id="fpa-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button id="fpa-ok" class="fat-btn" style="flex:2;background:#6d28d9;border-color:#6d28d9;color:#fff;font-weight:700"
+          onclick="fatParcelarOk('${id}')">🔀 Parcelar</button></div>`}
+    </div>`);
+  if (!travas.length) _fatParcMontar();
+}
+
+// recalcula a tabela (valores iguais; o último absorve o centavo que sobra)
+function _fatParcMontar() {
+  const st = window._fatParc; if (!st) return;
+  const n = Number(document.getElementById("fpa-n")?.value || 2);
+  const v1 = document.getElementById("fpa-venc1")?.value || _fatHojeIso();
+  const int = document.getElementById("fpa-int")?.value || "m";
+  const cent = Math.round(st.saldo * 100), base = Math.floor(cent / n);
+  const linhas = [];
+  for (let k = 1; k <= n; k++) {
+    const venc = int === "m" ? _fatSomaMeses(v1, k - 1) : _fatSomaDias(v1, Number(int) * (k - 1));
+    const v = (k < n ? base : cent - base * (n - 1)) / 100;
+    linhas.push(`<tr><td style="padding:4px 6px;color:#9aa">${k}/${n}</td>
+      <td style="padding:4px 6px"><input type="date" id="fpa-dt${k}" value="${venc}"
+        style="padding:6px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></td>
+      <td style="padding:4px 6px;text-align:right"><input type="number" step="0.01" min="0" id="fpa-val${k}" value="${v.toFixed(2)}" oninput="_fatParcSoma()"
+        style="width:120px;padding:6px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#4ade80;font-weight:700;text-align:right"></td></tr>`);
+  }
+  document.getElementById("fpa-tab").innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+    <thead><tr style="color:#9fb0c4;text-align:left"><th style="padding:4px 6px">Parcela</th><th style="padding:4px 6px">Vencimento</th>
+      <th style="padding:4px 6px;text-align:right">Valor (R$)</th></tr></thead><tbody>${linhas.join("")}</tbody></table>`;
+  _fatParcSoma();
+}
+function _fatParcLer() {
+  const n = Number(document.getElementById("fpa-n")?.value || 0), out = [];
+  for (let k = 1; k <= n; k++) {
+    out.push({ k, venc: document.getElementById("fpa-dt" + k)?.value || "",
+               valor: +Number(document.getElementById("fpa-val" + k)?.value || 0).toFixed(2) });
+  }
+  return out;
+}
+function _fatParcSoma() {
+  const st = window._fatParc, el = document.getElementById("fpa-soma");
+  if (!st || !el) return;
+  const soma = _fatParcLer().reduce((a, x) => a + x.valor, 0);
+  const dif = +(st.saldo - soma).toFixed(2);
+  el.innerHTML = Math.abs(dif) < 0.005
+    ? `<span style="color:#4ade80">Soma das parcelas: ${_fatBRL(soma)} ✓</span>`
+    : `<span style="color:#f87171">Soma das parcelas: ${_fatBRL(soma)} — ${dif > 0 ? "faltam" : "sobram"} ${_fatBRL(Math.abs(dif))}</span>`;
+}
+
+async function fatParcelarOk(id) {
+  if (!podeOuAvisa('faturar.parcelar')) return;
+  const st = window._fatParc; if (!st || st.id !== id) return;
+  const msg = document.getElementById("fpa-msg"), btn = document.getElementById("fpa-ok");
+  const erro = t => { msg.style.color = "#f87171"; msg.textContent = t; btn.disabled = false; };
+  const parcelas = _fatParcLer();
+  if (parcelas.some(p => !p.venc)) return erro("Informe o vencimento de todas as parcelas.");
+  if (parcelas.some(p => !(p.valor > 0))) return erro("Toda parcela precisa ter valor.");
+  const soma = parcelas.reduce((a, x) => a + x.valor, 0);
+  if (Math.abs(st.saldo - soma) >= 0.005) return erro(`A soma das parcelas (${_fatBRL(soma)}) tem de ser o saldo (${_fatBRL(st.saldo)}).`);
+  if (parcelas.some(p => p.venc < _fatHojeIso()) && !confirm("Há parcela com vencimento anterior a hoje — ela nasce vencida. Parcelar assim mesmo?")) return;
+  btn.disabled = true; msg.style.color = "#9aa"; msg.textContent = "Parcelando...";
+
+  // confere de novo: entre abrir e confirmar, o banco pode ter pago o boleto
+  const d = await _fatExcluirDados(id);
+  if (d.erro) return erro(d.erro);
+  const f = d.f;
+  if (f.status !== "aberta" || f.parcela_de) return erro("A fatura mudou enquanto a janela estava aberta. Feche e confira.");
+  if (d.boletos.some(b => ["registrado", "pendente", "liquidado"].includes(b.status))) return erro("Apareceu boleto vivo/pago nesta fatura. Feche e confira.");
+  const rec = d.receb.reduce((a, r) => a + Number(r.valor || 0), 0);
+  if (Math.abs(+(_fatLiquido(f) - rec).toFixed(2) - st.saldo) >= 0.005) return erro("O saldo mudou (entrou recebimento). Feche e abra de novo.");
+
+  const quem = await _fatUsuario(), agora = new Date();
+  const obs = (document.getElementById("fpa-obs")?.value || "").trim();
+  // a NF-e anexada vale para o todo: as parcelas levam a mesma (o envio anexa)
+  const nfe = {};
+  ["nfe_chave", "nfe_numero", "nfe_serie", "nfe_emissao", "nfe_valor", "nfe_origem", "nfe_xml_path", "nfe_pdf_path"]
+    .forEach(c => { if (f[c] != null) nfe[c] = f[c]; });
+  const criadas = [];
+  const desfaz = async () => {
+    if (!criadas.length) return;
+    const ids = criadas.map(c => c.id);
+    const r = await sb.from("oct_faturas").delete().in("id", ids).select("id");
+    if (r.error || (r.data || []).length < ids.length) {
+      await sb.from("oct_faturas").update({ status: "cancelada", observacoes: "Parcela desfeita: o parcelamento falhou no meio" }).in("id", ids);
+    }
+  };
+  for (const p of parcelas) {
+    const base = {
+      empresa_id: f.empresa_id, cliente_id: f.cliente_id, cliente_nome: f.cliente_nome || null,
+      valor: p.valor, vencimento: p.venc, status: "aberta",
+      parcela_de: f.id, parcela_num: p.k, parcela_total: parcelas.length,
+      observacao: `Parcela ${p.k}/${parcelas.length} da fatura ${f.numero ?? ""}`,
+      alterado_por: quem, alterado_em: agora.toISOString(),
+      fatura_pdf_pedido_em: agora.toISOString(),          // o PDF da parcela já nasce pedido
+      ...nfe,
+    };
+    let nova = null, ultimoErro = null;
+    for (let tent = 0; tent < 4 && !nova; tent++) {
+      const numero = await _fatProximoNumero();
+      const r = await sb.from("oct_faturas").insert({ ...base, numero }).select("id,numero").single();
+      if (!r.error) { nova = r.data; break; }
+      ultimoErro = r.error;
+      if (String(r.error.code) !== "23505") break;          // 23505 = número pego por outro; tenta o próximo
+    }
+    if (!nova) {
+      await desfaz();
+      return erro("Não consegui criar a parcela " + p.k + ": " + (ultimoErro?.message || "erro") + ". Nada foi alterado.");
+    }
+    criadas.push(nova);
+  }
+  const quando = agora.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const linha = `[${quando}] Parcelada em ${parcelas.length}x por ${quem}` + (obs ? ` (${obs})` : "") + ": faturas " +
+    criadas.map((c, i) => `${c.numero} (${_fatData(parcelas[i].venc)} R$ ${_fatMoney(parcelas[i].valor)})`).join(", ") + ".";
+  const r2 = await sb.from("oct_faturas").update({
+    status: "parcelada", auto_enviar: false, envio_pedido_em: null,
+    observacoes: (f.observacoes ? f.observacoes + "\n" : "") + linha, alterado_por: quem, alterado_em: agora.toISOString(),
+  }).eq("id", f.id).eq("status", "aberta").select("id");
+  if (r2.error || !(r2.data || []).length) {
+    await desfaz();
+    return erro("Não consegui marcar a fatura como parcelada" + (r2.error ? ": " + r2.error.message : "") +
+      (/parcelada|check|violates/i.test(r2.error?.message || "") ? " — rode repo/sql/SQL-FATURA-PARCELAS.sql." : ". Nada foi alterado."));
+  }
+  _fatFechaModal();
+  alert(`Fatura ${f.numero ?? ""} parcelada em ${parcelas.length}x: faturas ${criadas.map(c => c.numero).join(", ")}.\n\n` +
+        "Para os boletos: marque as parcelas e use 🏦 Gerar boletos no rodapé.");
+  _fatRecarregar();
+}
+
+// ---------- DESFAZER O PARCELAMENTO (🗑 Excluir numa parcela em aberto) ----------
+// Voltar um passo de uma parcela é voltar a fatura original inteira. Só antes de
+// qualquer dinheiro: parcela liquidada, recebimento ou boleto vivo/pago travam.
+async function _fatParcDados(origId) {
+  const { data: orig } = await sb.from("oct_faturas").select("*").eq("id", origId).maybeSingle();
+  const { data: todas } = await sb.from("oct_faturas").select("*").eq("parcela_de", origId).order("parcela_num");
+  const parcelas = (todas || []).filter(x => x.status !== "cancelada");
+  const ids = parcelas.map(x => x.id);
+  const bol = ids.length ? await _fatPorLotes(ids, l => sb.from("oct_boletos").select("fatura_id,nosso_numero,status,valor").in("fatura_id", l)) : { data: [] };
+  const rec = ids.length ? await _fatPorLotes(ids, l => sb.from("oct_recebimentos_titulo").select("id,fatura_id,valor").in("fatura_id", l)) : { data: [] };
+  const travas = [];
+  parcelas.forEach(x => {
+    const tag = `parcela ${x.parcela_num}/${x.parcela_total} (fatura ${x.numero ?? ""})`;
+    if (x.status === "liquidada") travas.push(`A ${tag} já foi liquidada — exclua a liquidação dela antes.`);
+    else if ((rec.data || []).some(r => r.fatura_id === x.id)) travas.push(`A ${tag} tem recebimento lançado — exclua-o antes.`);
+    (bol.data || []).filter(b => b.fatura_id === x.id).forEach(b => {
+      if (b.status === "registrado" || b.status === "pendente") travas.push(`O boleto ${_fatEsc(b.nosso_numero || "")} da ${tag} está no Sicoob — baixe-o no banco antes.`);
+      if (b.status === "liquidado") travas.push(`O boleto ${_fatEsc(b.nosso_numero || "")} da ${tag} já foi pago no banco.`);
+    });
+  });
+  return { orig, parcelas, travas };
+}
+
+async function fatDesfazerParcelas(origId) {
+  if (!podeOuAvisa('faturar.excluir_fatura')) return;
+  _fatModal(`<div style="padding:24px;color:#9aa">Conferindo as parcelas...</div>`);
+  const d = await _fatParcDados(origId);
+  if (!d.orig) { _fatFechaModal(); alert("Fatura original não encontrada."); return; }
+  const o = d.orig;
+  _fatModal(`
+    <div style="background:#13151f;color:#f87171;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🗑 Desfazer o parcelamento — fatura Nº ${o.numero ?? ""} · ${_fatEsc(o.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:16px 18px;color:#cdd6e0">
+      ${d.travas.length ? `<div style="font-size:0.84rem;color:#fecaca">O parcelamento não pode ser desfeito agora:</div>` + d.travas.map(t =>
+        `<div style="margin-top:10px;background:#2a1215;border:1px solid #7f1d1d;border-radius:8px;padding:10px 12px;font-size:0.8rem;color:#fecaca">⛔ ${t}</div>`).join("") : `
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 12px;font-size:0.8rem;line-height:1.5">
+        As ${d.parcelas.length} parcelas abaixo são <b>canceladas</b> e a fatura <b>Nº ${o.numero ?? ""}</b> volta inteira para
+        Faturas em Aberto (${_fatBRL(_fatLiquido(o))}, vencimento ${_fatData(o.vencimento)}).<br>
+        ${d.parcelas.map(x => `Nº ${x.numero ?? ""} · ${x.parcela_num}/${x.parcela_total} · vence ${_fatData(x.vencimento)} · <b>${_fatBRL(_fatLiquido(x))}</b>`).join("<br>")}</div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:14px">Motivo <span style="color:#667">(obrigatório — fica no histórico)</span></label>
+      <input id="fdp-motivo" placeholder="ex.: cliente vai pagar à vista" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      <div id="fdp-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>`}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">${d.travas.length ? "Fechar" : "Cancelar"}</button>
+        ${d.travas.length ? "" : `<button id="fdp-ok" class="fat-btn" style="flex:2;background:#991b1b;border-color:#991b1b;color:#fff;font-weight:700"
+          onclick="fatDesfazerParcelasOk('${origId}')">🗑 Desfazer parcelamento</button>`}</div>
+    </div>`);
+  document.getElementById("fdp-motivo")?.focus();
+}
+
+async function fatDesfazerParcelasOk(origId) {
+  if (!podeOuAvisa('faturar.excluir_fatura')) return;
+  const msg = document.getElementById("fdp-msg"), btn = document.getElementById("fdp-ok");
+  const erro = t => { msg.style.color = "#f87171"; msg.textContent = t; btn.disabled = false; };
+  const motivo = (document.getElementById("fdp-motivo")?.value || "").trim();
+  if (!motivo) return erro("Escreva o motivo — fica registrado.");
+  btn.disabled = true; msg.style.color = "#9aa"; msg.textContent = "Desfazendo...";
+  const d = await _fatParcDados(origId);
+  if (!d.orig || d.orig.status !== "parcelada") return erro("A fatura original mudou. Feche e confira.");
+  if (d.travas.length) return erro("Apareceu uma trava agora (ex.: recebimento ou boleto). Feche e abra de novo.");
+  const quem = await _fatUsuario(), agora = new Date();
+  const quando = agora.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const ids = d.parcelas.map(x => x.id);
+  const o = d.orig;
+  // 1) a original volta (só se ainda parcelada)
+  const r1 = await sb.from("oct_faturas").update({
+    status: "aberta", alterado_por: quem, alterado_em: agora.toISOString(),
+    observacoes: (o.observacoes ? o.observacoes + "\n" : "") + `[${quando}] Parcelamento desfeito por ${quem}: ${motivo}. Parcelas canceladas: ${d.parcelas.map(x => x.numero).join(", ")}.`,
+  }).eq("id", o.id).eq("status", "parcelada").select("id");
+  if (r1.error || !(r1.data || []).length) return erro("Não consegui reabrir a fatura original: " + (r1.error?.message || "ela mudou de status"));
+  // 2) as parcelas saem; falhou = a original volta a parcelada
+  if (ids.length) {
+    const r2 = await sb.from("oct_faturas").update({
+      status: "cancelada", auto_enviar: false, envio_pedido_em: null, fatura_pdf_pedido_em: null,
+      alterado_por: quem, alterado_em: agora.toISOString(),
+      observacoes: `[${quando}] Cancelada: parcelamento da fatura ${o.numero ?? ""} desfeito por ${quem} (${motivo}).`,
+    }).in("id", ids).eq("status", "aberta").select("id");
+    if (r2.error || (r2.data || []).length < ids.length) {
+      if (!(r2.data || []).length) {
+        await sb.from("oct_faturas").update({ status: "parcelada", observacoes: o.observacoes }).eq("id", o.id);
+        return erro("Não consegui cancelar as parcelas" + (r2.error ? ": " + r2.error.message : "") + ". Nada foi alterado.");
+      }
+    }
+  }
+  _fatFechaModal();
+  alert(`Parcelamento desfeito. A fatura ${o.numero ?? ""} voltou inteira para Faturas em Aberto.`);
+  _fatRecarregar();
+}
+
+// ---------- RECIBO (03/10/2026) — o "Recibo" do TecnoX ----------
+// Recibo de pagamento da fatura para imprimir/entregar ao cliente: emitente,
+// pagador, valor por extenso, o que foi pago (data/forma) e as notas a que se
+// refere. Abre numa janela própria (a janela abre NO CLIQUE -- depois de esperar
+// o banco o navegador bloquearia como pop-up) e se imprime pelo navegador.
+const _FAT_UNI = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze",
+  "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+const _FAT_DEZ = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+const _FAT_CEM = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+function _fatAte999(n) {
+  if (!n) return "";
+  if (n === 100) return "cem";
+  const c = Math.floor(n / 100), r = n % 100, d = Math.floor(r / 10), u = r % 10, p = [];
+  if (c) p.push(_FAT_CEM[c]);
+  if (r > 0 && r < 20) p.push(_FAT_UNI[r]);
+  else { if (d) p.push(_FAT_DEZ[d]); if (u) p.push(_FAT_UNI[u]); }
+  return p.join(" e ");
+}
+function _fatExtenso(valor) {
+  const tot = Math.round(Number(valor || 0) * 100), inteiro = Math.floor(tot / 100), cent = tot % 100;
+  const mi = Math.floor(inteiro / 1e6), mil = Math.floor((inteiro % 1e6) / 1000), res = inteiro % 1000, g = [];
+  if (mi) g.push([mi, `${_fatAte999(mi)} ${mi === 1 ? "milhão" : "milhões"}`]);
+  if (mil) g.push([mil, mil === 1 ? "mil" : `${_fatAte999(mil)} mil`]);
+  if (res) g.push([res, _fatAte999(res)]);
+  // "treze mil seiscentos e cinquenta" -- o "e" entre os grupos só entra antes do
+  // último quando ele é menor que cem ou centena redonda ("mil e cem", "mil e vinte")
+  const ext = g.map(([n, txt], i) => (i === 0 ? "" : (i === g.length - 1 && (n < 100 || n % 100 === 0)) ? " e " : " ") + txt).join("");
+  let t = inteiro ? ext + (inteiro === 1 ? " real" : (!res && !mil && mi ? " de reais" : " reais")) : "";
+  if (cent) t += (t ? " e " : "") + _fatAte999(cent) + (cent === 1 ? " centavo" : " centavos");
+  return t || "zero real";
+}
+function _fatDataExtenso(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(_fatIsoLocal(iso) || "");
+  if (!m) return "";
+  const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  return `${Number(m[3])} de ${meses[Number(m[2]) - 1]} de ${m[1]}`;
+}
+
+async function fatRecibo(id) {
+  if (!podeOuAvisa('faturar.imprimir')) return;
+  const w = window.open("", "_blank", "width=860,height=940");
+  if (!w) { alert("O navegador bloqueou a janela do recibo. Libere pop-ups para o Octano e tente de novo."); return; }
+  w.document.write("<p style='font-family:Arial,sans-serif;padding:24px;color:#555'>Montando o recibo...</p>");
+  try {
+    const { data: f } = await sb.from("oct_faturas").select("*").eq("id", id).maybeSingle();
+    if (!f) throw new Error("fatura não encontrada");
+    const dona = f.parcela_de || f.id;
+    const [emp, cli, rec, tit, orig] = await Promise.all([
+      sb.from("oct_empresas").select("*").eq("id", f.empresa_id).maybeSingle(),
+      f.cliente_id ? sb.from("oct_pessoas").select("*").eq("id", f.cliente_id).maybeSingle() : Promise.resolve({ data: null }),
+      sb.from("oct_recebimentos_titulo").select("*").eq("fatura_id", id).order("data_recebimento").order("id"),
+      _fatTodas(() => sb.from("oct_pdv_notas_prazo").select("id,numero_nfe,registrado_em,valor")
+        .eq("fatura_id", dona).order("registrado_em").order("id")),
+      f.parcela_de ? sb.from("oct_faturas").select("numero").eq("id", f.parcela_de).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+    const html = _fatReciboHtml(f, emp.data || {}, cli.data || {}, rec.data || [], tit.data || [], orig.data);
+    w.document.open(); w.document.write(html); w.document.close();
+  } catch (e) {
+    w.document.body.innerHTML = `<p style="font-family:Arial,sans-serif;padding:24px;color:#b00">Erro ao montar o recibo: ${_fatEsc(e.message || e)}</p>`;
+  }
+}
+
+function _fatReciboHtml(f, emp, cli, recs, titulos, orig) {
+  const e = _fatEsc, liq = _fatLiquido(f);
+  const pago = recs.length ? +recs.reduce((a, r) => a + Number(r.valor || 0) + Number(r.juros || 0) - Number(r.desconto || 0), 0).toFixed(2) : liq;
+  const principal = recs.length ? recs.reduce((a, r) => a + Number(r.valor || 0), 0) : liq;
+  const saldo = +(liq - principal).toFixed(2);
+  const ultData = recs.length ? recs[recs.length - 1].data_recebimento : (f.liquidado_em || _fatHojeIso());
+  const num = `${f.numero ?? ""}${f.parcela_de ? ` (parcela ${f.parcela_num}/${f.parcela_total} da fatura ${orig?.numero ?? ""})` : ""}`;
+  const datas = titulos.map(t => _fatIsoLocal(t.registrado_em)).filter(Boolean).sort();
+  const periodo = datas.length ? (datas[0] === datas[datas.length - 1] ? `de ${_fatData(datas[0])}` : `de ${_fatData(datas[0])} a ${_fatData(datas[datas.length - 1])}`) : "";
+  const doc = cli.documento || cli.cnpj || cli.cpf || "";
+  const end = [emp.endereco, emp.numero].filter(Boolean).join(", ");
+  const cid = [emp.cidade, emp.uf].filter(Boolean).join("/");
+  const pagLinhas = recs.map(r => `<tr><td>${_fatData(r.data_recebimento)}</td><td>${e(r.forma || "—")}</td>
+      <td class="r">${_fatMoney(r.valor)}</td><td class="r">${Number(r.juros || 0) ? _fatMoney(r.juros) : "—"}</td>
+      <td class="r">${Number(r.desconto || 0) ? _fatMoney(r.desconto) : "—"}</td>
+      <td class="r"><b>${_fatMoney(Number(r.valor || 0) + Number(r.juros || 0) - Number(r.desconto || 0))}</b></td></tr>`).join("");
+  const notas = titulos.map(t => `${t.numero_nfe ? "Cupom " + e(t.numero_nfe) : "Nota"} (${_fatData(t.registrado_em)}) R$ ${_fatMoney(t.valor)}`).join(" · ");
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo — Fatura ${e(String(f.numero ?? ""))}</title>
+<style>
+  @page { size: A4; margin: 12mm }
+  :root { color-scheme: light }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111; background: #fff; margin: 0 }
+  .barra { padding: 10px 16px; background: #f1f1f1; border-bottom: 1px solid #ccc; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #555 }
+  .barra button { font-size: 14px; padding: 7px 16px; cursor: pointer }
+  .rec { border: 1.5px solid #111; padding: 18px 22px; max-width: 178mm; margin: 14px auto }
+  h1 { font-size: 22px; letter-spacing: 8px; text-align: center; margin: 0 0 12px }
+  .topo { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; border-bottom: 1px solid #111; padding-bottom: 10px; margin-bottom: 12px }
+  .emit { font-size: 11.5px; line-height: 1.45 } .emit b { font-size: 14px }
+  .caixa { text-align: right } .valor { border: 1.5px solid #111; padding: 6px 14px; font-size: 19px; font-weight: bold; white-space: nowrap; display: inline-block }
+  .num { font-size: 11px; margin-top: 5px }
+  p.corpo { font-size: 13.5px; line-height: 1.85; text-align: justify; margin: 10px 0 }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin: 6px 0 10px }
+  th, td { border: 1px solid #999; padding: 4px 7px } th { background: #eee; text-align: left } .r { text-align: right }
+  .notas { font-size: 10.5px; color: #333; line-height: 1.5; margin: 4px 0 10px }
+  .local { margin-top: 16px; font-size: 13.5px; text-align: right }
+  .ass { margin: 48px auto 0; width: 68%; border-top: 1px solid #111; text-align: center; font-size: 12px; padding-top: 5px; line-height: 1.4 }
+  .rodape { font-size: 9px; color: #777; text-align: center; margin-top: 16px }
+  @media print { .barra { display: none } .rec { margin: 0 auto } }
+</style></head><body>
+<div class="barra"><span>Recibo da fatura ${e(String(f.numero ?? ""))} — confira e imprima</span><button onclick="window.print()">🖨 Imprimir</button></div>
+<div class="rec">
+  <h1>RECIBO</h1>
+  <div class="topo">
+    <div class="emit"><b>${e(emp.nome || emp.razao_social || "")}</b><br>${emp.cnpj ? "CNPJ " + e(emp.cnpj) + "<br>" : ""}${e(end)}${cid ? " — " + e(cid) : ""}${emp.cep ? " · CEP " + e(emp.cep) : ""}</div>
+    <div class="caixa"><div class="valor">R$ ${_fatMoney(pago)}</div><div class="num">Fatura nº ${e(num)}</div></div>
+  </div>
+  <p class="corpo">Recebemos de <b>${e(cli.nome || f.cliente_nome || "")}</b>${doc ? ", CPF/CNPJ " + e(doc) : ""}, a importância de
+    <b>R$ ${_fatMoney(pago)}</b> (${e(_fatExtenso(pago))}), referente ${saldo > 0.005 ? "a pagamento parcial" : "ao pagamento"} da
+    <b>fatura nº ${e(num)}</b>, emitida em ${_fatData(f.emissao || f.criado_em)} com vencimento em ${_fatData(f.vencimento)},
+    correspondente a ${titulos.length} nota(s) de venda a prazo ${periodo}.</p>
+  ${recs.length ? `<table><thead><tr><th>Data</th><th>Forma</th><th class="r">Valor</th><th class="r">Juros/multa</th><th class="r">Desconto</th><th class="r">Total pago</th></tr></thead>
+    <tbody>${pagLinhas}</tbody></table>` : `<p class="corpo">Forma: ${e(f.forma_liquidacao || "—")} · liquidada em ${_fatData(f.liquidado_em)}.</p>`}
+  ${notas ? `<div class="notas"><b>Notas:</b> ${notas}</div>` : ""}
+  <p class="corpo">${saldo > 0.005
+    ? `Fica em aberto o saldo de <b>R$ ${_fatMoney(saldo)}</b> desta fatura.`
+    : `Para clareza, firmamos o presente, dando plena quitação ${f.parcela_de ? "desta parcela" : "desta fatura"}.`}</p>
+  <div class="local">${e(emp.cidade || "")}${emp.cidade ? ", " : ""}${_fatDataExtenso(ultData)}.</div>
+  <div class="ass">${e(emp.nome || emp.razao_social || "")}${emp.cnpj ? "<br>CNPJ " + e(emp.cnpj) : ""}</div>
+  <div class="rodape">Documento gerado pelo Octano Sistemas em ${new Date().toLocaleString("pt-BR")}</div>
+</div>
+<script>setTimeout(function () { try { window.focus(); window.print(); } catch (e) {} }, 400);<\/script>
+</body></html>`;
+}
+
 function _fatEstilo() {
   return `<style>
   .fat-janela{background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;margin:16px;color:#dbe2ea;font-size:12px;overflow:hidden}
@@ -3377,6 +3808,7 @@ function _fatEstilo() {
   #fat-filtros-c{background:#11141d}
   .fat-c-g{display:inline-flex;align-items:center;gap:6px}
   .fat-c-off{opacity:.35}
+  .fat-parc{display:inline-block;margin-left:4px;padding:0 6px;border-radius:9px;background:#2b2140;color:#c4b5fd;font-size:10px;border:1px solid #4c3b78;cursor:help}
   .fat-devs{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #2a2d3e;background:#11141d;min-width:0}
   .fat-devs-bt{background:transparent;border:none;color:#9aa;font-size:11.5px;cursor:pointer;white-space:nowrap;padding:3px 0}
   .fat-devs-bt:hover{color:#fff}
