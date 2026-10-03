@@ -2039,6 +2039,7 @@ async function fatGerarFaturaOk() {
     // ja' nasce pedindo o PDF: o worker gera em segundos e o documento existe
     // desde o comeco, em vez de so' quando alguem lembra de abrir a fatura
     fatura_pdf_pedido_em: new Date().toISOString(),
+    criado_por: await _fatUsuario(),     // coluna "Usuário" (SQL-FATURA-CRIADO-POR.sql)
   };
   let nova = null, erro = null;
   for (let tent = 0; tent < 3 && !nova; tent++) {
@@ -2046,6 +2047,8 @@ async function fatGerarFaturaOk() {
     const r = await sb.from("oct_faturas").insert({ ...base, numero }).select("id,numero").single();
     if (!r.error) { nova = r.data; break; }
     erro = r.error;
+    // sem a coluna criado_por (SQL ainda não rodado) a fatura tem de sair do mesmo jeito
+    if (/criado_por/.test(r.error.message || "") && base.criado_por !== undefined) { delete base.criado_por; tent--; continue; }
     // 23505 = outro faturamento pegou o mesmo numero; tenta o proximo
     if (String(r.error.code) !== "23505") break;
   }
@@ -2251,6 +2254,8 @@ async function _fatReconferir(status) {
   if (window._fatAba !== _fatAbaDoStatus(status) || !document.getElementById("fat-corpo")) return;
 
   const antes = window._fatFaturas || [];
+  const guard = _fatListaCache(status) || {};
+  (data || []).forEach(f => { if (f.parcela_de) f._origNum = (window._fatFaturas || []).find(x => x.id === f.id)?._origNum; _fatAnotar(f, status, guard.recPor, (guard.bolPorFat || {})[f.id]); });
   const novas = _fatOrdenar(data || [], window._fatOrdF, _FAT_ORD_F);
   // a lista mudou de composicao? ai' redesenhar e' o certo -- linha nova nao
   // nasce de uma troca de celula
@@ -2322,8 +2327,44 @@ const _FAT_ORD_F = {
   cliente:    f => f.cliente_nome || "",
   emissao:    f => String(f.emissao || f.criado_em || "").slice(0, 10),
   vencimento: f => String(f.vencimento || "").slice(0, 10),
+  liquidacao: f => _fatIsoLocal(f.liquidado_em),
+  atraso:     f => f._atraso,
   valor:      f => _fatLiquido(f),
+  nf:         f => Number(f.nfe_numero || 0) || null,
+  usuario:    f => f._usuario === "—" ? "" : (f._usuario || ""),
 };
+
+// ---------- colunas Atraso / Usuário / Nº NF (03/10/2026, como o TecnoX) ----------
+// Atraso: em aberto = dias desde o vencimento (negativo = quantos faltam, como o
+// "-7" do TecnoX); liquidada = quantos dias depois do vencimento foi paga.
+// Usuário: em aberto = quem GEROU (criado_por; as antigas sem registro mostram
+// "—", as do fechamento automático/lote dizem isso); liquidada = quem RECEBEU
+// (autor do último recebimento; boleto pago no banco = "Sicoob (boleto)").
+function _fatAnotar(f, status, recPor, bol) {
+  // com boleto, vale o vencimento que o BANCO aceita: venceu em feriado ou fim de
+  // semana, paga no dia útil seguinte sem atraso (07/09 pago em 08/09 = em dia)
+  const venc = bol && bol.vence_ate ? String(bol.vence_ate).slice(0, 10)
+    : f.vencimento ? String(f.vencimento).slice(0, 10) : "";
+  const ref = status === "liquidada" ? _fatIsoLocal(f.liquidado_em) : _fatHojeIso();
+  f._atraso = venc && ref ? Math.round((new Date(ref + "T12:00:00") - new Date(venc + "T12:00:00")) / 86400000) : null;
+  if (status === "liquidada") {
+    const a = ((recPor || {})[f.id] || {}).autor || "";
+    f._usuario = /^sicoob/i.test(a) || (!a && f.forma_liquidacao === "Boleto") ? "Sicoob (boleto)" : (a || "—");
+  } else {
+    f._usuario = f.criado_por || (f.auto_gerada ? "automático" : /gerada em lote/i.test(f.observacao || "") ? "lote" : "—");
+  }
+}
+function _fatAtrasoCel(f, status) {
+  const a = f._atraso;
+  if (a == null) return '<span style="color:#4a5160">—</span>';
+  if (status === "liquidada") {
+    return a > 0 ? `<span style="color:#f87171" title="paga ${a} dia(s) depois do vencimento">${a}d</span>`
+                 : '<span style="color:#4ade80" title="paga até o vencimento">em dia</span>';
+  }
+  if (a > 0) return `<b style="color:#f87171" title="vencida há ${a} dia(s)">${a}d</b>`;
+  if (a === 0) return '<span style="color:#fbbf24" title="vence hoje">hoje</span>';
+  return `<span style="color:#6b7688" title="faltam ${-a} dia(s) para vencer">${a}</span>`;
+}
 
 function fatOrdenarF(campo) {
   const o = window._fatOrdF || {};
@@ -2440,6 +2481,7 @@ function _fatVisiveisF() {
 const _FAT_ORD_OPCOES = [
   ["vencimento:asc", "Vencimento — mais próximo primeiro"], ["vencimento:desc", "Vencimento — mais distante primeiro"],
   ["valor:desc", "Valor — maior primeiro"], ["valor:asc", "Valor — menor primeiro"],
+  ["atraso:desc", "Atraso — mais atrasada primeiro"],
   ["cliente:asc", "Cliente — A a Z"], ["emissao:desc", "Emissão — mais nova primeiro"], ["numero:desc", "Nº da fatura — maior primeiro"],
 ];
 function _fatAplicarBuscaF() {
@@ -2860,7 +2902,7 @@ async function _fatBuscarFaturas(status) {
   if (error) return { error };
   const faturas = data || [];
   const ids = faturas.map(x => x.id);
-  const bolPorFat = {}, recebidos = {};
+  const bolPorFat = {}, recebidos = {}, recPor = {};
   if (ids.length) {
     // um boleto por fatura: lê a VIEW de situação (pago em dia / atraso / vencido),
     // que o banco calcula com a data de hoje. Fatura com mais de um boleto (o 2º
@@ -2886,8 +2928,12 @@ async function _fatBuscarFaturas(status) {
     } catch (e) { /* tabela de boletos pode não existir */ }
     try {
       const rr = await _fatPorLotes(ids, l => _fatTodas(() => sb.from("oct_recebimentos_titulo")
-        .select("id,fatura_id,valor").in("fatura_id", l).order("id")));
-      (rr.data || []).forEach(x => { recebidos[x.fatura_id] = (recebidos[x.fatura_id] || 0) + Number(x.valor || 0); });
+        .select("id,fatura_id,valor,autor,data_recebimento").in("fatura_id", l).order("id")));
+      (rr.data || []).forEach(x => {
+        recebidos[x.fatura_id] = (recebidos[x.fatura_id] || 0) + Number(x.valor || 0);
+        const u = recPor[x.fatura_id];   // vale o último recebimento (data, depois ordem de lançamento)
+        if (!u || String(x.data_recebimento || "") >= u.data) recPor[x.fatura_id] = { data: String(x.data_recebimento || ""), autor: x.autor || "" };
+      });
     } catch (e) { /* tabela de recebimentos pode não existir */ }
   }
   // parcela: o número da fatura original aparece junto ("39/2", como o TecnoX)
@@ -2898,7 +2944,7 @@ async function _fatBuscarFaturas(status) {
     (ro.data || []).forEach(o => { origNum[o.id] = o.numero; });
   }
   faturas.forEach(f => { if (f.parcela_de) f._origNum = origNum[f.parcela_de]; });
-  return { faturas, bolPorFat, recebidos };
+  return { faturas, bolPorFat, recebidos, recPor };
 }
 // a aba que mostra cada status: lista que chega para OUTRA aba só é guardada
 function _fatAbaDoStatus(status) { return status === "liquidada" ? "liquidadas" : "faturas"; }
@@ -2908,7 +2954,7 @@ function _fatListaCache(status) {
 }
 function _fatGuardaLista(status, dados) {
   if (!window._fatListas || window._fatListas.eid !== window._fatEid) window._fatListas = { eid: window._fatEid };
-  dados.ass = JSON.stringify([dados.faturas, dados.bolPorFat, dados.recebidos]);
+  dados.ass = JSON.stringify([dados.faturas, dados.bolPorFat, dados.recebidos, dados.recPor]);
   window._fatListas[status] = dados;
 }
 function _fatSaldoCel(f, rec) {
@@ -2950,6 +2996,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   const corpo = document.getElementById("fat-corpo");
   if (!corpo) return;
   const rolagem = manterRolagem ? (corpo.querySelector(".fat-gridwrap")?.scrollTop || 0) : 0;
+  dados.faturas.forEach(f => _fatAnotar(f, status, dados.recPor, (dados.bolPorFat || {})[f.id]));
   const faturas = _fatOrdenar(dados.faturas, window._fatOrdF, _FAT_ORD_F);
   window._fatFaturas = faturas;
   // a seleção vale para a lista que está na tela: ids de outra aba viram lixo
@@ -2964,12 +3011,16 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
+    ${status === "liquidada" ? `<td class="fat-td" style="color:#4ade80">${_fatData(fatr.liquidado_em) || "—"}</td>` : ""}
+    <td class="fat-td" style="text-align:center">${_fatAtrasoCel(fatr, status)}</td>
     <td class="fat-td fat-r" id="fatf-vl-${fatr.id}">${_fatValorCel(fatr)}</td>
     <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">${_fatSaldoCel(fatr, rec[fatr.id])}</td>
     <td class="fat-td" id="fatf-st-${fatr.id}">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
+    <td class="fat-td" style="text-align:center">${fatr.nfe_numero ? _fatEsc(String(fatr.nfe_numero)) : '<span style="color:#4a5160">—</span>'}</td>
+    <td class="fat-td" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_fatEsc(fatr._usuario)}">${_fatEsc(fatr._usuario)}</td>
     <td class="fat-td" id="fatf-dc-${fatr.id}" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
-      ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : `<span style="color:#4ade80">liquidada ${_fatData(fatr.liquidado_em)}</span>`}
+      ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : ""}
       <button class="fat-abtn" style="background:#b45309" onclick="fatVerFatura('${fatr.id}')">📄 Fatura</button>
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
       ${status !== "aberta" || rec[fatr.id] > 0 ? `<button class="fat-abtn" style="background:#475569" onclick="fatRecibo('${fatr.id}')" title="Recibo do que foi pago">📃 Recibo</button>` : ""}
@@ -2985,8 +3036,8 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   </tr>`).join("");
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}<th>Docs</th><th>Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 14 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     ${_fatResumoBoletos(faturas, bolPorFat, status)}
     ${_fatRodapeF(faturas, status)}`;
@@ -3532,6 +3583,7 @@ async function fatParcelarOk(id) {
       observacao: `Parcela ${p.k}/${parcelas.length} da fatura ${f.numero ?? ""}`,
       alterado_por: quem, alterado_em: agora.toISOString(),
       fatura_pdf_pedido_em: agora.toISOString(),          // o PDF da parcela já nasce pedido
+      criado_por: quem,
       ...nfe,
     };
     let nova = null, ultimoErro = null;
@@ -3540,6 +3592,7 @@ async function fatParcelarOk(id) {
       const r = await sb.from("oct_faturas").insert({ ...base, numero }).select("id,numero").single();
       if (!r.error) { nova = r.data; break; }
       ultimoErro = r.error;
+      if (/criado_por/.test(r.error.message || "") && base.criado_por !== undefined) { delete base.criado_por; tent--; continue; }
       if (String(r.error.code) !== "23505") break;          // 23505 = número pego por outro; tenta o próximo
     }
     if (!nova) {
