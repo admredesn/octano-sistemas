@@ -42,10 +42,17 @@ async function moduloFaturar() {
   window._fatEid = eid;
   window._fatSel = window._fatSel || new Set();
   window._fatAba = window._fatAba || "abertos";
+  window._fatF = window._fatF || _fatFVazio();
+  // clientes do posto: o filtro de cliente vale para as três abas
+  if (!window._fatClientes || window._fatClientes.eid !== eid) {
+    const r = await _fatTodas(() => sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome").order("id"));
+    window._fatClientes = { eid, lista: r.data || [] };
+  }
   conteudo.innerHTML = `
     ${_fatEstilo()}
     <div class="fat-janela" id="fat-janela">
       <div class="fat-titbar">🧾 Faturamento — Notas a Prazo</div>
+      <div id="fat-filtros-c"></div>
       <div class="fat-abas">
         <button class="fat-aba" id="fat-aba-abertos" onclick="fatAba('abertos')">Notas/Títulos em Aberto</button>
         <button class="fat-aba" id="fat-aba-faturas" onclick="fatAba('faturas')">Faturas em Aberto</button>
@@ -53,9 +60,32 @@ async function moduloFaturar() {
       </div>
       <div id="fat-corpo" style="padding:0"></div>
     </div>`;
+  _fatPainelRender();
   _fatAjustarAltura();
   if (!window._fatAlturaOn) { window.addEventListener("resize", _fatAjustarAltura); window._fatAlturaOn = true; }
   fatAba(window._fatAba);
+  // as outras duas listas já ficam lidas: trocar de aba depois é instantâneo
+  setTimeout(() => _fatPreCarregar(eid), 400);
+}
+
+// ---------- LISTAS GUARDADAS: trocar de aba sem piscar (03/10/2026) ----------
+// Trocar de aba apagava a lista ("Carregando...") até o banco responder, e o
+// recebido/saldo chegava linha a linha -- a tela piscava a cada troca. Como no
+// TecnoX, agora a troca desenha NA HORA o que já foi lido; a conferência com o
+// banco roda por trás e só redesenha se algo mudou (mantendo a rolagem).
+// Depois de qualquer ação (gerar, receber, excluir...) o guardado é descartado.
+function _fatInvalidar() {
+  window._fatListas = null;
+  window._fatTitCache = null;
+}
+function _fatPreCarregar(eid) {
+  if (window._fatEid !== eid || !document.getElementById("fat-corpo")) return;
+  ["aberta", "liquidada"].forEach(st => {
+    if (_fatListaCache(st)) return;
+    if (window._fatAba === (st === "liquidada" ? "liquidadas" : "faturas")) return;   // essa a aba já está lendo
+    _fatBuscarFaturas(st).then(d => { if (!d.error && window._fatEid === eid && !_fatListaCache(st)) _fatGuardaLista(st, d); });
+  });
+  if (window._fatAba !== "abertos" && !window._fatTitCache) fatListarTitulos();   // só guarda (aba não é a dela)
 }
 
 function fatAba(aba) {
@@ -65,6 +95,7 @@ function fatAba(aba) {
     const el = document.getElementById("fat-aba-" + a);
     if (el) el.classList.toggle("ativa", a === aba);
   });
+  _fatPainelAplicar();
   if (aba === "abertos") fatListarTitulos();
   else fatListarFaturas(aba === "liquidadas" ? "liquidada" : "aberta");
 }
@@ -103,29 +134,39 @@ function _fatAjustarAltura() {
 // ---------- Aba: Títulos em Aberto ----------
 async function fatListarTitulos() {
   const corpo = document.getElementById("fat-corpo");
-  const carregando = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
-  const listaJa = document.getElementById("fat-tit-lista");
-  if (listaJa && document.getElementById("fat-tit-filtros")) listaJa.innerHTML = carregando;
-  else corpo.innerHTML = carregando;
   const eid = window._fatEid;
-  const F = window._fatF = window._fatF || { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
+  const F = window._fatF = window._fatF || _fatFVazio();
+  const naAba = () => window._fatAba === "abertos" && !!document.getElementById("fat-corpo");
+  const c0 = window._fatTitCache;
+  const temGuardado = c0 && c0.eid === eid && c0.status === F.status;
+  let apaguei = false;
+  if (naAba()) {
+    if (temGuardado) _fatRenderTitulos();
+    else if (!corpo.querySelector(".fat-gridwrap")) corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
+    else { corpo.style.opacity = ".55"; apaguei = true; }   // a anterior fica, apagada, até a nova chegar
+  }
   const titQ = () => {
     let q = sb.from("oct_pdv_notas_prazo").select("*").eq("empresa_id", eid);
     if (F.status === "aberto" || F.status === "vencido") q = q.or("status.is.null,status.eq.aberto");
     else if (F.status === "pago" || F.status === "parcelado") q = q.eq("status", F.status);
     return q.order("registrado_em", { ascending: false }).order("id");   // id: ordem estável entre as páginas
   };
-  const [tiRes, cliRes, empRes] = await Promise.all([
+  const [tiRes, empRes] = await Promise.all([
     _fatTodas(titQ),
-    _fatTodas(() => sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome").order("id")),
     sb.from("oct_empresas").select("prazo_padrao_dias").eq("id", eid).single().then(r => r, () => ({ data: null })),
   ]);
+  if (apaguei && corpo) corpo.style.opacity = "";
+  if (window._fatEid !== eid || tiRes.error) return;
   window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
-  window._fatTitCache = { eid, status: F.status, todos: tiRes.data || [], clientes: cliRes.data || [] };
-  // a barra fica; só as formas podem mudar com o status (pagos têm outras)
-  const selForma = document.getElementById("fat-f-forma");
-  if (selForma) selForma.innerHTML = _fatFormasOpts();
-  _fatRenderTitulos();
+  const novo = { eid, status: F.status, todos: tiRes.data || [] };
+  novo.ass = JSON.stringify(novo.todos);
+  const mudou = !temGuardado || !c0 || c0.ass !== novo.ass;
+  window._fatTitCache = novo;
+  if (!naAba() || novo.status !== (window._fatF || {}).status) return;   // trocou de aba/status enquanto lia
+  // o painel fica; só as formas podem mudar com o status (pagos têm outras)
+  const selForma = document.getElementById("fat-c-forma");
+  if (selForma && mudou) selForma.innerHTML = _fatFormasOpts();
+  if (mudou) _fatRenderTitulos(true);
 }
 
 function _fatFormasOpts() {
@@ -135,41 +176,130 @@ function _fatFormasOpts() {
     formas.map(fn => `<option value="${_fatEsc(fn)}" ${F.forma === fn ? "selected" : ""}>${_fatEsc(fn)}</option>`).join("");
 }
 
-// Barra de filtros: desenhada UMA vez por carga da aba. Filtrar troca só o que
-// está embaixo dela (pedido do Ronan, 03/10/2026) -- sem piscar, sem perder o
-// foco nem a letra que se está digitando.
-function _fatTitBarra() {
-  const c = window._fatTitCache, F = window._fatF;
-  const cliOpts = "<option value=''>Todos os clientes</option>" +
-    c.clientes.map(p => `<option value='${p.id}' ${F.cli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("");
-  return `
-    <div class="fat-filtros" id="fat-tit-filtros" style="flex-wrap:wrap;gap:8px">
-      <span>Cliente:</span>
-      <select class="fat-sel" onchange="fatSetF('cli',this.value)">${cliOpts}</select>
-      <span>Status:</span>
-      <select class="fat-sel" onchange="fatSetF('status',this.value)">
-        ${[["aberto", "Em aberto"], ["vencido", "Vencidos"], ["pago", "Pagos"], ["parcelado", "Parcelados"], ["todos", "Todos"]].map(s => `<option value="${s[0]}" ${F.status === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}
-      </select>
-      <span>Forma:</span>
-      <select class="fat-sel" id="fat-f-forma" onchange="fatSetF('forma',this.value)">${_fatFormasOpts()}</select>
-      <span>Emissão:</span>
-      <input type="date" class="fat-inp" value="${F.de}" onchange="fatSetF('de',this.value)" title="de">
-      <input type="date" class="fat-inp" value="${F.ate}" onchange="fatSetF('ate',this.value)" title="até">
-      <input class="fat-inp" placeholder="🔍 cliente/NFC-e" value="${_fatEsc(F.busca)}" oninput="fatSetFBusca(this.value)" style="width:150px">
-      <button class="fat-btn mini" onclick="fatLimparF()" title="Limpar filtros">🧽</button>
-      <span id="fat-tit-resumo" style="margin-left:auto;color:#9aa"></span>
+// ---------- PAINEL DE FILTROS ÚNICO (03/10/2026) ----------
+// Pedido do Ronan, comparando com o TecnoX: lá, trocar entre Notas/Títulos,
+// Faturas em Aberto e Liquidadas só troca a LISTA -- os filtros de cima ficam
+// congelados. Aqui também: um painel só, desenhado uma vez, que vale para as
+// três listas (o que não se aplica à aba fica apagado, com o motivo no título).
+// Filtrar nunca redesenha o painel: o cursor fica onde estava.
+function _fatFVazio() {
+  return { cli: "", forma: "", status: "aberto", de: "", ate: "", vde: "", vate: "", lde: "", late: "", busca: "" };
+}
+function _fatIsoLocal(v) {
+  if (!v) return "";
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d)) return "";
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function _fatPainelRender() {
+  const el = document.getElementById("fat-filtros-c");
+  if (!el) return;
+  const F = window._fatF = window._fatF || _fatFVazio();
+  const cli = (window._fatClientes || {}).lista || [];
+  const data = (campo, tit) => `<input type="date" class="fat-inp" id="fat-c-${campo}" value="${F[campo] || ""}"
+      onchange="fatSetF('${campo}',this.value)" title="${tit}">`;
+  el.innerHTML = `
+    <div class="fat-filtros" style="border-bottom:none;padding-bottom:4px">
+      <span class="fat-c-g">Cliente:
+        <select class="fat-sel" id="fat-c-cli" onchange="fatSetF('cli',this.value)" style="max-width:360px">
+          <option value="">Todos os clientes</option>
+          ${cli.map(p => `<option value="${p.id}" ${F.cli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("")}
+        </select></span>
+      <input class="fat-inp" id="fat-c-busca" type="search" autocomplete="off" placeholder="🔍 nome, NFC-e ou nº da fatura"
+        value="${_fatEsc(F.busca || "")}" oninput="fatSetFBusca(this.value)" style="width:230px">
+      <span class="fat-c-g" id="fat-c-g-status">Status:
+        <select class="fat-sel" id="fat-c-status" onchange="fatSetF('status',this.value)">
+          ${[["aberto", "Em aberto"], ["vencido", "Vencidos"], ["pago", "Pagos"], ["parcelado", "Parcelados"], ["todos", "Todos"]]
+            .map(o => `<option value="${o[0]}" ${F.status === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
+        </select></span>
+      <span class="fat-c-g" id="fat-c-g-forma">Forma:
+        <select class="fat-sel" id="fat-c-forma" onchange="fatSetF('forma',this.value)">${_fatFormasOpts()}</select></span>
+      <span class="fat-c-g">Ordenar por <select class="fat-sel" id="fat-c-ordem" onchange="fatOrdenarSelC(this.value)"></select></span>
     </div>
-    <div id="fat-tit-lista"></div>`;
+    <div class="fat-filtros">
+      <span class="fat-c-g">Emissão: ${data("de", "de")} a ${data("ate", "até")}</span>
+      <span class="fat-c-g">Vencimento: ${data("vde", "de")} a ${data("vate", "até")}</span>
+      <span class="fat-c-g" id="fat-c-g-liq">Liquidação: ${data("lde", "de")} a ${data("late", "até")}</span>
+      <button class="fat-btn mini" onclick="fatLimparF()" title="Limpar todos os filtros">🧽 Limpar</button>
+      <span id="fat-c-resumo" style="margin-left:auto;color:#9aa"></span>
+    </div>`;
+  _fatPainelAplicar();
+}
+// liga/desliga o que não vale na aba aberta e mostra a ordem DESTA lista
+function _fatPainelAplicar() {
+  const aba = window._fatAba;
+  const liga = (id, on, porque) => {
+    const g = document.getElementById(id);
+    if (!g) return;
+    g.classList.toggle("fat-c-off", !on);
+    g.title = on ? "" : porque;
+    g.querySelectorAll("select,input").forEach(x => { x.disabled = !on; });
+  };
+  liga("fat-c-g-status", aba === "abertos", "Vale só para Notas/Títulos em Aberto");
+  liga("fat-c-g-forma", aba === "abertos", "Vale só para Notas/Títulos em Aberto");
+  liga("fat-c-g-liq", aba === "liquidadas", "Vale só para Faturas Liquidadas");
+  const sel = document.getElementById("fat-c-ordem");
+  if (!sel) return;
+  const o = (aba === "abertos" ? window._fatOrdT : window._fatOrdF) || {};
+  const atual = o.campo ? o.campo + ":" + o.dir : "";
+  const ops = _FAT_ORD_OPCOES.filter(([v]) => aba !== "abertos" || !v.startsWith("numero"));
+  sel.innerHTML = (!atual ? '<option value="" selected>Emissão — mais nova primeiro</option>' : "") +
+    (atual && !ops.some(([v]) => v === atual) ? `<option value="${atual}" selected>(pela coluna)</option>` : "") +
+    ops.map(([v, r]) => `<option value="${v}" ${v === atual ? "selected" : ""}>${r}</option>`).join("");
+}
+function fatOrdenarSelC(v) {
+  if (!v) return;
+  const [campo, dir] = v.split(":");
+  // a mesma ordem vale para as três listas (Nº só existe nas faturas)
+  window._fatOrdF = { campo, dir };
+  if (campo !== "numero") window._fatOrdT = { campo, dir };
+  _fatPainelAplicar();
+  if (window._fatAba === "abertos") _fatTitulosDeNovo();
+  else fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
+}
+function _fatFiltrar() {
+  if (!document.getElementById("fat-corpo")) return;
+  if (window._fatAba === "abertos") _fatTitulosDeNovo();
+  else _fatAplicarBuscaF();
+}
+
+// Maiores devedores: uma linha (antes eram cartões que empurravam a lista).
+// Clicar no nome filtra o cliente; a linha recolhe e o estado fica guardado.
+function _fatDevsHtml(devedores) {
+  if (!devedores.length) return "";
+  let fechado = false;
+  try { fechado = localStorage.getItem("fat_devs_fechado") === "1"; } catch (e) { /* sem storage */ }
+  const chips = devedores.slice(0, 12).map(d => `<span class="fat-dev">
+      <span class="fat-dev-nome" ${d.id ? `onclick="fatDevFiltrar('${d.id}')" title="Filtrar por ${_fatEsc(d.nome)}"` : ""}>${_fatEsc(d.nome)}</span>
+      <b>R$ ${_fatMoney(d.total)}</b> <span class="fat-dev-q">${d.qtd}</span>${d.id
+        ? ` <span class="fat-dev-cob" onclick="fatCobrar('${d.id}')" title="Cobrar este cliente">💬</span>` : ""}</span>`).join("");
+  return `<div class="fat-devs">
+    <button class="fat-devs-bt" onclick="fatDevsAlternar()">${fechado ? "▸" : "▾"} Maiores devedores (${devedores.length})</button>
+    ${fechado ? "" : `<div class="fat-devs-lista">${chips}</div>`}</div>`;
+}
+function fatDevsAlternar() {
+  try {
+    const f = localStorage.getItem("fat_devs_fechado") === "1";
+    localStorage.setItem("fat_devs_fechado", f ? "0" : "1");
+  } catch (e) { /* sem storage: fica como está */ }
+  _fatTitulosDeNovo();
+}
+function fatDevFiltrar(id) {
+  const sel = document.getElementById("fat-c-cli");
+  if (sel) sel.value = id;
+  fatSetF("cli", id);
 }
 
 // Desenha a aba com o que JÁ foi lido. Cliente, forma, datas, busca e ordem
 // filtram na hora, sem voltar ao banco: ir ao banco a cada pausa da digitação
 // apagava o campo de busca no meio ("jose fernando" virava "joser", 03/10/2026).
 // Só o Status muda o que se lê (o filtro de status vai para o banco).
-function _fatRenderTitulos() {
+function _fatRenderTitulos(manterRolagem) {
   const corpo = document.getElementById("fat-corpo");
   const c = window._fatTitCache;
   if (!corpo || !c) return;
+  const rolagem = manterRolagem ? (corpo.querySelector(".fat-gridwrap")?.scrollTop || 0) : 0;
   const F = window._fatF;
   const todos = c.todos;
   const ehAberto = t => !t.status || t.status === "aberto";
@@ -182,9 +312,14 @@ function _fatRenderTitulos() {
     if (F.status === "parcelado" && t.status !== "parcelado") return false;
     if (F.cli && t.cliente_id !== F.cli) return false;
     if (F.forma) { const fn = (t.forma_nome || "").toLowerCase(); if (fn.indexOf(F.forma.toLowerCase()) < 0) return false; }
-    const emi = String(t.registrado_em || t.criado_em || "").slice(0, 10);
+    const emi = _fatIsoLocal(t.registrado_em || t.criado_em);
     if (F.de && emi && emi < F.de) return false;
     if (F.ate && emi && emi > F.ate) return false;
+    if (F.vde || F.vate) {
+      const ven = _fatIsoLocal(_fatVencDe(t));
+      if (F.vde && (!ven || ven < F.vde)) return false;
+      if (F.vate && (!ven || ven > F.vate)) return false;
+    }
     if (F.busca) { const b = _fatNorm(F.busca).trim(); const alvo = _fatNorm((t.cliente_nome || "") + " " + (t.numero_nfe || "")); if (b && alvo.indexOf(b) < 0) return false; }
     return true;
   });
@@ -227,16 +362,10 @@ function _fatRenderTitulos() {
   </tr>`;
   }).join("");
 
-  if (!document.getElementById("fat-tit-filtros") || !document.getElementById("fat-tit-lista")) corpo.innerHTML = _fatTitBarra();
-  document.getElementById("fat-tit-resumo").innerHTML =
-    `${titulos.length} título(s) · <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong>`;
-  document.getElementById("fat-tit-lista").innerHTML = `
-    ${devedores.length ? `<div class="fat-cards">
-      ${devedores.slice(0, 6).map(d => `<div class="fat-card">
-        <div class="fat-card-nome">${_fatEsc(d.nome)}</div>
-        <div class="fat-card-val">R$ ${_fatMoney(d.total)}</div>
-        <div class="fat-card-qtd">${d.qtd} título(s)${d.id ? ` · <span style="color:#25d366;cursor:pointer" onclick="fatCobrar('${d.id}')">💬 cobrar</span>` : ""}</div></div>`).join("")}
-    </div>` : ""}
+  const resumo = document.getElementById("fat-c-resumo");
+  if (resumo) resumo.innerHTML = `${titulos.length} título(s) · <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong>`;
+  corpo.innerHTML = `
+    ${_fatDevsHtml(devedores)}
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fat-chk-todos" title="Marcar/desmarcar todos os títulos da lista" onchange="fatSelTodos(this.checked)"></th>${_fatTh("Emissão","emissao",window._fatOrdT,"fatOrdenarT")}${_fatTh("Vencimento","vencimento",window._fatOrdT,"fatOrdenarT")}${_fatTh("Atraso","atraso",window._fatOrdT,"fatOrdenarT",'style="text-align:center"')}${_fatTh("Cliente","cliente",window._fatOrdT,"fatOrdenarT")}${_fatTh("NFC-e","nfce",window._fatOrdT,"fatOrdenarT")}${_fatTh("Forma","forma",window._fatOrdT,"fatOrdenarT")}${_fatTh("Valor","valor",window._fatOrdT,"fatOrdenarT",'class="fat-r"')}<th style="text-align:center">Ações</th></tr></thead>
       <tbody id="fat-tbody">${linhas || '<tr><td colspan="9" style="padding:22px;text-align:center;color:#666">Nenhum título a prazo em aberto.</td></tr>'}</tbody>
@@ -252,6 +381,7 @@ function _fatRenderTitulos() {
       </span>
     </div>`;
 
+  if (rolagem) { const gw = corpo.querySelector(".fat-gridwrap"); if (gw) gw.scrollTop = rolagem; }
   window._fatCur = null;
   _fatSelSync();
   if (!window._fatTecladoOn) { document.addEventListener("keydown", _fatTeclado); window._fatTecladoOn = true; }
@@ -344,10 +474,10 @@ function _fatTeclado(e) {
 
 // ---------- filtros ----------
 function fatSetF(campo, valor) {
-  window._fatF = window._fatF || {};
+  window._fatF = window._fatF || _fatFVazio();
   window._fatF[campo] = valor;
-  window._fatSel = new Set();
-  _fatTitulosDeNovo();
+  if (window._fatAba === "abertos") window._fatSel = new Set();
+  _fatFiltrar();
 }
 // lê do banco só quando precisa (status mudou, outro posto); senão redesenha
 function _fatTitulosDeNovo() {
@@ -357,17 +487,17 @@ function _fatTitulosDeNovo() {
 }
 let _fatBuscaTimer = null;
 function fatSetFBusca(valor) {
-  window._fatF = window._fatF || {};
+  window._fatF = window._fatF || _fatFVazio();
   window._fatF.busca = valor;
   clearTimeout(_fatBuscaTimer);
-  // o campo fica na barra fixa (não é recriado): só a lista se redesenha
-  _fatBuscaTimer = setTimeout(_fatTitulosDeNovo, 200);
+  // o campo fica no painel fixo (não é recriado): só a lista se redesenha
+  _fatBuscaTimer = setTimeout(_fatFiltrar, 200);
 }
 function fatLimparF() {
-  window._fatF = { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
+  window._fatF = _fatFVazio();
   window._fatSel = new Set();
-  document.getElementById("fat-tit-filtros")?.remove();   // redesenha a barra zerada
-  _fatTitulosDeNovo();
+  _fatPainelRender();   // o painel volta zerado
+  _fatFiltrar();
 }
 
 // ---------- COBRAR cliente (WhatsApp via wa.me + copiar p/ e-mail) ----------
@@ -1574,6 +1704,7 @@ async function fatLiquidarTituloOk(id) {
     return;
   }
   _fatFechaModal();
+  _fatInvalidar();
   fatListarTitulos();
 }
 
@@ -1713,6 +1844,7 @@ async function fatParcelarOk(id) {
     return;
   }
   _fatFechaModal();
+  _fatInvalidar();
   fatListarTitulos();
 }
 
@@ -1946,6 +2078,7 @@ async function fatGerarFaturaOk() {
       + (acr > 0 ? ` + acréscimo R$ ${_fatMoney(acr)}` : "") + ` = líquido R$ ${_fatMoney(aj.liq)}.`
     : "";
   alert(`Fatura ${nova.numero ?? ""} gerada — vence em ${_fatData(venc)}.` + txtAj + avisoPrazo);
+  _fatInvalidar();
   fatAba("faturas");
 }
 
@@ -2065,6 +2198,7 @@ async function fatEditarFaturaOk(faturaId) {
     if (!r2.error) {
       _fatFechaModal();
       alert("Vencimento salvo. O desconto NÃO foi salvo: falta rodar repo/sql/SQL-DESCONTO-FATURA.sql.");
+      _fatInvalidar();
       fatListarFaturas(st.f.status || "aberta");
       return;
     }
@@ -2077,6 +2211,7 @@ async function fatEditarFaturaOk(faturaId) {
 
 // redesenha a aba que esta' aberta (sem F5, sem perder o lugar)
 function _fatRecarregar() {
+  _fatInvalidar();                                     // depois de uma ação o guardado é velho
   if (!document.getElementById("fat-corpo")) return;   // saiu da tela
   if (window._fatAba === "abertos") fatListarTitulos();
   else fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
@@ -2094,7 +2229,7 @@ function _fatAutoAtualizar(temPendente, status) {
       _fatAutoAtualizar(true, status);
       return;
     }
-    if (window._fatAba !== "faturas" && window._fatAba !== "liquidadas") return;
+    if (window._fatAba !== _fatAbaDoStatus(status)) return;
     if (!document.getElementById("fat-corpo")) return;
     _fatReconferir(status);
   }, 10000);
@@ -2105,10 +2240,12 @@ function _fatAutoAtualizar(temPendente, status) {
 // e reabrir os selects -- o operador achava que o sistema estava com defeito.
 async function _fatReconferir(status) {
   const corpo = document.getElementById("fat-corpo");
-  if (!corpo) return;
+  if (!corpo || window._fatAba !== _fatAbaDoStatus(status)) return;
   const { data, error } = await _fatTodas(() => sb.from("oct_faturas").select("*")
     .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false }).order("id"));
   if (error) return;
+  // trocou de aba enquanto lia: esta conferência não é mais da tela
+  if (window._fatAba !== _fatAbaDoStatus(status) || !document.getElementById("fat-corpo")) return;
 
   const antes = window._fatFaturas || [];
   const novas = _fatOrdenar(data || [], window._fatOrdF, _FAT_ORD_F);
@@ -2192,6 +2329,7 @@ function fatOrdenarF(campo) {
   window._fatOrdF = (o.campo === campo)
     ? { campo, dir: o.dir === "asc" ? "desc" : "asc" }
     : { campo, dir: campo === "cliente" ? "asc" : "desc" };
+  _fatPainelAplicar();
   fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
 }
 
@@ -2211,6 +2349,7 @@ function fatOrdenarT(campo) {
   window._fatOrdT = (o.campo === campo)
     ? { campo, dir: o.dir === "asc" ? "desc" : "asc" }
     : { campo, dir: (campo === "cliente" || campo === "forma") ? "asc" : "desc" };
+  _fatPainelAplicar();
   _fatTitulosDeNovo();
 }
 
@@ -2280,41 +2419,25 @@ function _fatNorm(t) {
   return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 function _fatVisiveisF() {
-  const termo = _fatNorm(window._fatBuscaF || "").trim();
+  const F = window._fatF || _fatFVazio();
+  const termo = _fatNorm(F.busca || "").trim();
   const lista = window._fatFaturas || [];
-  if (!termo) return lista;
-  return lista.filter(f => _fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "")).includes(termo));
+  const entre = (v, de, ate) => (!de || (v && v >= de)) && (!ate || (v && v <= ate));
+  const liq = window._fatAba === "liquidadas";
+  return lista.filter(f => {
+    if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "")).includes(termo)) return false;
+    if (F.cli && f.cliente_id !== F.cli) return false;
+    if (!entre(_fatIsoLocal(f.emissao || f.criado_em), F.de, F.ate)) return false;
+    if (!entre(_fatIsoLocal(f.vencimento), F.vde, F.vate)) return false;
+    if (liq && !entre(_fatIsoLocal(f.liquidado_em), F.lde, F.late)) return false;
+    return true;
+  });
 }
 const _FAT_ORD_OPCOES = [
   ["vencimento:asc", "Vencimento — mais próximo primeiro"], ["vencimento:desc", "Vencimento — mais distante primeiro"],
   ["valor:desc", "Valor — maior primeiro"], ["valor:asc", "Valor — menor primeiro"],
-  ["cliente:asc", "Cliente — A a Z"], ["emissao:desc", "Emissão — mais nova primeiro"], ["numero:desc", "Nº — maior primeiro"],
+  ["cliente:asc", "Cliente — A a Z"], ["emissao:desc", "Emissão — mais nova primeiro"], ["numero:desc", "Nº da fatura — maior primeiro"],
 ];
-function _fatBuscaBarraF() {
-  const o = window._fatOrdF || {}, atual = o.campo ? o.campo + ":" + o.dir : "";
-  return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 14px;background:#11141d;border-bottom:1px solid #2a2d3e">
-    <input id="fatf-busca" type="search" placeholder="🔎 Buscar cliente ou nº da fatura" autocomplete="off"
-      value="${_fatEsc(window._fatBuscaF || "")}" oninput="fatBuscarF(this.value)"
-      style="width:320px;max-width:100%;padding:7px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
-    <label style="color:#889;font-size:12px">Ordenar por
-      <select onchange="fatOrdenarSelF(this.value)" style="margin-left:6px;padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
-        ${atual && !_FAT_ORD_OPCOES.some(([v]) => v === atual) ? `<option value="${atual}" selected>(pela coluna)</option>` : ""}
-        ${!atual ? `<option value="" selected>Emissão — mais nova primeiro</option>` : ""}
-        ${_FAT_ORD_OPCOES.map(([v, r]) => `<option value="${v}" ${v === atual ? "selected" : ""}>${r}</option>`).join("")}
-      </select></label>
-    <span id="fatf-busca-info" style="color:#889;font-size:12px"></span>
-  </div>`;
-}
-function fatOrdenarSelF(v) {
-  if (!v) return;
-  const [campo, dir] = v.split(":");
-  window._fatOrdF = { campo, dir };
-  fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
-}
-function fatBuscarF(v) {
-  window._fatBuscaF = v;
-  _fatAplicarBuscaF();
-}
 function _fatAplicarBuscaF() {
   const vis = _fatVisiveisF(), ids = new Set(vis.map(f => f.id));
   document.querySelectorAll("tr[data-fid]").forEach(tr => { tr.style.display = ids.has(tr.dataset.fid) ? "" : "none"; });
@@ -2328,26 +2451,25 @@ function _fatAplicarBuscaF() {
   });
   const todas = (window._fatFaturas || []).length;
   const tot = vis.reduce((a, f) => a + _fatLiquido(f), 0);
-  const rod = document.getElementById("fatf-rodape");
-  if (rod) rod.innerHTML = `${vis.length} fatura(s)${vis.length < todas ? ` de ${todas}` : ""} · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(tot)}</strong>`;
-  const inf = document.getElementById("fatf-busca-info");
-  if (inf) inf.textContent = vis.length < todas ? `${vis.length} de ${todas} na busca` : "";
+  const res = document.getElementById("fat-c-resumo");
+  if (res) res.innerHTML = `${vis.length} fatura(s)${vis.length < todas ? ` de ${todas}` : ""} · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(tot)}</strong>`;
   const bt = document.getElementById("fatf-btn-todas");
   if (bt) bt.textContent = `☑ Marcar todas (${vis.length})`;
   _fatSelFSync();
 }
 
-function _fatBarraLote(faturas, status) {
+// rodapé da lista de faturas (como no TecnoX): seleção à esquerda, ações em lote à direita
+function _fatRodapeF(faturas, status) {
   const b = (id, cor, rot, fn) =>
     `<button id="${id}" disabled onclick="${fn}" style="background:${cor};border:none;border-radius:6px;
-      padding:7px 13px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;margin-left:6px"
+      padding:7px 13px;color:#fff;font-size:12px;font-weight:600;cursor:pointer"
       class="fat-lote">${rot}</button>`;
-  return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 14px;
-      background:#141824;border-bottom:1px solid #2a2d3e">
-    <button class="fat-btn mini" id="fatf-btn-todas" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
-    <button class="fat-btn mini" onclick="fatSelTodasF(false)">☐ Desmarcar</button>
-    <span id="fatf-selinfo" style="margin-left:10px;font-size:12px;color:#9aa"></span>
-    <span style="margin-left:auto">
+  return `<div class="fat-rodape">
+    <span style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">
+      <button class="fat-btn mini" id="fatf-btn-todas" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
+      <button class="fat-btn mini" onclick="fatSelTodasF(false)">☐ Desmarcar</button>
+      <span id="fatf-selinfo" style="margin-left:6px;font-size:12px;color:#9aa"></span></span>
+    <span style="display:flex;flex-wrap:wrap;gap:6px">
       ${status === "aberta" ? b("fatf-btn-nf", "#0e7490", "🧾 Gerar NF", "fatLoteNf()") +
         b("fatf-btn-boleto", "#334155", "🏦 Gerar boletos", "fatLoteBoleto()") +
         b("fatf-btn-enviar", "#15803d", "📤 Enviar faturas", "fatLoteEnviar()") +
@@ -2715,49 +2837,112 @@ function _fatDocsCol(f) {
   return ic.length ? ic.join(" ") : '<span style="color:#4a5160">—</span>';
 }
 
-async function fatListarFaturas(status) {
-  const corpo = document.getElementById("fat-corpo");
-  corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando faturas...</p>";
-  const { data, error } = await _fatTodas(() => sb.from("oct_faturas").select("*")
-    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false }).order("id"));
-  if (error) {
-    corpo.innerHTML = `<div style="padding:26px;text-align:center;color:#9aa">
-      <p>A tabela de <strong>faturas</strong> ainda não existe.</p>
-      <p style="color:#666;font-size:0.85rem">Rode a migração SQL (oct_faturas) no Supabase para ativar o faturamento. A aba "Títulos em Aberto" já funciona.</p></div>`;
-    return;
+// Uma fatura por linha, com boleto e recebido JÁ juntos: antes o recebido/saldo
+// era uma ida ao banco por fatura (77 idas) e chegava linha a linha.
+async function _fatPorLotes(ids, fn) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 150) {          // 150 ids por ida: a URL tem limite
+    const r = await fn(ids.slice(i, i + 150));
+    if (r.error) return { data: out, error: r.error };
+    out.push(...(r.data || []));
   }
-  const faturas = _fatOrdenar(data || [], window._fatOrdF, _FAT_ORD_F);
-  window._fatFaturas = faturas;
-  // a selecao vale para a lista que esta' na tela: ids de outra aba viram lixo
-  const idsAqui = new Set(faturas.map(x => x.id));
-  [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
-  // um boleto por fatura numa consulta so' -- 20 faturas nao podem virar 20 idas.
-  // Le a VIEW de situacao (pago em dia / atraso / vencido), que o banco calcula
-  // com a data de hoje. Fatura com mais de um boleto (o 2o emitido para corrigir
-  // valor, ex. Bread Life 13) mostra o que interessa: pago > registrado > resto.
-  const bolPorFat = {};
-  if (faturas.length) {
-    // a view foi criada antes de consultado_em existir (b.* congela as colunas):
-    // o horario da ultima conferencia no banco vem da tabela
+  return { data: out, error: null };
+}
+async function _fatBuscarFaturas(status) {
+  const eid = window._fatEid;
+  const { data, error } = await _fatTodas(() => sb.from("oct_faturas").select("*")
+    .eq("empresa_id", eid).eq("status", status).order("emissao", { ascending: false }).order("id"));
+  if (error) return { error };
+  const faturas = data || [];
+  const ids = faturas.map(x => x.id);
+  const bolPorFat = {}, recebidos = {};
+  if (ids.length) {
+    // um boleto por fatura: lê a VIEW de situação (pago em dia / atraso / vencido),
+    // que o banco calcula com a data de hoje. Fatura com mais de um boleto (o 2º
+    // emitido para corrigir valor, ex. Bread Life 13) mostra o que interessa:
+    // pago > registrado > resto. A view foi criada antes de consultado_em
+    // existir (b.* congela as colunas): o horário da conferência vem da tabela.
     const campos = "fatura_id,nosso_numero,status,valor,valor_pago,vencimento,vence_ate,pago_em,credito_em,situacao,dias_vencido,dias_atraso";
     try {
-      const ids = faturas.map(x => x.id);
-      let r = await sb.from("oct_boletos_situacao").select(campos).in("fatura_id", ids);
-      if (r.error) r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status").in("fatura_id", ids);
+      let r = await _fatPorLotes(ids, l => sb.from("oct_boletos_situacao").select(campos).in("fatura_id", l));
+      if (r.error) r = await _fatPorLotes(ids, l => sb.from("oct_boletos").select("fatura_id,nosso_numero,status").in("fatura_id", l));
       else {
-        const c = await sb.from("oct_boletos").select("nosso_numero,consultado_em").in("fatura_id", ids);
+        const c = await _fatPorLotes(ids, l => sb.from("oct_boletos").select("nosso_numero,consultado_em").in("fatura_id", l));
         const quando = {};
         (c.data || []).forEach(x => { quando[x.nosso_numero] = x.consultado_em; });
         (r.data || []).forEach(x => { x.consultado_em = quando[x.nosso_numero] || null; });
       }
       const peso = { liquidado: 0, registrado: 1, pendente: 2, erro: 3, cancelado: 4 };
-      (r.data || []).forEach(b => {
-        const atual = bolPorFat[b.fatura_id];
-        const pb = peso[b.status] ?? 5, pa = atual ? (peso[atual.status] ?? 5) : 99;
-        if (!atual || pb < pa || (pb === pa && String(b.vencimento || "") > String(atual.vencimento || ""))) bolPorFat[b.fatura_id] = b;
+      (r.data || []).forEach(bo => {
+        const atual = bolPorFat[bo.fatura_id];
+        const pb = peso[bo.status] ?? 5, pa = atual ? (peso[atual.status] ?? 5) : 99;
+        if (!atual || pb < pa || (pb === pa && String(bo.vencimento || "") > String(atual.vencimento || ""))) bolPorFat[bo.fatura_id] = bo;
       });
-    } catch (e) { /* tabela de boletos pode nao existir */ }
+    } catch (e) { /* tabela de boletos pode não existir */ }
+    try {
+      const rr = await _fatPorLotes(ids, l => _fatTodas(() => sb.from("oct_recebimentos_titulo")
+        .select("id,fatura_id,valor").in("fatura_id", l).order("id")));
+      (rr.data || []).forEach(x => { recebidos[x.fatura_id] = (recebidos[x.fatura_id] || 0) + Number(x.valor || 0); });
+    } catch (e) { /* tabela de recebimentos pode não existir */ }
   }
+  return { faturas, bolPorFat, recebidos };
+}
+// a aba que mostra cada status: lista que chega para OUTRA aba só é guardada
+function _fatAbaDoStatus(status) { return status === "liquidada" ? "liquidadas" : "faturas"; }
+function _fatListaCache(status) {
+  const c = window._fatListas;
+  return c && c.eid === window._fatEid ? (c[status] || null) : null;
+}
+function _fatGuardaLista(status, dados) {
+  if (!window._fatListas || window._fatListas.eid !== window._fatEid) window._fatListas = { eid: window._fatEid };
+  dados.ass = JSON.stringify([dados.faturas, dados.bolPorFat, dados.recebidos]);
+  window._fatListas[status] = dados;
+}
+function _fatSaldoCel(f, rec) {
+  if (!(rec > 0)) return "—";
+  const saldo = _fatLiquido(f) - rec;
+  return `<span style="color:#4ade80">${_fatBRL(rec)}</span>` +
+    (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "");
+}
+
+async function fatListarFaturas(status) {
+  const corpo = document.getElementById("fat-corpo");
+  if (!corpo) return;
+  const aba = _fatAbaDoStatus(status);
+  const naAba = () => window._fatAba === aba && !!document.getElementById("fat-corpo");
+  const guardada = _fatListaCache(status);
+  let apaguei = false;
+  if (naAba()) {
+    if (guardada) _fatRenderFaturas(status, guardada);   // na hora, sem piscar
+    else if (!corpo.querySelector(".fat-gridwrap")) corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando faturas...</p>";
+    else { corpo.style.opacity = ".55"; apaguei = true; }   // a anterior fica, apagada, até a nova chegar
+  }
+  const eid = window._fatEid;
+  const dados = await _fatBuscarFaturas(status);
+  if (apaguei) corpo.style.opacity = "";
+  if (window._fatEid !== eid) return;
+  if (dados.error) {
+    if (!guardada && naAba()) corpo.innerHTML = `<div style="padding:26px;text-align:center;color:#9aa">
+      <p>A tabela de <strong>faturas</strong> ainda não existe.</p>
+      <p style="color:#666;font-size:0.85rem">Rode a migração SQL (oct_faturas) no Supabase para ativar o faturamento. A aba "Títulos em Aberto" já funciona.</p></div>`;
+    return;
+  }
+  const antes = guardada && guardada.ass;
+  _fatGuardaLista(status, dados);
+  if (!naAba()) return;                                // trocou de aba enquanto lia: só guarda
+  if (!guardada || antes !== dados.ass) _fatRenderFaturas(status, dados, true);
+}
+
+function _fatRenderFaturas(status, dados, manterRolagem) {
+  const corpo = document.getElementById("fat-corpo");
+  if (!corpo) return;
+  const rolagem = manterRolagem ? (corpo.querySelector(".fat-gridwrap")?.scrollTop || 0) : 0;
+  const faturas = _fatOrdenar(dados.faturas, window._fatOrdF, _FAT_ORD_F);
+  window._fatFaturas = faturas;
+  // a seleção vale para a lista que está na tela: ids de outra aba viram lixo
+  const idsAqui = new Set(faturas.map(x => x.id));
+  [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
+  const bolPorFat = dados.bolPorFat || {}, rec = dados.recebidos || {};
   window._fatBolPorFat = bolPorFat;
   const linhas = faturas.map(fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
@@ -2767,7 +2952,7 @@ async function fatListarFaturas(status) {
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     <td class="fat-td fat-r" id="fatf-vl-${fatr.id}">${_fatValorCel(fatr)}</td>
-    <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">—</td>
+    <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">${_fatSaldoCel(fatr, rec[fatr.id])}</td>
     <td class="fat-td" id="fatf-st-${fatr.id}">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
     <td class="fat-td" id="fatf-dc-${fatr.id}" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
@@ -2783,34 +2968,20 @@ async function fatListarFaturas(status) {
         title="${status === "aberta" ? "Excluir a fatura: os títulos voltam para Títulos em Aberto" : "Excluir a liquidação: a fatura volta para Faturas em Aberto"}">🗑 Excluir</button>
     </td>
   </tr>`).join("");
-  const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
-    ${_fatBarraLote(faturas, status)}
-    ${_fatBuscaBarraF()}
-    ${_fatResumoBoletos(faturas, bolPorFat, status)}
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
-    <div class="fat-rodape"><span id="fatf-rodape">${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
+    ${_fatResumoBoletos(faturas, bolPorFat, status)}
+    ${_fatRodapeF(faturas, status)}`;
+  if (rolagem) { const gw = corpo.querySelector(".fat-gridwrap"); if (gw) gw.scrollTop = rolagem; }
   _fatAplicarBuscaF();
 
-  // algo ainda em andamento no gateway? entao a tela se reconfere sozinha
-  const emAndamento = faturas.some(fr =>
-    fr.fatura_pdf_pedido_em || fr.envio_pedido_em) ||
-    Object.values(bolPorFat).some(b => b && b.status === "pendente");
+  // algo ainda em andamento no gateway? então a tela se reconfere sozinha
+  const emAndamento = faturas.some(fr => fr.fatura_pdf_pedido_em || fr.envio_pedido_em) ||
+    Object.values(bolPorFat).some(bo => bo && bo.status === "pendente");
   _fatAutoAtualizar(emAndamento, status);
-
-  // saldo por fatura (recebimentos parciais) — assíncrono, não trava a lista
-  faturas.forEach(async fr => {
-    const rec = await _fatRecebidoDa(fr.id);
-    const el = document.getElementById("fat-saldo-" + fr.id);
-    if (!el) return;
-    if (rec <= 0) { el.textContent = "—"; return; }
-    const saldo = _fatLiquido(fr) - rec;
-    el.innerHTML = `<span style="color:#4ade80">${_fatBRL(rec)}</span>` +
-      (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "");
-  });
 }
 
 // ---------- RECEBIMENTO DE TÍTULO (baixa parcial, juros/multa, forma) ----------
@@ -2941,6 +3112,7 @@ async function fatConfirmarRecebimento(faturaId) {
   alert(quitou
     ? `Título quitado! Recebido ${_fatBRL(recebido)}.`
     : `Recebimento parcial registrado. Saldo: ${_fatBRL(_fatLiquido(f) - recebido)}.`);
+  _fatInvalidar();
   fatListarFaturas("aberta");
 }
 
@@ -3201,11 +3373,23 @@ function _fatEstilo() {
      baixa demais (< 460 px) volta a rolar a página, para nada sumir. */
   #conteudo:has(> #fat-janela){display:flex;flex-direction:column}
   #fat-janela{flex:1 1 auto;min-height:460px;display:flex;flex-direction:column;box-sizing:border-box}
-  #fat-janela > .fat-titbar, #fat-janela > .fat-abas{flex:0 0 auto}
+  #fat-janela > .fat-titbar, #fat-janela > .fat-abas, #fat-janela > #fat-filtros-c{flex:0 0 auto}
+  #fat-filtros-c{background:#11141d}
+  .fat-c-g{display:inline-flex;align-items:center;gap:6px}
+  .fat-c-off{opacity:.35}
+  .fat-devs{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #2a2d3e;background:#11141d;min-width:0}
+  .fat-devs-bt{background:transparent;border:none;color:#9aa;font-size:11.5px;cursor:pointer;white-space:nowrap;padding:3px 0}
+  .fat-devs-bt:hover{color:#fff}
+  .fat-devs-lista{display:flex;gap:6px;overflow-x:auto;white-space:nowrap;min-width:0;flex:1;scrollbar-width:thin}
+  .fat-dev{background:#13151f;border:1px solid #2a2d3e;border-radius:14px;padding:3px 10px;font-size:11.5px;color:#cdd6e0;flex:0 0 auto}
+  .fat-dev b{color:#f59e0b}
+  .fat-dev-nome{display:inline-block;max-width:210px;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+  .fat-dev-nome[onclick]{cursor:pointer}.fat-dev-nome[onclick]:hover{color:#f97316;text-decoration:underline}
+  .fat-dev-q{color:#6b7688;font-size:10.5px}
+  .fat-dev-cob{cursor:pointer}
   #fat-janela > #fat-corpo{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-  #fat-corpo > *, #fat-tit-lista > *{flex:0 0 auto}
-  #fat-corpo > #fat-tit-lista{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-  #fat-corpo > .fat-gridwrap, #fat-tit-lista > .fat-gridwrap{flex:1 1 auto;min-height:140px;max-height:none}
+  #fat-corpo > *{flex:0 0 auto}
+  #fat-corpo > .fat-gridwrap{flex:1 1 auto;min-height:140px;max-height:none}
   .fat-grid{width:100%;border-collapse:collapse;font-size:12px;color:#cdd6e0}
   .fat-grid th{background:#1a1d2e;color:#9fb0c4;text-align:left;padding:8px;border-bottom:1px solid #2a2d3e;position:sticky;top:0}
   .fat-grid th[onclick]:hover{background:#232840;color:#fff}
