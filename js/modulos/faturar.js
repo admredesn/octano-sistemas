@@ -2639,7 +2639,7 @@ async function fatLiquidar(id) {
   if (!f) { alert("Fatura não encontrada."); return; }
   const jaRecebido = await _fatRecebidoDa(id);
   const saldo = +(_fatLiquido(f) - jaRecebido).toFixed(2);
-  const hoje = new Date().toISOString().slice(0, 10);
+  const hoje = _fatHojeIso();   // data LOCAL: toISOString e' UTC e depois das 21h ja' marcava amanha
   const venc = f.vencimento ? String(f.vencimento).slice(0, 10) : null;
   const diasAtraso = venc && hoje > venc
     ? Math.round((new Date(hoje) - new Date(venc)) / 86400000) : 0;
