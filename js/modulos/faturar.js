@@ -53,6 +53,8 @@ async function moduloFaturar() {
       </div>
       <div id="fat-corpo" style="padding:0"></div>
     </div>`;
+  _fatAjustarAltura();
+  if (!window._fatAlturaOn) { window.addEventListener("resize", _fatAjustarAltura); window._fatAlturaOn = true; }
   fatAba(window._fatAba);
 }
 
@@ -81,6 +83,21 @@ async function _fatTodas(montar) {
     out.push(...(r.data || []));
     if ((r.data || []).length < 1000) return { data: out, error: null };
   }
+}
+
+// Cabeçalho parado e só a tabela rolando: a janela do Faturar tem de ter a
+// altura EXATA da área de conteúdo. Calculada aqui (e a cada redimensionar) em
+// vez de só no CSS -- o :has() que fazia isso é ignorado CALADO por navegador
+// desatualizado, e aí a página voltava a rolar inteira (03/10/2026).
+function _fatAjustarAltura() {
+  const j = document.getElementById("fat-janela");
+  const c = document.getElementById("conteudo");
+  if (!j || !c || !c.contains(j)) return;
+  const cs = getComputedStyle(c), js = getComputedStyle(j);
+  const livre = c.clientHeight - parseFloat(cs.paddingTop || 0) - parseFloat(cs.paddingBottom || 0)
+    - parseFloat(js.marginTop || 0) - parseFloat(js.marginBottom || 0);
+  // janela muito baixa: deixa a página rolar em vez de espremer a tabela
+  j.style.height = Math.max(460, Math.floor(livre)) + "px";
 }
 
 // ---------- Aba: Títulos em Aberto ----------
@@ -3183,7 +3200,7 @@ function _fatEstilo() {
      rolava inteira e a tabela rolava de novo por dentro (duas barras). Tela
      baixa demais (< 460 px) volta a rolar a página, para nada sumir. */
   #conteudo:has(> #fat-janela){display:flex;flex-direction:column}
-  #fat-janela{flex:1 1 auto;min-height:460px;display:flex;flex-direction:column}
+  #fat-janela{flex:1 1 auto;min-height:460px;display:flex;flex-direction:column;box-sizing:border-box}
   #fat-janela > .fat-titbar, #fat-janela > .fat-abas{flex:0 0 auto}
   #fat-janela > #fat-corpo{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
   #fat-corpo > *, #fat-tit-lista > *{flex:0 0 auto}
