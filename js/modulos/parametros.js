@@ -91,7 +91,7 @@ const PARAM_DEFS = [
     aba: 'cobranca',
     grupo: '📧 Cobrança — envio de fatura',
     acoes: [{ rot: '✍ Textos das mensagens', fn: 'msgAbrirEditor()' },
-            { rot: '✉ Testar envio', fn: 'parTestarEmail()' }],
+            { rot: '✉ Conferir envio', fn: 'parTestarEmail()' }],
     itens: [
       { chave: 'cobranca_envio_ativo', rot: 'Enviar fatura ao cliente automaticamente', pad: false,
         desc: 'Libera o botão "Enviar fatura" (NF-e + boleto + fatura) por WhatsApp e e-mail.',
@@ -220,62 +220,77 @@ async function parToggle(ch, el) {
 // A tela nao fala SMTP (nem poderia: a senha vive no gateway). Enfileira o
 // teste e espera a resposta -- que traz o erro do servidor sem traducao, porque
 // e' o texto do servidor que resolve o problema.
+// CONFERIR ENVIO (03/10/2026). O "Testar envio" pedia ao gateway da NUVEM (Railway)
+// para mandar um e-mail -- e o Railway bloqueia SMTP de saida: dava "Connection
+// timeout" SEMPRE, com qualquer porta, e a tela ainda culpava a porta. Nunca
+// funcionou (testes de 02/09 e 03/10, todos timeout), enquanto a fatura 16 do
+// Florestal saia normal por e-mail no mesmo dia. Quem envia de verdade e' o NUCLEO
+// do posto. Ate' o teste ir para o nucleo, a prova que vale e' a ultima fatura que
+// saiu por e-mail -- e a ultima falha, se houver.
 async function parTestarEmail() {
   if (!podeOuAvisa('parametros.testar_email')) return;
-  const de = String(_parAtual['cobranca_email_remetente'] || '').trim();
-  if (!de) { _parToast('Preencha e salve o e-mail que envia a cobrança antes de testar.', 'erro'); return; }
-  const destino = prompt('Enviar o teste para qual endereço?', de);
-  if (destino === null) return;
-
   const cx = document.createElement('div');
   cx.id = 'par-teste';
   cx.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99998;display:flex;align-items:center;justify-content:center';
-  cx.innerHTML = `<div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;width:min(520px,92vw);color:#dbe2ea">
-      <h3 style="color:#f97316;margin:0 0 12px">✉ Teste de envio</h3>
-      <div id="par-teste-corpo"><p style="color:#9aa">Conectando ao servidor e enviando...</p></div>
+  cx.innerHTML = `<div style="background:#0f1119;border:1px solid #2a2d3e;border-radius:12px;padding:22px;width:min(560px,92vw);color:#dbe2ea">
+      <h3 style="color:#f97316;margin:0 0 12px">✉ Envio de e-mail deste posto</h3>
+      <div id="par-teste-corpo"><p style="color:#9aa">Conferindo os últimos envios...</p></div>
       <div style="text-align:right;margin-top:14px">
         <button onclick="document.getElementById('par-teste').remove()"
           style="background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:8px 16px;color:#c7d0dc;cursor:pointer">Fechar</button>
       </div></div>`;
   document.body.appendChild(cx);
-  const corpo = () => document.getElementById('par-teste-corpo');
+  const corpo = document.getElementById('par-teste-corpo');
+  corpo.innerHTML = await _parUltimoEnvio(_parEmpresa);
+}
 
-  const { data: s } = await sb.auth.getSession();
-  const quem = (s && s.session && s.session.user && s.session.user.email) || 'retaguarda';
-  const { data: novo, error } = await sb.from('oct_email_testes')
-    .insert({ empresa_id: _parEmpresa, destino: String(destino).trim() || de, pedido_por: quem })
-    .select('id').single();
-  if (error) {
-    if (corpo()) corpo().innerHTML = /oct_email_testes|does not exist|relation|PGRST/i.test(error.message || '')
-      ? '<p style="color:#f87171">Falta rodar <code>repo/sql/SQL-TESTE-EMAIL.sql</code> no Supabase.</p>'
-      : '<p style="color:#f87171">Erro: ' + _parEsc(error.message) + '</p>';
-    return;
-  }
+function _parQuando(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('pt-BR') + ' às ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
 
-  // o SMTP pode demorar; esperar pouco fazia a tela culpar o worker por um
-  // problema de rede que ainda estava sendo diagnosticado
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 2500));
-    const { data: t } = await sb.from('oct_email_testes')
-      .select('status,erro,detalhe,destino').eq('id', novo.id).maybeSingle();
-    if (!t || t.status === 'pendente') continue;
-    if (!corpo()) return;
-    if (t.status === 'ok') {
-      corpo().innerHTML = `<p style="color:#7ee2a0;font-weight:600">✔ Funcionou</p>
-        <p style="margin-top:8px">Enviado para <b>${_parEsc(t.destino || '')}</b>. Confira a caixa de entrada
-        (e o spam, na primeira vez).</p>
-        <p style="color:#6b7688;font-size:0.76rem;margin-top:8px">Resposta do servidor: ${_parEsc(t.detalhe || '')}</p>`;
-    } else {
-      corpo().innerHTML = `<p style="color:#f87171;font-weight:600">Não enviou</p>
-        <pre style="background:#0f1520;padding:10px;border-radius:6px;font-size:0.74rem;white-space:pre-wrap;
-          color:#c8d0da;margin-top:8px;max-height:220px;overflow:auto">${_parEsc(t.erro || '')}</pre>
-        ${_parDicaSmtp(t.erro || '')}`;
-    }
-    return;
+async function _parUltimoEnvio(empresaId) {
+  const sel = 'numero,cliente_nome,enviada_em,enviada_por,envio_destino,envio_erro';
+  const [ok, ult, falha] = await Promise.all([
+    sb.from('oct_faturas').select(sel).eq('empresa_id', empresaId).ilike('enviada_por', '%email%')
+      .order('enviada_em', { ascending: false }).limit(1),
+    sb.from('oct_faturas').select(sel).eq('empresa_id', empresaId).not('enviada_em', 'is', null)
+      .order('enviada_em', { ascending: false }).limit(1),
+    // falha total: o nucleo limpa o pedido e grava o erro, sem data de envio
+    sb.from('oct_faturas').select(sel).eq('empresa_id', empresaId).is('enviada_em', null)
+      .not('envio_erro', 'is', null).order('numero', { ascending: false }).limit(1),
+  ]);
+  if (ok.error) return `<p style="color:#f87171">Não consegui ler as faturas: ${_parEsc(ok.error.message)}</p>`;
+  const f = (ok.data || [])[0], u = (ult.data || [])[0], x = (falha.data || [])[0];
+  const emailDe = d => String(d || '').split(',').map(t => t.trim()).filter(t => t.includes('@')).join(', ');
+  // o envio mais recente teve problema no e-mail (o WhatsApp pode ter ido)?
+  const erroUlt = u && u.envio_erro && /e-?mail|smtp/i.test(u.envio_erro) && (!f || u.enviada_em > f.enviada_em || u.numero === f.numero);
+  const erro = erroUlt ? u : (x && (!f || Number(x.numero) > Number(f.numero)) ? x : null);
+  let h = '';
+  if (f) {
+    h += (erro
+      ? `<p style="color:#f59e0b;font-weight:600">⚠ O envio mais recente por e-mail deu erro — o anterior tinha funcionado</p>`
+      : `<p style="color:#7ee2a0;font-weight:600">✔ O e-mail de cobrança deste posto está funcionando</p>`) + `
+      <p style="margin-top:8px">Última fatura que saiu por e-mail: <b>nº ${_parEsc(f.numero)}</b>
+      (${_parEsc(f.cliente_nome || '')}) em <b>${_parQuando(f.enviada_em)}</b>
+      ${emailDe(f.envio_destino) ? 'para <b>' + _parEsc(emailDe(f.envio_destino)) + '</b>' : ''}.</p>`;
+  } else {
+    h += `<p style="color:#f59e0b;font-weight:600">Nenhuma fatura deste posto saiu por e-mail ainda.</p>
+      <p style="margin-top:8px;color:#9aa">Gere uma fatura e use <b>Enviar fatura</b> no Faturar — o resultado
+      (enviado ou o erro do servidor) aparece na própria fatura.</p>`;
   }
-  if (corpo()) corpo().innerHTML = `<p style="color:#f59e0b">O teste não voltou.</p>
-    <p style="color:#889;font-size:0.8rem;margin-top:8px">O pedido ficou na fila. Se o worker do gateway
-    (<code>BOLETO_WORKER=1</code> no Railway) não estiver ligado, ele não é executado.</p>`;
+  if (erro) {
+    h += `<p style="color:#f87171;font-weight:600;margin-top:12px">Último problema: fatura nº ${_parEsc(erro.numero)}</p>
+      <pre style="background:#0f1520;padding:10px;border-radius:6px;font-size:0.74rem;white-space:pre-wrap;
+        color:#c8d0da;margin-top:6px;max-height:160px;overflow:auto">${_parEsc(erro.envio_erro || '')}</pre>
+      ${_parDicaSmtp(erro.envio_erro || '')}`;
+  }
+  h += `<p style="color:#6b7688;font-size:0.76rem;margin-top:12px;line-height:1.45">Por que não manda um e-mail de
+    teste daqui? O teste sairia da nuvem, que bloqueia e-mail (dava "Connection timeout" com qualquer porta).
+    A fatura sai do computador do posto, onde a porta abre normalmente. O teste pelo posto entra na próxima
+    atualização do núcleo.</p>`;
+  return h;
 }
 
 // traduz os erros de SMTP que aparecem de verdade
