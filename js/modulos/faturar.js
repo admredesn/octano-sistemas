@@ -1679,6 +1679,17 @@ async function fatGerarFatura() {
       <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:0.8rem;color:#9aa;cursor:pointer">
         <input type="checkbox" id="fgf-salvar" ${prazo == null ? "checked" : ""} style="width:auto">
         <span id="fgf-salvar-txt">Gravar este prazo no cadastro do cliente</span></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+        ${_fatAjCampo("fgf-desc", "Desconto", "#4ade80")}
+        ${_fatAjCampo("fgf-acr", "Acréscimo", "#f0b45c")}
+      </div>
+      <div style="margin-top:10px;background:#13151f;border-radius:8px;padding:10px 11px;display:flex;justify-content:space-between;align-items:center">
+        <span style="color:#9aa;font-size:0.82rem">Valor líquido — é o que se cobra</span>
+        <b id="fgf-liq" style="color:#f59e0b;font-size:1.2rem">R$ ${_fatMoney(total)}</b></div>
+      <div id="fgf-obs-box" style="display:none;margin-top:10px">
+        <label style="color:#9aa;font-size:0.74rem">Motivo <span style="color:#667">(fica registrado na fatura)</span></label>
+        <input id="fgf-obs" placeholder="ex.: preço negociado R$ 5,79/L · juros de atraso"
+          style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
       <div id="fgf-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
@@ -1686,6 +1697,44 @@ async function fatGerarFatura() {
       </div>
     </div>`);
   _fatVencDica();
+}
+
+// DESCONTO / ACRESCIMO NA GERACAO (03/10/2026): so' existiam no "Editar", depois da
+// fatura pronta -- e o PDF da fatura ja' tinha nascido com o valor cheio. Mesmo
+// modelo do Editar: o bruto e' a soma dos titulos e nao muda; desconto e acrescimo
+// ficam ao lado e o banco calcula o liquido (valor_liquido), que e' o que o boleto cobra.
+function _fatAjCampo(id, rot, cor) {
+  return `<div><label style="color:#9aa;font-size:0.74rem">${rot}</label>
+    <div style="display:flex;gap:4px">
+      <input id="${id}" type="number" step="0.01" min="0" placeholder="0,00" oninput="_fatGerarCalc()"
+        style="flex:1;min-width:0;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:${cor};font-weight:700">
+      <select id="${id}-tipo" onchange="_fatGerarCalc()" title="Em reais ou em % do total"
+        style="width:58px;padding:0 4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#cdd6e0">
+        <option value="rs">R$</option><option value="pct">%</option></select>
+    </div><div id="${id}-rs" style="font-size:0.72rem;color:#889;min-height:15px;margin-top:3px"></div></div>`;
+}
+
+// le' um campo de ajuste e devolve o valor em REAIS (o % e' sobre o bruto)
+function _fatAjValor(id, bruto) {
+  const n = Number(String(document.getElementById(id)?.value || "0").replace(",", ".")) || 0;
+  const pct = document.getElementById(id + "-tipo")?.value === "pct";
+  return { rs: +(pct ? bruto * n / 100 : n).toFixed(2), pct, n };
+}
+
+function _fatGerarCalc() {
+  const st = window._fatNovaFat; if (!st) return;
+  const d = _fatAjValor("fgf-desc", st.total), a = _fatAjValor("fgf-acr", st.total);
+  const liq = +(st.total - d.rs + a.rs).toFixed(2);
+  const lb = document.getElementById("fgf-liq");
+  if (lb) { lb.textContent = "R$ " + _fatMoney(liq); lb.style.color = liq <= 0 ? "#f87171" : "#f59e0b"; }
+  const dr = document.getElementById("fgf-desc-rs"), ar = document.getElementById("fgf-acr-rs");
+  if (dr) dr.textContent = d.pct && d.rs ? "= R$ " + _fatMoney(d.rs) : "";
+  if (ar) ar.textContent = a.pct && a.rs ? "= R$ " + _fatMoney(a.rs) : "";
+  const box = document.getElementById("fgf-obs-box");
+  if (box) box.style.display = (d.rs > 0 || a.rs > 0) ? "block" : "none";
+  const msg = document.getElementById("fgf-msg");
+  if (msg) msg.textContent = liq <= 0 ? "O desconto é maior ou igual ao total — a fatura ficaria zerada ou negativa." : "";
+  return { desc: d, acr: a, liq };
 }
 
 function _fatVencDica() {
@@ -1724,6 +1773,19 @@ async function fatGerarFaturaOk() {
   if (!venc) { msg.textContent = "Informe o vencimento."; return; }
   if (venc < st.hoje && !confirm("O vencimento é anterior a hoje — a fatura nasce vencida. Gerar assim mesmo?")) return;
 
+  const aj = _fatGerarCalc();
+  const desc = aj.desc.rs, acr = aj.acr.rs;
+  if (aj.liq <= 0) { msg.textContent = "O desconto é maior ou igual ao total da fatura."; return; }
+  let motivo = (document.getElementById("fgf-obs")?.value || "").trim();
+  if (desc > 0 || acr > 0) {
+    // mexer no valor cobrado e' a mesma permissao do "Editar fatura"
+    if (!podeOuAvisa('faturar.alterar_fatura')) return;
+    if (desc > 0 && !motivo && !confirm("Gerar a fatura com desconto sem escrever o motivo?")) return;
+    const pct = [aj.desc.pct && desc ? `desconto ${aj.desc.n}%` : "", aj.acr.pct && acr ? `acréscimo ${aj.acr.n}%` : ""]
+      .filter(Boolean).join(", ");
+    if (pct) motivo = (motivo ? motivo + " " : "") + `(${pct} sobre R$ ${_fatMoney(st.total)})`;
+  }
+
   btn.disabled = true;
   msg.style.color = "#9aa"; msg.textContent = "Gerando...";
 
@@ -1731,6 +1793,10 @@ async function fatGerarFaturaOk() {
     empresa_id: window._fatEid, cliente_id: st.cliId,
     cliente_nome: st.cliNome || null, valor: st.total,
     vencimento: venc, status: "aberta",
+    ...((desc > 0 || acr > 0) ? {
+      desconto: desc, acrescimo: acr, observacao: motivo || null,
+      alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
+    } : {}),
     // ja' nasce pedindo o PDF: o worker gera em segundos e o documento existe
     // desde o comeco, em vez de so' quando alguem lembra de abrir a fatura
     fatura_pdf_pedido_em: new Date().toISOString(),
@@ -1771,7 +1837,11 @@ async function fatGerarFaturaOk() {
   }
   window._fatSel.clear();
   _fatFechaModal();
-  alert(`Fatura ${nova.numero ?? ""} gerada — vence em ${_fatData(venc)}.` + avisoPrazo);
+  const txtAj = (desc > 0 || acr > 0)
+    ? `\nBruto R$ ${_fatMoney(st.total)}` + (desc > 0 ? ` − desconto R$ ${_fatMoney(desc)}` : "")
+      + (acr > 0 ? ` + acréscimo R$ ${_fatMoney(acr)}` : "") + ` = líquido R$ ${_fatMoney(aj.liq)}.`
+    : "";
+  alert(`Fatura ${nova.numero ?? ""} gerada — vence em ${_fatData(venc)}.` + txtAj + avisoPrazo);
   fatAba("faturas");
 }
 
