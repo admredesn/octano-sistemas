@@ -29,6 +29,13 @@ function _fatVencDe(t) {
   const d = new Date(base); d.setHours(0, 0, 0, 0);
   return d;
 }
+// SALDO ANTERIOR DO TECNOX (03/10/2026): dívida antiga que o TecnoX mostra no
+// saldo do cliente e não tem cupom no banco do posto (o espelho cria com data de
+// 31/07). No TecnoX ela JÁ É faturada/cobrada (ex.: JOAO VITOR fatura 259032 de
+// R$ 315,63, MARCINHO fatura 258770) -- as faturas de lá ficam no servidor
+// remoto, fora do alcance do Octano. Faturar aqui de novo cobraria o cliente duas
+// vezes; quando ele paga no TecnoX, o espelho dá baixa sozinho.
+function _fatEhSaldoAnt(t) { return /^\s*saldo anterior/i.test((t && t.observacao) || ""); }
 function _fatAtrasoDias(venc) {
   if (!venc) return null;
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
@@ -352,7 +359,8 @@ function _fatRenderTitulos(manterRolagem) {
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
     <td class="fat-td" style="color:${vencCor}">${venc ? _fatData(venc) : "—"}</td>
     <td class="fat-td" style="text-align:center">${atrTxt}</td>
-    <td class="fat-td">${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}</td>
+    <td class="fat-td">${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}${_fatEhSaldoAnt(t)
+      ? ` <span class="fat-sa" title="${_fatEsc(t.observacao)} — já faturado/cobrado pelo TecnoX; o espelho dá baixa quando o cliente pagar lá">saldo anterior · TecnoX</span>` : ""}</td>
     <td class="fat-td">${_fatEsc(t.numero_nfe) || "—"}</td>
     <td class="fat-td">${_fatEsc(t.forma_nome) || "Prazo"}</td>
     <td class="fat-td fat-r">${_fatMoney(t.valor)}</td>
@@ -1888,6 +1896,13 @@ async function fatGerarFatura() {
   if (cliIds.length > 1) { alert("Selecione títulos de UM cliente só por fatura."); return; }
   const total = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
   const cliId = titulos[0].cliente_id || null;
+  const sa = titulos.filter(_fatEhSaldoAnt);
+  if (sa.length && !confirm(
+    `Atenção: ${sa.length} título(s) marcado(s) são SALDO ANTERIOR DO TECNOX (` +
+    `R$ ${_fatMoney(sa.reduce((a, t) => a + Number(t.valor || 0), 0))}).\n\n` +
+    "Essa dívida já é faturada e cobrada pelo TecnoX. Gerar a fatura aqui também " +
+    "cobra o cliente DUAS VEZES pela mesma dívida.\n\n" +
+    "Só continue se este saldo NÃO estiver em fatura do TecnoX. Gerar assim mesmo?")) return;
 
   // prazo do cadastro. Le' a pessoa inteira de proposito: se a coluna
   // prazo_dias ainda nao existir (SQL nao rodado), isso nao quebra a geracao.
@@ -3867,6 +3882,7 @@ function _fatEstilo() {
   #fat-filtros-c{background:#11141d}
   .fat-c-g{display:inline-flex;align-items:center;gap:6px}
   .fat-c-off{opacity:.35}
+  .fat-sa{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;background:#2a2010;color:#f0c98a;font-size:10px;border:1px solid #63501f;cursor:help;white-space:nowrap}
   .fat-parc{display:inline-block;margin-left:4px;padding:0 6px;border-radius:9px;background:#2b2140;color:#c4b5fd;font-size:10px;border:1px solid #4c3b78;cursor:help}
   .fat-devs{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #2a2d3e;background:#11141d;min-width:0}
   .fat-devs-bt{background:transparent;border:none;color:#9aa;font-size:11.5px;cursor:pointer;white-space:nowrap;padding:3px 0}
