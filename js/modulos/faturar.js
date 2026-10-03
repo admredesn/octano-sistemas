@@ -101,7 +101,20 @@ async function fatListarTitulos() {
     sb.from("oct_empresas").select("prazo_padrao_dias").eq("id", eid).single().then(r => r, () => ({ data: null })),
   ]);
   window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
-  const todos = (tiRes.data || []);
+  window._fatTitCache = { eid, status: F.status, todos: tiRes.data || [], clientes: cliRes.data || [] };
+  _fatRenderTitulos();
+}
+
+// Desenha a aba com o que JÁ foi lido. Cliente, forma, datas, busca e ordem
+// filtram na hora, sem voltar ao banco: ir ao banco a cada pausa da digitação
+// apagava o campo de busca no meio ("jose fernando" virava "joser", 03/10/2026).
+// Só o Status muda o que se lê (o filtro de status vai para o banco).
+function _fatRenderTitulos() {
+  const corpo = document.getElementById("fat-corpo");
+  const c = window._fatTitCache;
+  if (!corpo || !c) return;
+  const F = window._fatF;
+  const todos = c.todos;
   const ehAberto = t => !t.status || t.status === "aberto";
   // aplica filtros (client-side sobre o carregado)
   let titulos = todos.filter(t => {
@@ -115,7 +128,7 @@ async function fatListarTitulos() {
     const emi = String(t.registrado_em || t.criado_em || "").slice(0, 10);
     if (F.de && emi && emi < F.de) return false;
     if (F.ate && emi && emi > F.ate) return false;
-    if (F.busca) { const b = F.busca.toLowerCase(); const alvo = ((t.cliente_nome || "") + " " + (t.numero_nfe || "")).toLowerCase(); if (alvo.indexOf(b) < 0) return false; }
+    if (F.busca) { const b = _fatNorm(F.busca).trim(); const alvo = _fatNorm((t.cliente_nome || "") + " " + (t.numero_nfe || "")); if (b && alvo.indexOf(b) < 0) return false; }
     return true;
   });
   titulos = _fatOrdenar(titulos, window._fatOrdT, _FAT_ORD_T);
@@ -136,7 +149,7 @@ async function fatListarTitulos() {
   const selTotal = titulos.filter(t => window._fatSel.has(t.id)).reduce((s, t) => s + Number(t.valor || 0), 0);
 
   const cliOpts = "<option value=''>Todos os clientes</option>" +
-    (cliRes.data || []).map(c => `<option value='${c.id}' ${filtroCli === c.id ? "selected" : ""}>${_fatEsc(c.nome)}</option>`).join("");
+    c.clientes.map(p => `<option value='${p.id}' ${filtroCli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("");
 
   const linhas = titulos.map((t, i) => {
     const venc = _fatVencDe(t);
@@ -298,7 +311,13 @@ function fatSetF(campo, valor) {
   window._fatF = window._fatF || {};
   window._fatF[campo] = valor;
   window._fatSel = new Set();
-  fatListarTitulos();
+  _fatTitulosDeNovo();
+}
+// lê do banco só quando precisa (status mudou, outro posto); senão redesenha
+function _fatTitulosDeNovo() {
+  const c = window._fatTitCache, F = window._fatF || {};
+  if (c && c.eid === window._fatEid && c.status === F.status && document.getElementById("fat-corpo")) _fatRenderTitulos();
+  else fatListarTitulos();
 }
 let _fatBuscaTimer = null;
 function fatSetFBusca(valor) {
@@ -306,11 +325,17 @@ function fatSetFBusca(valor) {
   window._fatF.busca = valor;
   clearTimeout(_fatBuscaTimer);
   _fatBuscaTimer = setTimeout(() => {
-    Promise.resolve(fatListarTitulos()).then(() => {
-      const inp = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
-      if (inp) { inp.focus(); try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) {} }
-    });
-  }, 350);
+    // redesenho síncrono: nenhuma tecla cai entre apagar e recriar o campo
+    const ant = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
+    const pos = ant && ant.selectionStart != null ? ant.selectionStart : null;
+    _fatTitulosDeNovo();
+    const inp = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
+    if (inp) {
+      inp.focus();
+      const p = pos == null ? inp.value.length : Math.min(pos, inp.value.length);
+      try { inp.setSelectionRange(p, p); } catch (e) {}
+    }
+  }, 250);
 }
 function fatLimparF() {
   window._fatF = { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
@@ -2159,7 +2184,7 @@ function fatOrdenarT(campo) {
   window._fatOrdT = (o.campo === campo)
     ? { campo, dir: o.dir === "asc" ? "desc" : "asc" }
     : { campo, dir: (campo === "cliente" || campo === "forma") ? "asc" : "desc" };
-  fatListarTitulos();
+  _fatTitulosDeNovo();
 }
 
 // ============================================================
