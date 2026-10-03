@@ -2097,7 +2097,7 @@ function _fatOrdenar(lista, ord, campos) {
 // cabecalho clicavel, com a seta de quem esta' mandando na ordem
 function _fatTh(rot, campo, ord, fn, extra) {
   const ativo = ord && ord.campo === campo;
-  const seta = ativo ? (ord.dir === "asc" ? " ▲" : " ▼") : "";
+  const seta = ativo ? (ord.dir === "asc" ? " ▲" : " ▼") : '<span style="opacity:.35"> ↕</span>';
   return `<th ${extra || ""} onclick="${fn}('${campo}')" title="Ordenar por ${rot}"
     style="cursor:pointer;user-select:none;${ativo ? "color:#f97316" : ""}">${rot}${seta}</th>`;
 }
@@ -2166,7 +2166,7 @@ function fatToggleF(id) {
 
 function fatSelTodasF(marcar) {
   const s = _fatSelF();
-  (window._fatFaturas || []).forEach(f => {
+  _fatVisiveisF().forEach(f => {
     if (marcar) s.add(f.id); else s.delete(f.id);
     const cx = document.getElementById("fatf-chk-" + f.id);
     if (cx) cx.checked = !!marcar;
@@ -2191,9 +2191,76 @@ function _fatSelFSync() {
   });
   const mestre = document.getElementById("fatf-chk-todas");
   if (mestre) {
-    mestre.checked = lista.length > 0 && marcadas.length === lista.length;
-    mestre.indeterminate = marcadas.length > 0 && marcadas.length < lista.length;
+    const vis = _fatVisiveisF(), marcVis = vis.filter(f => s.has(f.id));
+    mestre.checked = vis.length > 0 && marcVis.length === vis.length;
+    mestre.indeterminate = marcVis.length > 0 && marcVis.length < vis.length;
   }
+}
+
+// ---------- BUSCA E ORDEM DAS FATURAS (03/10/2026) ----------
+// Busca por cliente ou numero sem redesenhar a lista (redesenhar tirava o cursor do
+// campo a cada letra): esconde as linhas que nao batem e refaz contagem e total.
+// Fatura escondida pela busca SAI da selecao -- senao "Enviar faturas" mandaria o
+// que nao esta' na tela.
+function _fatNorm(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function _fatVisiveisF() {
+  const termo = _fatNorm(window._fatBuscaF || "").trim();
+  const lista = window._fatFaturas || [];
+  if (!termo) return lista;
+  return lista.filter(f => _fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "")).includes(termo));
+}
+const _FAT_ORD_OPCOES = [
+  ["vencimento:asc", "Vencimento — mais próximo primeiro"], ["vencimento:desc", "Vencimento — mais distante primeiro"],
+  ["valor:desc", "Valor — maior primeiro"], ["valor:asc", "Valor — menor primeiro"],
+  ["cliente:asc", "Cliente — A a Z"], ["emissao:desc", "Emissão — mais nova primeiro"], ["numero:desc", "Nº — maior primeiro"],
+];
+function _fatBuscaBarraF() {
+  const o = window._fatOrdF || {}, atual = o.campo ? o.campo + ":" + o.dir : "";
+  return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 14px;background:#11141d;border-bottom:1px solid #2a2d3e">
+    <input id="fatf-busca" type="search" placeholder="🔎 Buscar cliente ou nº da fatura" autocomplete="off"
+      value="${_fatEsc(window._fatBuscaF || "")}" oninput="fatBuscarF(this.value)"
+      style="width:320px;max-width:100%;padding:7px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+    <label style="color:#889;font-size:12px">Ordenar por
+      <select onchange="fatOrdenarSelF(this.value)" style="margin-left:6px;padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+        ${atual && !_FAT_ORD_OPCOES.some(([v]) => v === atual) ? `<option value="${atual}" selected>(pela coluna)</option>` : ""}
+        ${!atual ? `<option value="" selected>Emissão — mais nova primeiro</option>` : ""}
+        ${_FAT_ORD_OPCOES.map(([v, r]) => `<option value="${v}" ${v === atual ? "selected" : ""}>${r}</option>`).join("")}
+      </select></label>
+    <span id="fatf-busca-info" style="color:#889;font-size:12px"></span>
+  </div>`;
+}
+function fatOrdenarSelF(v) {
+  if (!v) return;
+  const [campo, dir] = v.split(":");
+  window._fatOrdF = { campo, dir };
+  fatListarFaturas(window._fatAba === "liquidadas" ? "liquidada" : "aberta");
+}
+function fatBuscarF(v) {
+  window._fatBuscaF = v;
+  _fatAplicarBuscaF();
+}
+function _fatAplicarBuscaF() {
+  const vis = _fatVisiveisF(), ids = new Set(vis.map(f => f.id));
+  document.querySelectorAll("tr[data-fid]").forEach(tr => { tr.style.display = ids.has(tr.dataset.fid) ? "" : "none"; });
+  const s = _fatSelF();
+  (window._fatFaturas || []).forEach(f => {
+    if (!ids.has(f.id) && s.has(f.id)) {
+      s.delete(f.id);
+      const cx = document.getElementById("fatf-chk-" + f.id);
+      if (cx) cx.checked = false;
+    }
+  });
+  const todas = (window._fatFaturas || []).length;
+  const tot = vis.reduce((a, f) => a + _fatLiquido(f), 0);
+  const rod = document.getElementById("fatf-rodape");
+  if (rod) rod.innerHTML = `${vis.length} fatura(s)${vis.length < todas ? ` de ${todas}` : ""} · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(tot)}</strong>`;
+  const inf = document.getElementById("fatf-busca-info");
+  if (inf) inf.textContent = vis.length < todas ? `${vis.length} de ${todas} na busca` : "";
+  const bt = document.getElementById("fatf-btn-todas");
+  if (bt) bt.textContent = `☑ Marcar todas (${vis.length})`;
+  _fatSelFSync();
 }
 
 function _fatBarraLote(faturas, status) {
@@ -2203,7 +2270,7 @@ function _fatBarraLote(faturas, status) {
       class="fat-lote">${rot}</button>`;
   return `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 14px;
       background:#141824;border-bottom:1px solid #2a2d3e">
-    <button class="fat-btn mini" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
+    <button class="fat-btn mini" id="fatf-btn-todas" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
     <button class="fat-btn mini" onclick="fatSelTodasF(false)">☐ Desmarcar</button>
     <span id="fatf-selinfo" style="margin-left:10px;font-size:12px;color:#9aa"></span>
     <span style="margin-left:auto">
@@ -2608,7 +2675,7 @@ async function fatListarFaturas(status) {
     } catch (e) { /* tabela de boletos pode nao existir */ }
   }
   window._fatBolPorFat = bolPorFat;
-  const linhas = faturas.map(fatr => `<tr>
+  const linhas = faturas.map(fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
     <td class="fat-td">${fatr.numero ?? "—"}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
@@ -2633,13 +2700,14 @@ async function fatListarFaturas(status) {
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
   corpo.innerHTML = `
     ${_fatBarraLote(faturas, status)}
+    ${_fatBuscaBarraF()}
     ${_fatResumoBoletos(faturas, bolPorFat, status)}
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th><th>Docs</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="10" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
-    <div class="fat-rodape"><span>${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
-  _fatSelFSync();
+    <div class="fat-rodape"><span id="fatf-rodape">${faturas.length} fatura(s) · Total: <strong style="color:#f59e0b">R$ ${_fatMoney(total)}</strong></span></div>`;
+  _fatAplicarBuscaF();
 
   // algo ainda em andamento no gateway? entao a tela se reconfere sozinha
   const emAndamento = faturas.some(fr =>
