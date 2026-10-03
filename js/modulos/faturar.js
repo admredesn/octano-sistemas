@@ -67,19 +67,41 @@ function fatAba(aba) {
   else fatListarFaturas(aba === "liquidadas" ? "liquidada" : "aberta");
 }
 
+// O PostgREST devolve no máximo 1000 linhas e corta o resto CALADO. A aba
+// carregava TODOS os títulos do posto (pagos, faturados, cancelados) e só depois
+// filtrava "em aberto": no Florestal (1.246 títulos) os em aberto mais antigos
+// ficavam fora do corte -- em 03/10/2026 a fatura do José Fernando foi excluída,
+// os 2 títulos (mar/2025) voltaram para aberto no banco e não apareceram.
+// Agora o status vai para o banco e a leitura pagina até acabar.
+async function _fatTodas(montar) {
+  const out = [];
+  for (let off = 0; ; off += 1000) {
+    const r = await montar().range(off, off + 999);
+    if (r.error) return { data: out.length ? out : null, error: r.error };
+    out.push(...(r.data || []));
+    if ((r.data || []).length < 1000) return { data: out, error: null };
+  }
+}
+
 // ---------- Aba: Títulos em Aberto ----------
 async function fatListarTitulos() {
   const corpo = document.getElementById("fat-corpo");
   corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
   const eid = window._fatEid;
+  const F = window._fatF = window._fatF || { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
+  const titQ = () => {
+    let q = sb.from("oct_pdv_notas_prazo").select("*").eq("empresa_id", eid);
+    if (F.status === "aberto" || F.status === "vencido") q = q.or("status.is.null,status.eq.aberto");
+    else if (F.status === "pago" || F.status === "parcelado") q = q.eq("status", F.status);
+    return q.order("registrado_em", { ascending: false }).order("id");   // id: ordem estável entre as páginas
+  };
   const [tiRes, cliRes, empRes] = await Promise.all([
-    sb.from("oct_pdv_notas_prazo").select("*").eq("empresa_id", eid).order("registrado_em", { ascending: false }),
-    sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome"),
+    _fatTodas(titQ),
+    _fatTodas(() => sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome").order("id")),
     sb.from("oct_empresas").select("prazo_padrao_dias").eq("id", eid).single().then(r => r, () => ({ data: null })),
   ]);
   window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
   const todos = (tiRes.data || []);
-  const F = window._fatF = window._fatF || { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
   const ehAberto = t => !t.status || t.status === "aberto";
   // aplica filtros (client-side sobre o carregado)
   let titulos = todos.filter(t => {
@@ -2032,8 +2054,8 @@ function _fatAutoAtualizar(temPendente, status) {
 async function _fatReconferir(status) {
   const corpo = document.getElementById("fat-corpo");
   if (!corpo) return;
-  const { data, error } = await sb.from("oct_faturas").select("*")
-    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false });
+  const { data, error } = await _fatTodas(() => sb.from("oct_faturas").select("*")
+    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false }).order("id"));
   if (error) return;
 
   const antes = window._fatFaturas || [];
@@ -2644,8 +2666,8 @@ function _fatDocsCol(f) {
 async function fatListarFaturas(status) {
   const corpo = document.getElementById("fat-corpo");
   corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando faturas...</p>";
-  const { data, error } = await sb.from("oct_faturas").select("*")
-    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false });
+  const { data, error } = await _fatTodas(() => sb.from("oct_faturas").select("*")
+    .eq("empresa_id", window._fatEid).eq("status", status).order("emissao", { ascending: false }).order("id"));
   if (error) {
     corpo.innerHTML = `<div style="padding:26px;text-align:center;color:#9aa">
       <p>A tabela de <strong>faturas</strong> ainda não existe.</p>
