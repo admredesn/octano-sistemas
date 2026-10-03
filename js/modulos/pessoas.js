@@ -88,6 +88,7 @@ async function abrirFormPessoa(id, empresaId) {
     p = data;
   }
 
+  window._pessoaOrig = p || {};
   const CLASSIFICACOES = ['cliente','fornecedor','funcionario','contador','transportadora'];
   // compartilhar com outro posto do grupo: o cliente abastece lá e pede nota.
   // Quem recebe USA o cadastro; alterar continua só no posto dono.
@@ -140,6 +141,7 @@ async function abrirFormPessoa(id, empresaId) {
             <input id="fpe-fat-emails" type="text" value="${p?.fatura_emails||''}" placeholder="e-mails: financeiro@empresa.com; contador@escritorio.com" />
             <input id="fpe-fat-zaps" type="text" value="${p?.fatura_whatsapps||''}" placeholder="WhatsApps: 31999998888; 31988887777" />
           </div></div>
+        ${_pessoaFaHtml(p)}
         <div class="form-group span2"><label>Endereço</label><input id="fpe-end" type="text" value="${p?.endereco||''}" /></div>
         <div class="form-group"><label>Bairro</label><input id="fpe-bairro" type="text" value="${p?.bairro||''}" /></div>
         <div class="form-group"><label>CEP</label><input id="fpe-cep" type="text" value="${p?.cep||''}" /></div>
@@ -206,9 +208,194 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
     </div>
   `;
+  _pessoaMontarAbas(div);
+  _pessoaFaAtualizar();
   if (id) { colabInit(id, empresaId); frotaInit(id, empresaId); }
   pessoaTabelaInit(id || '', empresaId);
   _pessoaMontarCompart(_dono, _ehDono);
+}
+
+// ============================================================
+// SUB-ABAS DO CADASTRO (03/10/2026). O formulario era uma lista unica e comprida.
+// Os campos continuam os mesmos (mesmos ids, mesmo salvar): cada grupo so' ganha a
+// aba onde aparece. O nome fica fixo em cima de todas.
+// ============================================================
+const _PES_ABAS = [['cadastro', 'Cadastro'], ['contato', 'Contato e endereço'], ['prazo', 'Venda a prazo'],
+                   ['faturamento', 'Faturamento'], ['pista', 'Pista e cashback']];
+// a aba de cada grupo, pelo id do campo que ele tem (a ordem importa: prazo-dias e' faturamento)
+const _PES_ABA_DE = [
+  [/^fpe-(fat-|fa-|prazo-dias$)/, 'faturamento'],
+  [/^fpe-(compart|doc|ie$|nasc|obs|classif)/, 'cadastro'],
+  [/^fpe-(tel|whatsapp|email|end|bairro|cep|cidade|uf)$/, 'contato'],
+  [/^fpe-(prazo|cred-bloq|tabela-preco|ex-|colab|frota)/, 'prazo'],
+  [/^fpe-(idf|chavepix|cashback)/, 'pista'],
+];
+function _pessoaMontarAbas(raiz) {
+  const grid = raiz.querySelector('.form-grid');
+  if (!grid) return;
+  if (!document.getElementById('fpe-abas-css')) {
+    const css = document.createElement('style');
+    css.id = 'fpe-abas-css';
+    css.textContent = `.fpe-abas{display:flex!important;flex-direction:row!important;align-items:flex-end;gap:2px;flex-wrap:wrap;border-bottom:1px solid #2a2d3e;margin:2px 0 4px;padding:0!important}
+      #fpe-fa-box .fpe-fa-op{text-transform:none!important;letter-spacing:normal!important;color:#ddd!important;font-size:0.86rem!important;margin:3px 0}
+      .fpe-abas button{background:transparent;border:none;border-bottom:2px solid transparent;color:#8a94a6;padding:9px 14px;cursor:pointer;font-size:0.84rem;margin-bottom:-1px}
+      .fpe-abas button:hover{color:#cbd5e1}
+      .fpe-abas button.ativa{color:#60a5fa;border-bottom-color:#60a5fa;font-weight:600}`;
+    document.head.appendChild(css);
+  }
+  const grupos = [...grid.children].filter(el => el.classList.contains('form-group'));
+  const nome = grupos.find(g => g.querySelector('#fpe-nome'));
+  grupos.forEach(g => {
+    if (g === nome) return;
+    const ids = [g.id, ...[...g.querySelectorAll('[id]')].map(e => e.id)].filter(Boolean);
+    if (g.querySelector('.fpe-classif')) ids.push('fpe-classif');
+    const achou = _PES_ABA_DE.find(([re]) => ids.some(i => re.test(i)));
+    g.dataset.aba = achou ? achou[1] : 'cadastro';
+  });
+  // na aba Faturamento o prazo vem primeiro (no formulario ele nasce junto da venda a prazo)
+  const gPrazo = grupos.find(g => g.querySelector('#fpe-prazo-dias'));
+  const gExtras = grupos.find(g => g.querySelector('#fpe-fat-emails'));
+  if (gPrazo && gExtras) gExtras.before(gPrazo);
+  const barra = document.createElement('div');
+  barra.className = 'form-group span2 fpe-abas';
+  barra.innerHTML = _PES_ABAS.map(([k, r]) => `<button type="button" data-aba="${k}">${r}</button>`).join('');
+  (nome || grid.firstElementChild).after(barra);
+  const mostrar = k => {
+    grupos.forEach(g => { if (g !== nome) g.style.display = g.dataset.aba === k ? '' : 'none'; });
+    barra.querySelectorAll('button').forEach(b => b.classList.toggle('ativa', b.dataset.aba === k));
+    window._pessoaAba = k;
+  };
+  barra.addEventListener('click', e => { const b = e.target.closest('button[data-aba]'); if (b) mostrar(b.dataset.aba); });
+  mostrar(_PES_ABAS.some(([k]) => k === window._pessoaAba) ? window._pessoaAba : 'cadastro');
+}
+
+// ============================================================
+// FECHAMENTO AUTOMATICO (aba Faturamento, 03/10/2026). Quem executa e' o nucleo do
+// posto (nucleo/api/faturamento_auto.py): no dia do fechamento gera a fatura com os
+// titulos ate' a vespera e, se marcado, pede o boleto e envia o que foi marcado.
+// ============================================================
+const _FA_SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+function _pessoaFaHtml(p) {
+  const c = (p && p.fat_auto_ciclo) || 'manual', d = p && p.fat_auto_dia;
+  const ck = (id, campo, rot, extra) => `<label class="fpe-fa-op" style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:0.86rem${extra ? ';opacity:.55' : ''}">
+      <input id="${id}" type="checkbox" ${p && p[campo] ? 'checked' : ''} ${extra || ''} onchange="_pessoaFaAtualizar()" style="width:auto"> ${rot}</label>`;
+  return `
+        <div class="form-group span2" id="fpe-fa-box" style="border-top:1px solid #2a2d3e;padding-top:12px">
+          <label>🤖 Fechamento automático <span style="color:#999;font-weight:normal;font-size:0.75rem">(o posto gera sozinho no dia; os títulos vão até a véspera)</span></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+            <select id="fpe-fa-ciclo" onchange="_pessoaFaAtualizar()" style="min-width:210px">
+              <option value="manual" ${c === 'manual' ? 'selected' : ''}>Manual (não fecha sozinho)</option>
+              <option value="mensal" ${c === 'mensal' ? 'selected' : ''}>Mensal</option>
+              <option value="quinzenal" ${c === 'quinzenal' ? 'selected' : ''}>Quinzenal (dias 1 e 16)</option>
+              <option value="semanal" ${c === 'semanal' ? 'selected' : ''}>Semanal</option>
+              <option value="dias" ${c === 'dias' ? 'selected' : ''}>A cada N dias</option>
+            </select>
+            <span id="fpe-fa-q-mes" style="display:none;color:#aaa;font-size:0.85rem">no dia
+              <input id="fpe-fa-mes" type="number" min="1" max="31" value="${c === 'mensal' && d ? d : 1}" oninput="_pessoaFaAtualizar()" style="width:70px"> de cada mês</span>
+            <span id="fpe-fa-q-sem" style="display:none;color:#aaa;font-size:0.85rem">toda
+              <select id="fpe-fa-sem" onchange="_pessoaFaAtualizar()">${_FA_SEMANA.map((n, i) => `<option value="${i}" ${c === 'semanal' && Number(d) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></span>
+            <span id="fpe-fa-q-dias" style="display:none;color:#aaa;font-size:0.85rem">a cada
+              <input id="fpe-fa-dias" type="number" min="1" max="365" value="${c === 'dias' && d ? d : 10}" oninput="_pessoaFaAtualizar()" style="width:70px"> dias</span>
+          </div>
+          <div id="fpe-fa-acoes" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px">
+            <div><div style="color:#9aa;font-size:0.76rem;margin-bottom:4px">GERAR</div>
+              <label class="fpe-fa-op" style="display:flex;align-items:center;gap:6px;font-weight:normal;font-size:0.86rem;opacity:.8">
+                <input type="checkbox" checked disabled style="width:auto"> Fatura <span style="color:#777;font-size:0.72rem">(sempre — é a base do boleto e da nota)</span></label>
+              ${ck('fpe-fa-g-boleto', 'fat_auto_boleto', 'Boleto')}
+              ${ck('fpe-fa-g-nf', 'fat_auto_nf', 'NF-e <span style="color:#777;font-size:0.72rem">(em breve: hoje a NF-e é emitida pela tela)</span>', 'disabled')}
+            </div>
+            <div><div style="color:#9aa;font-size:0.76rem;margin-bottom:4px">ENVIAR AO CLIENTE <span style="color:#666">(e-mail e WhatsApp)</span></div>
+              ${ck('fpe-fa-e-fatura', 'fat_auto_env_fatura', 'Fatura')}
+              ${ck('fpe-fa-e-boleto', 'fat_auto_env_boleto', 'Boleto')}
+              ${ck('fpe-fa-e-nf', 'fat_auto_env_nf', 'NF-e <span style="color:#777;font-size:0.72rem">(vai se estiver anexada)</span>')}
+            </div>
+          </div>
+          <div id="fpe-fa-previa" style="font-size:0.8rem;margin-top:10px;line-height:1.5"></div>
+        </div>`;
+}
+
+function _faIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function _faBr(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : ''; }
+function _faHoje() { return _faIso(new Date()); }
+function _faMais(iso, n) { const [a, m, d] = iso.split('-').map(Number); return _faIso(new Date(a, m - 1, d + n)); }
+
+// a MESMA regra do nucleo (faturamento_auto.py): primeira data do ciclo DEPOIS de 'desde'
+function _faProximo(ciclo, dia, desde) {
+  if (ciclo === 'dias') return dia >= 1 ? _faMais(desde, dia) : null;
+  for (let i = 1; i <= 400; i++) {
+    const iso = _faMais(desde, i), [a, m, d] = iso.split('-').map(Number);
+    const dt = new Date(a, m - 1, d), ultimo = new Date(a, m, 0).getDate();
+    if (ciclo === 'mensal' && d === Math.min(Math.max(dia || 1, 1), 31, ultimo)) return iso;
+    if (ciclo === 'quinzenal' && (d === 1 || d === 16)) return iso;
+    if (ciclo === 'semanal' && dt.getDay() === Number(dia)) return iso;
+  }
+  return null;
+}
+
+function _pessoaFaCiclo() {
+  const c = document.getElementById('fpe-fa-ciclo')?.value || 'manual';
+  const dia = c === 'mensal' ? parseInt(document.getElementById('fpe-fa-mes')?.value, 10)
+            : c === 'semanal' ? parseInt(document.getElementById('fpe-fa-sem')?.value, 10)
+            : c === 'dias' ? parseInt(document.getElementById('fpe-fa-dias')?.value, 10) : null;
+  return { c, dia: Number.isFinite(dia) ? dia : null };
+}
+
+// o ciclo mudou? entao o ponto de partida e' hoje (o primeiro fechamento e' a proxima data)
+function _pessoaFaDesde() {
+  const o = window._pessoaOrig || {}, { c, dia } = _pessoaFaCiclo();
+  const igual = (o.fat_auto_ciclo || 'manual') === c && (c === 'quinzenal' || Number(o.fat_auto_dia) === Number(dia));
+  return igual && o.fat_auto_ultimo ? String(o.fat_auto_ultimo).slice(0, 10) : _faHoje();
+}
+
+function _pessoaFaAtualizar() {
+  const el = document.getElementById('fpe-fa-previa');
+  if (!el) return;
+  const { c, dia } = _pessoaFaCiclo();
+  ['mes', 'sem', 'dias'].forEach(k => {
+    const q = document.getElementById('fpe-fa-q-' + k);
+    if (q) q.style.display = (k === 'mes' && c === 'mensal') || (k === 'sem' && c === 'semanal') || (k === 'dias' && c === 'dias') ? '' : 'none';
+  });
+  const acoes = document.getElementById('fpe-fa-acoes');
+  if (acoes) acoes.style.opacity = c === 'manual' ? '.45' : '1';
+  // enviar o boleto exige gerar o boleto
+  const eb = document.getElementById('fpe-fa-e-boleto'), gb = document.getElementById('fpe-fa-g-boleto');
+  if (eb && gb && eb.checked && !gb.checked) gb.checked = true;
+  if (c === 'manual') { el.innerHTML = '<span style="color:#888">Desligado: as faturas deste cliente continuam sendo geradas pelo Faturar.</span>'; return; }
+  const prox = _faProximo(c, dia, _pessoaFaDesde());
+  if (!prox) { el.innerHTML = '<span style="color:#f87171">Escolha o dia do fechamento.</span>'; return; }
+  const prazoTxt = document.getElementById('fpe-prazo-dias')?.value;
+  const prazo = prazoTxt === '' || prazoTxt == null ? 7 : parseInt(prazoTxt, 10) || 0;
+  const avisos = [];
+  const falta = [['fpe-doc', 'CPF/CNPJ'], ['fpe-end', 'endereço'], ['fpe-bairro', 'bairro'], ['fpe-cidade', 'cidade'], ['fpe-cep', 'CEP'], ['fpe-uf', 'UF']]
+    .filter(([i]) => !(document.getElementById(i)?.value || '').trim()).map(([, r]) => r);
+  if (gb && gb.checked && falta.length) avisos.push('o boleto não sai com o cadastro sem ' + falta.join(', ') + ' (aba Contato e endereço / Cadastro)');
+  const envia = ['fpe-fa-e-fatura', 'fpe-fa-e-boleto', 'fpe-fa-e-nf'].some(i => document.getElementById(i)?.checked);
+  const temContato = ['fpe-email', 'fpe-whatsapp', 'fpe-tel', 'fpe-fat-emails', 'fpe-fat-zaps'].some(i => (document.getElementById(i)?.value || '').trim());
+  if (envia && !temContato) avisos.push('não há e-mail nem WhatsApp no cadastro para enviar');
+  el.innerHTML = `<span style="color:#7ee2a0">Próximo fechamento: <b>${_faBr(prox)}</b> — títulos até ${_faBr(_faMais(prox, -1))},
+    vencimento ${_faBr(_faMais(prox, prazo))}${prazoTxt === '' || prazoTxt == null ? ' (7 dias; o prazo do cliente está vazio)' : ''}.</span>
+    ${envia ? '<br><span style="color:#9aa">Envia sozinho quando os documentos ficarem prontos.</span>' : '<br><span style="color:#9aa">Não envia sozinho: você confere e envia pelo Faturar.</span>'}
+    ${avisos.map(a => `<br><span style="color:#f0b45c">⚠ ${a}.</span>`).join('')}`;
+}
+
+function _pessoaFaDados() {
+  if (!document.getElementById('fpe-fa-ciclo')) return {};
+  const { c, dia } = _pessoaFaCiclo(), ck = i => !!document.getElementById(i)?.checked;
+  return {
+    fat_auto_ciclo: c, fat_auto_dia: c === 'manual' || c === 'quinzenal' ? null : dia,
+    fat_auto_boleto: ck('fpe-fa-g-boleto') || ck('fpe-fa-e-boleto'), fat_auto_nf: false,
+    fat_auto_env_fatura: ck('fpe-fa-e-fatura'), fat_auto_env_boleto: ck('fpe-fa-e-boleto'), fat_auto_env_nf: ck('fpe-fa-e-nf'),
+    fat_auto_ultimo: c === 'manual' ? null : _pessoaFaDesde(),
+  };
+}
+
+function _pessoaFaValidar(d) {
+  const c = d.fat_auto_ciclo;
+  if (!c || c === 'manual' || c === 'quinzenal') return '';
+  if (c === 'mensal' && !(d.fat_auto_dia >= 1 && d.fat_auto_dia <= 31)) return 'Fechamento mensal: o dia tem de ser de 1 a 31 (aba Faturamento).';
+  if (c === 'semanal' && !(d.fat_auto_dia >= 0 && d.fat_auto_dia <= 6)) return 'Fechamento semanal: escolha o dia da semana (aba Faturamento).';
+  if (c === 'dias' && !(d.fat_auto_dia >= 1 && d.fat_auto_dia <= 365)) return 'Fechamento a cada N dias: N de 1 a 365 (aba Faturamento).';
+  return '';
 }
 
 // dropdown "Tabela de preço" do cadastro: lista as negociações da empresa e o
@@ -415,6 +602,7 @@ async function salvarPessoa(id, empresaId) {
     // cadastro vai na NF-e, que aceita um so'.
     fatura_emails:    (document.getElementById('fpe-fat-emails')?.value || '').trim() || null,
     fatura_whatsapps: (document.getElementById('fpe-fat-zaps')?.value || '').trim() || null,
+    ..._pessoaFaDados(),
     chave_pix:   document.getElementById('fpe-chavepix')?.value.trim() || null,
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
     aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
@@ -446,13 +634,15 @@ async function salvarPessoa(id, empresaId) {
     pessoaId = r.data && r.data.id;
     return r.error;
   };
+  const faErro = _pessoaFaValidar(dados);
+  if (faErro) { msg.textContent = faErro; msg.style.color = '#f44'; return; }
   error = await _gravar(dados);
-  if (error && /fatura_emails|fatura_whatsapps/i.test(error.message || '')) {
-    // SQL dos contatos extras ainda nao rodou: o cadastro tem de salvar mesmo assim
-    const { fatura_emails, fatura_whatsapps, ...resto } = dados;
+  if (error && /fatura_emails|fatura_whatsapps|fat_auto_/i.test(error.message || '')) {
+    // SQL dos contatos extras / do fechamento automatico ainda nao rodou: o cadastro
+    // tem de salvar mesmo assim
+    const resto = Object.fromEntries(Object.entries(dados).filter(([k]) => !/^(fatura_emails|fatura_whatsapps|fat_auto_)/.test(k)));
     error = await _gravar(resto);
-    if (!error && (fatura_emails || fatura_whatsapps))
-      avisoDest = ' (os contatos extras da fatura NÃO foram salvos: falta rodar SQL-FATURA-DESTINOS.sql)';
+    if (!error) avisoDest = ' (faturamento automático e contatos extras NÃO foram salvos: falta rodar SQL-FATURA-DESTINOS.sql e SQL-FATURAMENTO-AUTO.sql)';
   }
 
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }

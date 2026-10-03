@@ -2611,7 +2611,7 @@ async function fatListarFaturas(status) {
   const linhas = faturas.map(fatr => `<tr>
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
-    <td class="fat-td">${fatr.numero ?? "—"}</td>
+    <td class="fat-td">${fatr.numero ?? "—"}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
     <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
