@@ -2557,10 +2557,20 @@ function _fatStatusCel(f, bol) {
     ? `<div style="font-size:9.5px;color:#f0b45c" title="Última em ${_fatData(f.cobrada_em)}">📣 ${f.cobrancas} cobrança(s)</div>` : "";
   const erro = f.envio_erro
     ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ última tentativa falhou</div>` : "";
+  // ENVIO AUTOMATICO esperando documento (03/10/2026): o nucleo so' manda quando o que
+  // foi marcado no cadastro estiver pronto -- a NF-e marcada espera ser anexada
+  let auto = "";
+  if (f.auto_enviar && !env) {
+    const docs = f.envio_docs || [], faltam = [];
+    if (docs.includes("nf") && !(f.nfe_xml_path || f.nfe_pdf_path)) faltam.push("NF-e — anexe pelo 📎 NF-e");
+    if (docs.includes("boleto") && !temBol) faltam.push("boleto");
+    if (docs.includes("fatura") && !f.fatura_pdf_path) faltam.push("PDF da fatura");
+    auto = `<div style="font-size:9.5px;color:#93c5fd" title="Envio automático: vai sozinho (${_fatEsc(docs.join(", "))}) assim que tudo estiver pronto">🤖 ${faltam.length ? "aguardando " + faltam.join(", ") : "enviando..."}</div>`;
+  }
   return sel(temNf, "NF", "NF-e anexada à fatura") +
          sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
          sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
-         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + _fatBolSituacao(f, bol) + cob + erro;
+         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + _fatBolSituacao(f, bol) + auto + cob + erro;
 }
 
 // PAGO OU NAO: a situacao que o BANCO confirmou (consulta do Sicoob de hora em
