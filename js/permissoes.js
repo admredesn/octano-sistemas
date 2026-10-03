@@ -52,6 +52,7 @@ const PERM_CATALOGO = [
     { c: 'faturar.gerar_fatura', d: 'Gerar fatura', p: 'gf', s: 1 },
     { c: 'faturar.alterar_fatura', d: 'Alterar fatura (vencimento, desconto, acréscimo)', p: 'gf', s: 1 },
     { c: 'faturar.receber_fatura', d: 'Receber fatura', p: 'gf', s: 1 },
+    { c: 'faturar.excluir_fatura', d: 'Excluir fatura (volta um passo: liquidada→aberta, aberta→títulos)', p: 'gf', s: 1 },
     { c: 'faturar.emitir_nfe', d: 'Emitir NF-e da fatura', p: 'gfc', s: 1 },
     { c: 'faturar.imprimir', d: 'Imprimir DANFE, boleto e fatura', p: 'gf' },
     { c: 'faturar.boleto', d: 'Gerar boleto', p: 'gf', s: 1 },

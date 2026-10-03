@@ -2705,6 +2705,8 @@ async function fatListarFaturas(status) {
       <button class="fat-abtn" style="background:#4c1d95" onclick="fatAnexarNfe('${fatr.id}')">📎 NF-e</button>
       <button class="fat-abtn" style="background:#7c2d12" onclick="fatEditarFatura('${fatr.id}')">✏ Editar</button>
       <button class="fat-abtn" style="background:#15803d" onclick="fatEnviar('${fatr.id}')">📤 Enviar</button>` : ""}
+      <button class="fat-abtn" style="background:#7f1d1d" onclick="fatExcluirFatura('${fatr.id}')"
+        title="${status === "aberta" ? "Excluir a fatura: os títulos voltam para Títulos em Aberto" : "Excluir a liquidação: a fatura volta para Faturas em Aberto"}">🗑 Excluir</button>
     </td>
   </tr>`).join("");
   const total = faturas.reduce((s, fr) => s + _fatLiquido(fr), 0);
@@ -2866,6 +2868,241 @@ async function fatConfirmarRecebimento(faturaId) {
     ? `Título quitado! Recebido ${_fatBRL(recebido)}.`
     : `Recebimento parcial registrado. Saldo: ${_fatBRL(_fatLiquido(f) - recebido)}.`);
   fatListarFaturas("aberta");
+}
+
+// ---------- EXCLUIR FATURA = VOLTAR UM PASSO (03/10/2026) ----------
+// Pedido do Ronan. A fatura anda: Títulos em aberto > Faturas em aberto > Faturas
+// liquidadas. Excluir volta UM passo (título em aberto não se exclui por aqui):
+//  - liquidada -> aberta: saem os recebimentos lançados nela (o livro financeiro
+//    tira o lançamento na próxima sincronização) e a fatura reabre com o saldo;
+//  - aberta -> títulos: a fatura vira 'cancelada' (não some do banco, sai das
+//    abas) e os títulos voltam para "em aberto", prontos para outra fatura ou
+//    para o próximo fechamento automático do cliente.
+// Dinheiro de verdade não se desfaz pela tela -- TRAVAS:
+//  - boleto vivo no Sicoob (pendente/registrado): o cliente ainda pode pagar, e
+//    o gatilho da baixa (SQL-BOLETO-BAIXA-FATURA) liquidaria a fatura excluída
+//    com os títulos já de volta -> cobrança em dobro. Baixar no banco antes;
+//  - boleto que o banco confirmou como pago;
+//  - recebimento já conciliado com o extrato no livro financeiro.
+// Quem, quando e por quê ficam em oct_faturas.observacoes (o histórico; a
+// "observacao" é o motivo do desconto e não se mistura).
+async function _fatExcluirDados(id) {
+  const { data: f, error } = await sb.from("oct_faturas").select("*").eq("id", id).maybeSingle();
+  if (error || !f) return { erro: "Fatura não encontrada." };
+  let boletos = [], receb = [], titulos = [];
+  const conciliados = new Set();
+  try {
+    const r = await sb.from("oct_boletos").select("id,nosso_numero,status,valor,vencimento,pago_em").eq("fatura_id", id);
+    boletos = r.data || [];
+  } catch (e) { /* sem tabela de boletos */ }
+  try {
+    const r = await sb.from("oct_recebimentos_titulo")
+      .select("id,valor,juros,desconto,forma,data_recebimento,autor,boleto_id,recebimento_id,origem")
+      .eq("fatura_id", id).order("data_recebimento");
+    receb = r.data || [];
+  } catch (e) { /* sem tabela de recebimentos */ }
+  if (receb.length) {
+    try {
+      const r = await sb.from("oct_fin_lancamentos").select("origem_id")
+        .eq("origem", "receb_titulo").eq("conciliado", true).in("origem_id", receb.map(x => String(x.id)));
+      (r.data || []).forEach(l => conciliados.add(String(l.origem_id)));
+    } catch (e) { /* sem livro financeiro */ }
+  }
+  if (f.status === "aberta") {
+    const r = await sb.from("oct_pdv_notas_prazo").select("id,valor,status").eq("fatura_id", id).in("status", ["faturado", "aberto"]);
+    titulos = r.data || [];
+  }
+  return { f, boletos, receb, conciliados, titulos };
+}
+
+function _fatRecLiq(r) { return Number(r.valor || 0) + Number(r.juros || 0) - Number(r.desconto || 0); }
+function _fatRecLinha(r) {
+  return `${_fatData(r.data_recebimento)} · ${_fatEsc(r.forma || "—")} · <b>${_fatBRL(_fatRecLiq(r))}</b>` +
+    (r.autor ? ` · <span style="color:#889">${_fatEsc(r.autor)}</span>` : "");
+}
+
+function _fatExcluirTravas(d) {
+  const t = [];
+  const vivos = d.boletos.filter(b => b.status === "registrado" || b.status === "pendente");
+  const pagos = d.boletos.filter(b => b.status === "liquidado");
+  const doBanco = d.receb.filter(r => r.boleto_id);
+  const conc = d.receb.filter(r => d.conciliados.has(String(r.id)));
+  if (d.f.status === "aberta" && vivos.length) {
+    t.push(vivos.map(b => b.status === "pendente"
+      ? `O boleto desta fatura está sendo registrado no Sicoob agora. Espere o registro e baixe o boleto no banco antes de excluir.`
+      : `O boleto <b>${_fatEsc(b.nosso_numero || "")}</b> (${_fatBRL(b.valor)}, vence ${_fatData(b.vencimento)}) está <b>registrado no Sicoob</b>.
+         Se a fatura sair e o cliente pagar esse boleto, o pagamento cairia numa fatura excluída e os títulos seriam cobrados de novo.
+         <b>Baixe o boleto no Sicoob primeiro</b> — o Octano confere o banco de hora em hora e libera a exclusão quando ele aparecer como baixado.`).join("<br><br>"));
+  }
+  if (pagos.length || doBanco.length) {
+    const b = pagos[0];
+    t.push(`O Sicoob confirmou o pagamento ${b ? `do boleto <b>${_fatEsc(b.nosso_numero || "")}</b>${b.pago_em ? ` em ${_fatData(String(b.pago_em).slice(0, 10))}` : ""}` : "do boleto desta fatura"}.
+      O dinheiro entrou no banco — isso não se desfaz pelo Octano.`);
+  }
+  if (conc.length) {
+    t.push(`Recebimento já <b>conciliado com o extrato</b> no Livro financeiro:<br>${conc.map(_fatRecLinha).join("<br>")}<br>
+      Desfaça a conciliação no Livro financeiro antes de excluir.`);
+  }
+  return t;
+}
+
+async function fatExcluirFatura(id) {
+  if (!podeOuAvisa('faturar.excluir_fatura')) return;
+  _fatModal(`<div style="padding:24px;color:#9aa">Conferindo a fatura...</div>`);
+  const d = await _fatExcluirDados(id);
+  if (d.erro) { _fatFechaModal(); alert(d.erro); return; }
+  const f = d.f;
+  if (f.status !== "aberta" && f.status !== "liquidada") {
+    _fatFechaModal();
+    alert(`Esta fatura já não está em aberto nem liquidada (está "${f.status}"). A lista vai ser atualizada.`);
+    _fatRecarregar();
+    return;
+  }
+  const liquidada = f.status === "liquidada";
+  window._fatExc = { id, status: f.status };
+  const travas = _fatExcluirTravas(d);
+  const avisos = [];
+  const recTot = d.receb.reduce((a, r) => a + _fatRecLiq(r), 0);
+  const titTot = d.titulos.reduce((a, t) => a + Number(t.valor || 0), 0);
+
+  let oQue;
+  if (liquidada) {
+    oQue = `A fatura volta para <b>Faturas em Aberto</b>, com ${_fatBRL(_fatLiquido(f))} a receber.` +
+      (d.receb.length
+        ? `<br>Os recebimentos lançados nela são <b>excluídos</b> (${_fatBRL(recTot)}):<br>${d.receb.map(_fatRecLinha).join("<br>")}`
+        : `<br><span style="color:#889">Não há recebimento lançado nesta fatura — só o status muda.</span>`);
+    if (d.receb.some(r => r.recebimento_id)) {
+      avisos.push("Um dos recebimentos estava ligado a um pagamento da maquininha/Pix: esse pagamento volta a aparecer sem par na conferência do caixa.");
+    }
+  } else {
+    oQue = `A fatura sai de Faturas em Aberto (fica guardada como <b>cancelada</b>) e
+      <b>${d.titulos.length} título(s)</b> — ${_fatBRL(titTot)} — voltam para <b>Títulos em Aberto</b>, prontos para outra fatura.`;
+    if (d.receb.length) {
+      avisos.push(`Esta fatura tem recebimento parcial de <b>${_fatBRL(recTot)}</b>, que será <b>excluído junto</b>
+        (os títulos voltam com o valor cheio):<br>${d.receb.map(_fatRecLinha).join("<br>")}`);
+    }
+    if (f.nfe_chave) {
+      avisos.push(`A NF-e ${_fatEsc(f.nfe_numero || "")} anexada continua <b>autorizada na SEFAZ</b>. Ao faturar estes títulos de novo,
+        não emita outra NF-e para os mesmos cupons — ou cancele esta.`);
+    }
+    if (f.enviada_em) avisos.push(`A fatura já foi enviada ao cliente em ${_fatData(f.enviada_em)} — avise que ela foi cancelada.`);
+    if (f.auto_gerada) avisos.push("Gerada pelo fechamento automático: se ninguém faturar antes, os títulos entram de novo no próximo fechamento do cliente.");
+  }
+
+  const caixa = (cor, fundo, borda, html) =>
+    `<div style="margin-top:10px;background:${fundo};border:1px solid ${borda};border-radius:8px;padding:10px 12px;font-size:0.8rem;color:${cor};line-height:1.45">${html}</div>`;
+  _fatModal(`
+    <div style="background:#13151f;color:#f87171;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🗑 ${liquidada ? "Excluir a liquidação" : "Excluir a fatura"} — Nº ${f.numero ?? ""} · ${_fatEsc(f.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:16px 18px;color:#cdd6e0">
+      ${travas.length
+        ? `<div style="font-size:0.84rem;color:#fecaca">Esta fatura não pode ser excluída agora:</div>`
+        : caixa("#cdd6e0", "#13151f", "#2a2d3e", oQue)}
+      ${travas.map(t => caixa("#fecaca", "#2a1215", "#7f1d1d", "⛔ " + t)).join("")}
+      ${travas.length ? "" : avisos.map(a => caixa("#f0c98a", "#2a2010", "#63501f", "⚠ " + a)).join("")}
+      ${travas.length ? `
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Fechar</button></div>` : `
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:14px">Motivo <span style="color:#667">(obrigatório — fica no histórico da fatura)</span></label>
+      <input id="fex-motivo" placeholder="${liquidada ? "ex.: recebimento lançado na fatura errada" : "ex.: faltou um título / cliente pediu para separar"}"
+        style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      <div id="fex-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button id="fex-ok" class="fat-btn" style="flex:2;background:#991b1b;border-color:#991b1b;color:#fff;font-weight:700"
+          onclick="fatExcluirFaturaOk('${id}')">🗑 ${liquidada ? "Excluir liquidação — volta para Em Aberto" : "Excluir fatura — títulos voltam para Em Aberto"}</button>
+      </div>`}
+    </div>`);
+  document.getElementById("fex-motivo")?.focus();
+}
+
+async function fatExcluirFaturaOk(id) {
+  if (!podeOuAvisa('faturar.excluir_fatura')) return;
+  const msg = document.getElementById("fex-msg"), btn = document.getElementById("fex-ok");
+  const motivo = (document.getElementById("fex-motivo")?.value || "").trim();
+  if (!motivo) { msg.textContent = "Escreva o motivo — fica registrado na fatura."; return; }
+  const erro = t => { msg.style.color = "#f87171"; msg.textContent = t; btn.disabled = false; };
+  btn.disabled = true;
+  msg.style.color = "#9aa"; msg.textContent = "Excluindo...";
+
+  // confere de novo: entre abrir a janela e confirmar, o banco pode ter pago o
+  // boleto ou alguém pode ter recebido a fatura
+  const d = await _fatExcluirDados(id);
+  if (d.erro) return erro(d.erro);
+  const f = d.f;
+  if (f.status !== (window._fatExc || {}).status) return erro(`A fatura mudou enquanto a janela estava aberta (agora está "${f.status}"). Feche e confira.`);
+  const travas = _fatExcluirTravas(d);
+  if (travas.length) return erro("Apareceu uma trava agora (ex.: o banco confirmou o boleto). Feche e abra de novo para ver.");
+
+  const quem = await _fatUsuario();
+  const agora = new Date();
+  const quando = agora.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const recTxt = d.receb.map(r => `${_fatData(r.data_recebimento)} ${r.forma || ""} R$ ${_fatMoney(_fatRecLiq(r))}${r.autor ? " (" + r.autor + ")" : ""}`).join("; ");
+  const liquidada = f.status === "liquidada";
+  const linha = liquidada
+    ? `[${quando}] Liquidação excluída por ${quem}: ${motivo}.` + (recTxt ? ` Recebimentos excluídos: ${recTxt}.` : "")
+    : `[${quando}] Fatura excluída por ${quem}: ${motivo}. ${d.titulos.length} título(s) voltaram para em aberto.` +
+      (recTxt ? ` Recebimentos excluídos: ${recTxt}.` : "");
+  const hist = (f.observacoes ? f.observacoes + "\n" : "") + linha;
+  const marca = { observacoes: hist, alterado_por: quem, alterado_em: agora.toISOString() };
+  const idsRec = d.receb.map(r => r.id);
+
+  if (liquidada) {
+    // 1) reabre -- só se ainda liquidada (o .eq do status impede corrida)
+    const r1 = await sb.from("oct_faturas").update({ status: "aberta", liquidado_em: null, forma_liquidacao: null, ...marca })
+      .eq("id", id).eq("status", "liquidada").select("id");
+    if (r1.error || !(r1.data || []).length) return erro("Não consegui reabrir a fatura: " + (r1.error?.message || "ela mudou de status"));
+    // 2) tira os recebimentos; se não sair NENHUM, desfaz o passo 1 -- fatura
+    //    "aberta" com tudo recebido seria pior que nada
+    if (idsRec.length) {
+      const r2 = await sb.from("oct_recebimentos_titulo").delete().in("id", idsRec).select("id");
+      const saiu = (r2.data || []).length;
+      if (r2.error || saiu < idsRec.length) {
+        if (!saiu) {
+          await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: f.liquidado_em,
+            forma_liquidacao: f.forma_liquidacao, observacoes: f.observacoes }).eq("id", id);
+          return erro("Não consegui excluir os recebimentos" + (r2.error ? ": " + r2.error.message : " (sem permissão para apagar)") + ". Nada foi alterado.");
+        }
+        _fatFechaModal();
+        alert(`A fatura voltou para Em Aberto, mas só ${saiu} de ${idsRec.length} recebimento(s) saiu. Confira em 👁 Detalhes.`);
+        _fatRecarregar();
+        return;
+      }
+    }
+    _fatFechaModal();
+    alert(`Liquidação excluída. A fatura ${f.numero ?? ""} voltou para Faturas em Aberto` +
+      (idsRec.length ? ` (${idsRec.length} recebimento(s) excluído(s)).` : "."));
+    _fatRecarregar();
+    return;
+  }
+
+  // ABERTA -> TÍTULOS
+  // 1) a fatura sai (cancelada) e para o que estava em andamento: envio, PDF
+  const r1 = await sb.from("oct_faturas").update({ status: "cancelada", auto_enviar: false,
+    envio_pedido_em: null, fatura_pdf_pedido_em: null, ...marca })
+    .eq("id", id).eq("status", "aberta").select("id");
+  if (r1.error || !(r1.data || []).length) return erro("Não consegui excluir a fatura: " + (r1.error?.message || "ela mudou de status"));
+  // 2) títulos de volta para em aberto; falhou = a fatura volta como estava
+  const r2 = await sb.from("oct_pdv_notas_prazo").update({ fatura_id: null, status: "aberto" })
+    .eq("fatura_id", id).in("status", ["faturado", "aberto"]).select("id");
+  if (r2.error) {
+    await sb.from("oct_faturas").update({ status: "aberta", auto_enviar: f.auto_enviar, envio_pedido_em: f.envio_pedido_em,
+      observacoes: f.observacoes }).eq("id", id);
+    return erro("Não consegui devolver os títulos: " + r2.error.message + ". A fatura continua em aberto.");
+  }
+  const voltaram = (r2.data || []).length;
+  // 3) recebimento parcial (raro) sai por último
+  let avisoRec = "";
+  if (idsRec.length) {
+    const r3 = await sb.from("oct_recebimentos_titulo").delete().in("id", idsRec).select("id");
+    if (r3.error || (r3.data || []).length < idsRec.length) {
+      avisoRec = `\n\n⚠ O recebimento parcial NÃO saiu (${r3.error ? r3.error.message : "sem permissão para apagar"}) — ele continua ligado à fatura excluída.`;
+    }
+  }
+  _fatFechaModal();
+  alert(`Fatura ${f.numero ?? ""} excluída. ${voltaram} título(s) voltaram para Títulos em Aberto.` + avisoRec);
+  _fatRecarregar();
 }
 
 function _fatEstilo() {
