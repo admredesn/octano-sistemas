@@ -44,7 +44,7 @@ async function moduloFaturar() {
   window._fatAba = window._fatAba || "abertos";
   conteudo.innerHTML = `
     ${_fatEstilo()}
-    <div class="fat-janela">
+    <div class="fat-janela" id="fat-janela">
       <div class="fat-titbar">🧾 Faturamento — Notas a Prazo</div>
       <div class="fat-abas">
         <button class="fat-aba" id="fat-aba-abertos" onclick="fatAba('abertos')">Notas/Títulos em Aberto</button>
@@ -3177,6 +3177,18 @@ function _fatEstilo() {
   .fat-card-val{color:#f59e0b;font-weight:700;font-size:1.05rem;margin-top:3px}
   .fat-card-qtd{color:#6b7688;font-size:0.72rem;margin-top:2px}
   .fat-gridwrap{overflow:auto;max-height:52vh;background:#0f1119}
+  /* 03/10/2026, pedido do Ronan: título, abas, filtros e os cartões/resumo ficam
+     parados e SÓ A TABELA ROLA. A janela do Faturar ocupa a área de conteúdo
+     inteira (coluna flex) e a tabela fica com o que sobra -- antes a página
+     rolava inteira e a tabela rolava de novo por dentro (duas barras). Tela
+     baixa demais (< 460 px) volta a rolar a página, para nada sumir. */
+  #conteudo:has(> #fat-janela){display:flex;flex-direction:column}
+  #fat-janela{flex:1 1 auto;min-height:460px;display:flex;flex-direction:column}
+  #fat-janela > .fat-titbar, #fat-janela > .fat-abas{flex:0 0 auto}
+  #fat-janela > #fat-corpo{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  #fat-corpo > *, #fat-tit-lista > *{flex:0 0 auto}
+  #fat-corpo > #fat-tit-lista{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  #fat-corpo > .fat-gridwrap, #fat-tit-lista > .fat-gridwrap{flex:1 1 auto;min-height:140px;max-height:none}
   .fat-grid{width:100%;border-collapse:collapse;font-size:12px;color:#cdd6e0}
   .fat-grid th{background:#1a1d2e;color:#9fb0c4;text-align:left;padding:8px;border-bottom:1px solid #2a2d3e;position:sticky;top:0}
   .fat-grid th[onclick]:hover{background:#232840;color:#fff}
