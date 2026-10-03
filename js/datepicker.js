@@ -72,8 +72,7 @@
     if (!alvo) return;
     const inp = alvo;
     inp.value = valor;
-    inp.dispatchEvent(new Event("input", { bubbles: true }));
-    inp.dispatchEvent(new Event("change", { bubbles: true }));
+    _liberar(inp, ["input", "change"]);   // escolha no calendario: vale na hora
     fechar();
     try { inp.focus(); } catch (e) { /* ok */ }
   }
@@ -145,6 +144,50 @@
     desenhar();
     posicionar();
   }
+
+  // ---- DIGITAR A DATA (03/10/2026) ----
+  // O Chrome avisa 'input'/'change' a cada pedaço digitado que ja' forma uma data
+  // valida: no ano, o "2" vira 0002-09-01. Tela que refaz a lista no change (os
+  // filtros de periodo) recriava o campo e o operador perdia o cursor no meio da
+  // digitacao -- "a tela atualiza e nao deixa eu terminar". Enquanto ele digita, os
+  // avisos ficam guardados e vai UM so' quando ele para (1 s), aperta Enter ou sai
+  // do campo. Ano incompleto (antes de 1900) nunca e' entregue.
+  const DIGITANDO_MS = 1000;
+  const ultimaTecla = new WeakMap(), pendente = new WeakMap();
+  const ehData = t => t && t.matches && t.matches('input[type="date"]');
+  const anoIncompleto = v => /^\d{4}-/.test(v || "") && Number(String(v).slice(0, 4)) < 1900;
+
+  function _liberar(inp, tipos) {
+    inp.__octLibera = true;
+    try { tipos.forEach(t => inp.dispatchEvent(new Event(t, { bubbles: true }))); }
+    finally { inp.__octLibera = false; }
+  }
+  function _entregar(inp) {
+    const p = pendente.get(inp);
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendente.delete(inp);
+    if (anoIncompleto(inp.value) || !document.contains(inp)) return;
+    _liberar(inp, ["input", "change"].filter(t => p[t]));
+  }
+  document.addEventListener("keydown", e => {
+    if (!ehData(e.target)) return;
+    ultimaTecla.set(e.target, Date.now());
+    if (e.key === "Enter") setTimeout(() => _entregar(e.target), 0);
+  }, true);
+  ["input", "change"].forEach(tipo => document.addEventListener(tipo, e => {
+    const t = e.target;
+    if (!ehData(t) || t.__octLibera) return;
+    const digitando = Date.now() - (ultimaTecla.get(t) || 0) < DIGITANDO_MS;
+    if (!digitando && !anoIncompleto(t.value)) return;   // colar, apagar tudo etc.: passa direto
+    e.stopImmediatePropagation();                         // segura antes de chegar na tela
+    const p = pendente.get(t) || { input: false, change: false, timer: 0 };
+    p[tipo] = true;
+    clearTimeout(p.timer);
+    p.timer = setTimeout(() => _entregar(t), DIGITANDO_MS);
+    pendente.set(t, p);
+  }, true));
+  document.addEventListener("focusout", e => { if (ehData(e.target)) _entregar(e.target); }, true);
 
   // clique em qualquer campo de data abre o calendário (digitar continua valendo)
   document.addEventListener("click", e => {
