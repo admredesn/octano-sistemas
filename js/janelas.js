@@ -299,7 +299,11 @@
     arrastavel(j); redimensionavel(j);
     document.body.appendChild(el);
     JAN.lista.push(j);
-    iframe.src = location.pathname + '?janela=1&modulo=' + encodeURIComponent(modulo);
+    // &_= (03/10/2026): o servidor nao manda Cache-Control e o navegador ESTIMA por quanto
+    // tempo guardar a pagina. O endereco da janela (?janela=1&modulo=X) e' sempre o mesmo,
+    // entao depois de uma publicacao a janela abria a versao VELHA do sistema -- mesmo
+    // com F5, que so' renova a tela principal. Endereco novo a cada abertura = versao nova.
+    iframe.src = location.pathname + '?janela=1&modulo=' + encodeURIComponent(modulo) + '&_=' + Date.now();
     focar(j);
     return j;
   }

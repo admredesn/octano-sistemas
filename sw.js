@@ -6,26 +6,39 @@
 // do app (mesmo domínio) — Supabase e APIs externas nunca são cacheadas.
 // Existe pra o app ser INSTALÁVEL (quiosque no celular) sem quebrar os deploys.
 // ============================================================
-const CACHE = "octano-monitor-v2";
+const CACHE = "octano-monitor-v3";
 
 self.addEventListener("install", (e) => { self.skipWaiting(); });
-self.addEventListener("activate", (e) => { e.waitUntil(self.clients.claim()); });
+self.addEventListener("activate", (e) => {
+  e.waitUntil(caches.keys()
+    .then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    .catch(() => {})
+    .then(() => self.clients.claim()));
+});
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
+  // PAGINAS (a tela e as janelas): sempre conferidas com o servidor (03/10/2026).
+  // fetch(req) passa pelo cache HTTP do navegador, que sem Cache-Control ESTIMA a
+  // validade -- e entregava o index velho (com os ?v= velhos) depois de publicar.
+  const ehPagina = req.mode === "navigate" || req.destination === "document" || req.destination === "iframe";
+  // a janela abre com &_=<hora> para nao pegar pagina velha: a reserva offline guarda
+  // SEM esse parametro, senao cada janela aberta seria uma copia nova para sempre
+  let chave = req.url;
+  try { const u = new URL(req.url); u.searchParams.delete("_"); chave = u.toString(); } catch (_) {}
   e.respondWith(
-    fetch(req)
+    (ehPagina ? fetch(req.url, { cache: "no-cache", credentials: "same-origin" }) : fetch(req))
       .then((resp) => {
         try {
-          if (new URL(req.url).origin === self.location.origin) {
+          if (resp.ok && new URL(req.url).origin === self.location.origin) {
             const copy = resp.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+            caches.open(CACHE).then((c) => c.put(chave, copy)).catch(() => {});
           }
         } catch (_) {}
         return resp;
       })
-      .catch(() => caches.match(req))
+      .catch(() => caches.match(chave))
   );
 });
 
