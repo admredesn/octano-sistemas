@@ -135,6 +135,11 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Telefone</label><input id="fpe-tel" type="text" value="${p?.telefone||''}" /></div>
         <div class="form-group"><label>WhatsApp <span style="color:#999;font-weight:normal;font-size:0.75rem">(p/ envio de nota a prazo)</span></label><input id="fpe-whatsapp" type="text" value="${p?.whatsapp||''}" placeholder="DDD + número, ex: 31999998888" /></div>
         <div class="form-group span2"><label>E-mail</label><input id="fpe-email" type="text" value="${p?.email||''}" /></div>
+        <div class="form-group span2"><label>Também enviar a fatura para <span style="color:#999;font-weight:normal;font-size:0.75rem">(além do e-mail e do WhatsApp acima — separe com ;)</span></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <input id="fpe-fat-emails" type="text" value="${p?.fatura_emails||''}" placeholder="e-mails: financeiro@empresa.com; contador@escritorio.com" />
+            <input id="fpe-fat-zaps" type="text" value="${p?.fatura_whatsapps||''}" placeholder="WhatsApps: 31999998888; 31988887777" />
+          </div></div>
         <div class="form-group span2"><label>Endereço</label><input id="fpe-end" type="text" value="${p?.endereco||''}" /></div>
         <div class="form-group"><label>Bairro</label><input id="fpe-bairro" type="text" value="${p?.bairro||''}" /></div>
         <div class="form-group"><label>CEP</label><input id="fpe-cep" type="text" value="${p?.cep||''}" /></div>
@@ -406,6 +411,10 @@ async function salvarPessoa(id, empresaId) {
     telefone:    document.getElementById('fpe-tel').value.trim() || null,
     whatsapp:    document.getElementById('fpe-whatsapp')?.value.trim() || null,
     email:       document.getElementById('fpe-email').value.trim() || null,
+    // contatos EXTRAS so' da fatura/cobranca (03/10/2026). Campo proprio: o e-mail do
+    // cadastro vai na NF-e, que aceita um so'.
+    fatura_emails:    (document.getElementById('fpe-fat-emails')?.value || '').trim() || null,
+    fatura_whatsapps: (document.getElementById('fpe-fat-zaps')?.value || '').trim() || null,
     chave_pix:   document.getElementById('fpe-chavepix')?.value.trim() || null,
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
     aceita_nota_prazo: !!document.getElementById('fpe-prazo')?.checked,
@@ -430,12 +439,20 @@ async function salvarPessoa(id, empresaId) {
     observacoes: document.getElementById('fpe-obs').value.trim() || null,
   };
 
-  let error, pessoaId = id;
-  if (id) {
-    ({ error } = await sb.from('oct_pessoas').update(dados).eq('id', id));
-  } else {
-    const r = await sb.from('oct_pessoas').insert({ ...dados, ativo: true }).select('id').single();
-    error = r.error; pessoaId = r.data && r.data.id;
+  let error, pessoaId = id, avisoDest = '';
+  const _gravar = async (d) => {
+    if (id) return (await sb.from('oct_pessoas').update(d).eq('id', id)).error;
+    const r = await sb.from('oct_pessoas').insert({ ...d, ativo: true }).select('id').single();
+    pessoaId = r.data && r.data.id;
+    return r.error;
+  };
+  error = await _gravar(dados);
+  if (error && /fatura_emails|fatura_whatsapps/i.test(error.message || '')) {
+    // SQL dos contatos extras ainda nao rodou: o cadastro tem de salvar mesmo assim
+    const { fatura_emails, fatura_whatsapps, ...resto } = dados;
+    error = await _gravar(resto);
+    if (!error && (fatura_emails || fatura_whatsapps))
+      avisoDest = ' (os contatos extras da fatura NÃO foram salvos: falta rodar SQL-FATURA-DESTINOS.sql)';
   }
 
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
@@ -451,8 +468,8 @@ async function salvarPessoa(id, empresaId) {
       }
     }
   } catch (e) { /* vínculo é complemento; o cadastro já foi salvo */ }
-  msg.textContent = '✅ Salvo!'; msg.style.color = '#4caf50';
-  setTimeout(() => moduloPessoas(), 900);
+  msg.textContent = '✅ Salvo!' + avisoDest; msg.style.color = avisoDest ? '#f0b45c' : '#4caf50';
+  setTimeout(() => moduloPessoas(), avisoDest ? 4000 : 900);
 }
 
 async function excluirPessoa(id) {

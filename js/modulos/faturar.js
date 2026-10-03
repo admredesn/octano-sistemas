@@ -1132,11 +1132,34 @@ async function fatVerDoc(path) {
 // Mesmo padrao do boleto e do PDF: a tela nao fala com o gateway. Marca o
 // pedido na fatura e espera -- a senha do SMTP e o token do WhatsApp ficam no
 // servidor, longe do navegador.
+// Para onde vai a fatura (03/10/2026): o e-mail e o WhatsApp do cadastro + os extras
+// "tambem enviar a fatura para" (fatura_emails / fatura_whatsapps). MESMA regra do
+// nucleo (rotas_faturas_envio.py), para a tela mostrar exatamente quem recebe.
+function _fatDestinos(cli) {
+  cli = cli || {};
+  const emails = [], vistosE = new Set();
+  [cli.email, cli.fatura_emails].forEach(b => String(b || "").split(/[;,\s]+/).forEach(e => {
+    e = e.trim();
+    if (e.includes("@") && !vistosE.has(e.toLowerCase())) { vistosE.add(e.toLowerCase()); emails.push(e); }
+  }));
+  const fones = [], vistosF = new Set();
+  [cli.whatsapp || cli.telefone, cli.fatura_whatsapps].forEach(b => String(b || "").split(/[;,/\n]+/).forEach(t => {
+    let d = t.replace(/\D/g, "");
+    if ((d.length === 12 || d.length === 13) && d.startsWith("55")) d = d.slice(2);
+    if (d.length < 10 || vistosF.has(d)) return;
+    vistosF.add(d);
+    // celular tem 9 digitos depois do DDD: 10 digitos comecando em 9 e' celular com digito faltando
+    const aviso = d.length === 10 && d[2] === "9" ? "parece faltar um dígito" : (d.length > 11 ? "número longo demais" : "");
+    fones.push({ txt: t.trim(), d, aviso });
+  }));
+  return { emails: emails.slice(0, 10), fones: fones.slice(0, 10) };
+}
+
 async function fatEnviar(faturaId) {
   const { data: f } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
   if (!f) { alert("Fatura não encontrada."); return; }
   const { data: cli } = f.cliente_id
-    ? await sb.from("oct_pessoas").select("nome,email,telefone,whatsapp").eq("id", f.cliente_id).maybeSingle()
+    ? await sb.from("oct_pessoas").select("*").eq("id", f.cliente_id).maybeSingle()
     : { data: null };
 
   let bol = null;
@@ -1147,8 +1170,9 @@ async function fatEnviar(faturaId) {
   } catch (e) { /* sem boletos */ }
   const temBol = !!(bol && ["registrado", "liquidado"].includes(bol.status));
 
-  const email = (cli && cli.email || "").trim();
-  const zap = (cli && (cli.whatsapp || cli.telefone) || "").trim();
+  const dest = _fatDestinos(cli);
+  const email = dest.emails.join(", ");
+  const zap = dest.fones.map(x => x.txt).join(", ");
   const item = (ok, txt, falta) => `<li style="color:${ok ? "#86efac" : "#6b7688"};margin:2px 0">
       ${ok ? "✔" : "○"} ${txt}${ok ? "" : ` <span style="color:#f0b45c">(${falta})</span>`}</li>`;
 
@@ -1168,8 +1192,14 @@ async function fatEnviar(faturaId) {
       </ul>
       <p style="color:#889;font-size:0.8rem;margin:0 0 6px">Para onde:</p>
       <ul style="list-style:none;padding:0;margin:0 0 12px;font-size:0.84rem">
-        ${item(!!email, "E-mail: " + (_fatEsc(email) || "—"), "cliente sem e-mail no cadastro")}
-        ${item(!!zap, "WhatsApp: " + (_fatEsc(zap) || "—"), "cliente sem telefone no cadastro")}
+        ${dest.emails.length ? dest.emails.map(e => item(true, "E-mail: " + _fatEsc(e))).join("")
+          : item(false, "E-mail: —", "cliente sem e-mail no cadastro")}
+        ${dest.fones.length ? dest.fones.map(x => x.aviso
+            ? `<li style="color:#f0b45c;margin:2px 0">⚠ WhatsApp: ${_fatEsc(x.txt)} <span>(${x.aviso} — confira no cadastro)</span></li>`
+            : item(true, "WhatsApp: " + _fatEsc(x.txt))).join("")
+          : item(false, "WhatsApp: —", "cliente sem telefone no cadastro")}
+        <li style="color:#6b7688;margin:6px 0 0;font-size:0.74rem">Para mandar a mais gente: cadastro do cliente em Pessoas ›
+          "Também enviar a fatura para".</li>
       </ul>
       <label style="color:#9aa;font-size:0.78rem">Canais</label>
       <select id="fen-canais" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
