@@ -86,7 +86,10 @@ async function _fatTodas(montar) {
 // ---------- Aba: Títulos em Aberto ----------
 async function fatListarTitulos() {
   const corpo = document.getElementById("fat-corpo");
-  corpo.innerHTML = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
+  const carregando = "<p style='color:#888;padding:20px'>Carregando títulos...</p>";
+  const listaJa = document.getElementById("fat-tit-lista");
+  if (listaJa && document.getElementById("fat-tit-filtros")) listaJa.innerHTML = carregando;
+  else corpo.innerHTML = carregando;
   const eid = window._fatEid;
   const F = window._fatF = window._fatF || { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
   const titQ = () => {
@@ -102,7 +105,44 @@ async function fatListarTitulos() {
   ]);
   window._fatPrazo = (empRes.data && empRes.data.prazo_padrao_dias) || 30;
   window._fatTitCache = { eid, status: F.status, todos: tiRes.data || [], clientes: cliRes.data || [] };
+  // a barra fica; só as formas podem mudar com o status (pagos têm outras)
+  const selForma = document.getElementById("fat-f-forma");
+  if (selForma) selForma.innerHTML = _fatFormasOpts();
   _fatRenderTitulos();
+}
+
+function _fatFormasOpts() {
+  const c = window._fatTitCache || { todos: [] }, F = window._fatF || {};
+  const formas = Array.from(new Set(c.todos.map(t => (t.forma_nome || "").trim()).filter(Boolean))).sort();
+  return '<option value="">Todas</option>' +
+    formas.map(fn => `<option value="${_fatEsc(fn)}" ${F.forma === fn ? "selected" : ""}>${_fatEsc(fn)}</option>`).join("");
+}
+
+// Barra de filtros: desenhada UMA vez por carga da aba. Filtrar troca só o que
+// está embaixo dela (pedido do Ronan, 03/10/2026) -- sem piscar, sem perder o
+// foco nem a letra que se está digitando.
+function _fatTitBarra() {
+  const c = window._fatTitCache, F = window._fatF;
+  const cliOpts = "<option value=''>Todos os clientes</option>" +
+    c.clientes.map(p => `<option value='${p.id}' ${F.cli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("");
+  return `
+    <div class="fat-filtros" id="fat-tit-filtros" style="flex-wrap:wrap;gap:8px">
+      <span>Cliente:</span>
+      <select class="fat-sel" onchange="fatSetF('cli',this.value)">${cliOpts}</select>
+      <span>Status:</span>
+      <select class="fat-sel" onchange="fatSetF('status',this.value)">
+        ${[["aberto", "Em aberto"], ["vencido", "Vencidos"], ["pago", "Pagos"], ["parcelado", "Parcelados"], ["todos", "Todos"]].map(s => `<option value="${s[0]}" ${F.status === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}
+      </select>
+      <span>Forma:</span>
+      <select class="fat-sel" id="fat-f-forma" onchange="fatSetF('forma',this.value)">${_fatFormasOpts()}</select>
+      <span>Emissão:</span>
+      <input type="date" class="fat-inp" value="${F.de}" onchange="fatSetF('de',this.value)" title="de">
+      <input type="date" class="fat-inp" value="${F.ate}" onchange="fatSetF('ate',this.value)" title="até">
+      <input class="fat-inp" placeholder="🔍 cliente/NFC-e" value="${_fatEsc(F.busca)}" oninput="fatSetFBusca(this.value)" style="width:150px">
+      <button class="fat-btn mini" onclick="fatLimparF()" title="Limpar filtros">🧽</button>
+      <span id="fat-tit-resumo" style="margin-left:auto;color:#9aa"></span>
+    </div>
+    <div id="fat-tit-lista"></div>`;
 }
 
 // Desenha a aba com o que JÁ foi lido. Cliente, forma, datas, busca e ordem
@@ -133,9 +173,6 @@ function _fatRenderTitulos() {
   });
   titulos = _fatOrdenar(titulos, window._fatOrdT, _FAT_ORD_T);
   window._fatTitulos = titulos;
-  const filtroCli = F.cli;
-  // formas distintas p/ o seletor
-  const formasSet = Array.from(new Set(todos.map(t => (t.forma_nome || "").trim()).filter(Boolean))).sort();
 
   // resumo por cliente (quem deve quanto)
   const porCli = {};
@@ -148,8 +185,6 @@ function _fatRenderTitulos() {
   const totalGeral = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
   const selTotal = titulos.filter(t => window._fatSel.has(t.id)).reduce((s, t) => s + Number(t.valor || 0), 0);
 
-  const cliOpts = "<option value=''>Todos os clientes</option>" +
-    c.clientes.map(p => `<option value='${p.id}' ${filtroCli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("");
 
   const linhas = titulos.map((t, i) => {
     const venc = _fatVencDe(t);
@@ -175,26 +210,10 @@ function _fatRenderTitulos() {
   </tr>`;
   }).join("");
 
-  corpo.innerHTML = `
-    <div class="fat-filtros" style="flex-wrap:wrap;gap:8px">
-      <span>Cliente:</span>
-      <select class="fat-sel" onchange="fatSetF('cli',this.value)">${cliOpts}</select>
-      <span>Status:</span>
-      <select class="fat-sel" onchange="fatSetF('status',this.value)">
-        ${[["aberto", "Em aberto"], ["vencido", "Vencidos"], ["pago", "Pagos"], ["parcelado", "Parcelados"], ["todos", "Todos"]].map(s => `<option value="${s[0]}" ${F.status === s[0] ? "selected" : ""}>${s[1]}</option>`).join("")}
-      </select>
-      <span>Forma:</span>
-      <select class="fat-sel" onchange="fatSetF('forma',this.value)">
-        <option value="">Todas</option>
-        ${formasSet.map(fn => `<option value="${_fatEsc(fn)}" ${F.forma === fn ? "selected" : ""}>${_fatEsc(fn)}</option>`).join("")}
-      </select>
-      <span>Emissão:</span>
-      <input type="date" class="fat-inp" value="${F.de}" onchange="fatSetF('de',this.value)" title="de">
-      <input type="date" class="fat-inp" value="${F.ate}" onchange="fatSetF('ate',this.value)" title="até">
-      <input class="fat-inp" placeholder="🔍 cliente/NFC-e" value="${_fatEsc(F.busca)}" oninput="fatSetFBusca(this.value)" style="width:150px">
-      <button class="fat-btn mini" onclick="fatLimparF()" title="Limpar filtros">🧽</button>
-      <span style="margin-left:auto;color:#9aa">${titulos.length} título(s) · <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong></span>
-    </div>
+  if (!document.getElementById("fat-tit-filtros") || !document.getElementById("fat-tit-lista")) corpo.innerHTML = _fatTitBarra();
+  document.getElementById("fat-tit-resumo").innerHTML =
+    `${titulos.length} título(s) · <strong style="color:#f59e0b">R$ ${_fatMoney(totalGeral)}</strong>`;
+  document.getElementById("fat-tit-lista").innerHTML = `
     ${devedores.length ? `<div class="fat-cards">
       ${devedores.slice(0, 6).map(d => `<div class="fat-card">
         <div class="fat-card-nome">${_fatEsc(d.nome)}</div>
@@ -324,23 +343,14 @@ function fatSetFBusca(valor) {
   window._fatF = window._fatF || {};
   window._fatF.busca = valor;
   clearTimeout(_fatBuscaTimer);
-  _fatBuscaTimer = setTimeout(() => {
-    // redesenho síncrono: nenhuma tecla cai entre apagar e recriar o campo
-    const ant = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
-    const pos = ant && ant.selectionStart != null ? ant.selectionStart : null;
-    _fatTitulosDeNovo();
-    const inp = document.querySelector('.fat-filtros input[placeholder^="🔍"]');
-    if (inp) {
-      inp.focus();
-      const p = pos == null ? inp.value.length : Math.min(pos, inp.value.length);
-      try { inp.setSelectionRange(p, p); } catch (e) {}
-    }
-  }, 250);
+  // o campo fica na barra fixa (não é recriado): só a lista se redesenha
+  _fatBuscaTimer = setTimeout(_fatTitulosDeNovo, 200);
 }
 function fatLimparF() {
   window._fatF = { cli: "", forma: "", status: "aberto", de: "", ate: "", busca: "" };
   window._fatSel = new Set();
-  fatListarTitulos();
+  document.getElementById("fat-tit-filtros")?.remove();   // redesenha a barra zerada
+  _fatTitulosDeNovo();
 }
 
 // ---------- COBRAR cliente (WhatsApp via wa.me + copiar p/ e-mail) ----------
