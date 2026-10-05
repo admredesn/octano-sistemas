@@ -141,6 +141,11 @@ async function abrirFormPessoa(id, empresaId) {
             <input id="fpe-fat-emails" type="text" value="${p?.fatura_emails||''}" placeholder="e-mails: financeiro@empresa.com; contador@escritorio.com" />
             <input id="fpe-fat-zaps" type="text" value="${p?.fatura_whatsapps||''}" placeholder="WhatsApps: 31999998888; 31988887777" />
           </div></div>
+        <div class="form-group span2"><label>Enviar o cupom a prazo para <span style="color:#999;font-weight:normal;font-size:0.75rem">(preenchido, o cupom vai só para estes, no lugar do e-mail e do WhatsApp acima; vazio, vai para os de cima — separe com ;)</span></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <input id="fpe-cupom-emails" type="text" value="${p?.cupom_emails||''}" placeholder="e-mail: frota@empresa.com" />
+            <input id="fpe-cupom-zaps" type="text" value="${p?.cupom_whatsapps||''}" placeholder="WhatsApp: 31999998888" />
+          </div></div>
         ${_pessoaFaHtml(p)}
         <div class="form-group span2"><label>Endereço</label><input id="fpe-end" type="text" value="${p?.endereco||''}" /></div>
         <div class="form-group"><label>Bairro</label><input id="fpe-bairro" type="text" value="${p?.bairro||''}" /></div>
@@ -602,6 +607,10 @@ async function salvarPessoa(id, empresaId) {
     // cadastro vai na NF-e, que aceita um so'.
     fatura_emails:    (document.getElementById('fpe-fat-emails')?.value || '').trim() || null,
     fatura_whatsapps: (document.getElementById('fpe-fat-zaps')?.value || '').trim() || null,
+    // destino PRÓPRIO do cupom a prazo (05/10/2026): preenchido, o PDV manda o cupom
+    // só para estes; vazio, para o e-mail/WhatsApp do cadastro.
+    cupom_emails:     (document.getElementById('fpe-cupom-emails')?.value || '').trim() || null,
+    cupom_whatsapps:  (document.getElementById('fpe-cupom-zaps')?.value || '').trim() || null,
     ..._pessoaFaDados(),
     chave_pix:   document.getElementById('fpe-chavepix')?.value.trim() || null,
     cashback_ativo: !!document.getElementById('fpe-cashback')?.checked,
@@ -637,12 +646,12 @@ async function salvarPessoa(id, empresaId) {
   const faErro = _pessoaFaValidar(dados);
   if (faErro) { msg.textContent = faErro; msg.style.color = '#f44'; return; }
   error = await _gravar(dados);
-  if (error && /fatura_emails|fatura_whatsapps|fat_auto_/i.test(error.message || '')) {
-    // SQL dos contatos extras / do fechamento automatico ainda nao rodou: o cadastro
-    // tem de salvar mesmo assim
-    const resto = Object.fromEntries(Object.entries(dados).filter(([k]) => !/^(fatura_emails|fatura_whatsapps|fat_auto_)/.test(k)));
+  if (error && /fatura_emails|fatura_whatsapps|fat_auto_|cupom_emails|cupom_whatsapps/i.test(error.message || '')) {
+    // SQL dos contatos extras / do fechamento automatico / do destino do cupom ainda
+    // nao rodou: o cadastro tem de salvar mesmo assim
+    const resto = Object.fromEntries(Object.entries(dados).filter(([k]) => !/^(fatura_emails|fatura_whatsapps|fat_auto_|cupom_emails|cupom_whatsapps)/.test(k)));
     error = await _gravar(resto);
-    if (!error) avisoDest = ' (faturamento automático e contatos extras NÃO foram salvos: falta rodar SQL-FATURA-DESTINOS.sql e SQL-FATURAMENTO-AUTO.sql)';
+    if (!error) avisoDest = ' (faturamento automático e contatos extras/do cupom NÃO foram salvos: falta rodar SQL-FATURA-DESTINOS.sql, SQL-FATURAMENTO-AUTO.sql e SQL-CUPOM-DESTINOS.sql)';
   }
 
   if (error) { msg.textContent = 'Erro: ' + error.message; msg.style.color = '#f44'; return; }
