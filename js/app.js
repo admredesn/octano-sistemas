@@ -19,6 +19,7 @@ const MODULOS = [
   { id: 'importar_sped', label: 'Importar SPED', breve: false },
   { id: 'lmc',           label: 'LMC',            breve: false },
   { id: 'manifestacao',  label: 'Manifestação',   breve: false },
+  { id: 'marketing',     label: '📣 Marketing',   breve: false },
   { id: 'monitor',       label: '🛢️ Monitor',     breve: false },
   { id: 'nfe',           label: 'NF-e',          breve: false },
   { id: 'nfce',          label: 'NFC-e',         breve: false },
@@ -368,6 +369,7 @@ function navegarPara(modulo){
     cashback:      moduloCashback,
     comissoes:     moduloComissoes,
     perfis:        moduloPerfis,
+    marketing:     moduloMarketing,
   };
   if(fns[modulo]) _abrirModulo(modulo, fns[modulo], conteudo);
   else conteudo.innerHTML = '<p style="color:#888;padding:24px">Modulo <strong>' + modulo + '</strong> em breve.</p>';

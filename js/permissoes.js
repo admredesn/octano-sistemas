@@ -181,6 +181,9 @@ const PERM_CATALOGO = [
     { c: 'parametros.alterar', d: 'Alterar parâmetros e mensagens', p: 'g', s: 1 },
     { c: 'whatsapp.ver', d: 'Acessar WhatsApp', p: 'g' },
     { c: 'whatsapp.desconectar', d: 'Desconectar/trocar número do WhatsApp', p: '', s: 1 },
+    // app Postos SN (05/10/2026): publicar manda notificação a clientes de toda a rede
+    { c: 'marketing.ver', d: 'Acessar Marketing do app (campanhas e parceiros)', p: 'g' },
+    { c: 'marketing.publicar', d: 'Publicar campanha e enviar notificação aos clientes do app', p: '', s: 1 },
   ]},
 
   // ---------------- PDV ----------------
