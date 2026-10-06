@@ -594,7 +594,8 @@ async function fcCarregarDados() {
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
-      + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0);
+      + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
+      + Number(d.receita || 0);   // receita lançada entra na origem, como na coluna do detalhe
     d.recebido_caixa = Math.round(recebido * 100) / 100;
     d.vendido_caixa = Math.round(vendido * 100) / 100;
     d.resultado_caixa = Math.round((recebido - vendido) * 100) / 100;
@@ -754,7 +755,11 @@ function fcDetalhe(turnoId) {
     ['Remessas', Number(t.valor_abertura || 0) + Number(d.suprimento || 0)],
     ['Cheque troco', 0, I],
     ['Haver', 0, I],
-    ['Receitas', 0, I],
+    // RECEITAS (06/10/2026 — turno 1188 do Florestal): a linha era um zero fixo. A receita
+    // lançada (balão Receitas ou oct_pdv_caixa tipo 'receita') aparecia no balão e entrava
+    // no esperado da gaveta, mas o campo ficava 0,00 e o Resultado a ignorava. É dinheiro
+    // que entrou sem ser venda — mesma natureza de Títulos Recebidos: SOMA em Vendas/Saídas.
+    ['Receitas', d.receita],
   ];
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
