@@ -709,9 +709,8 @@ function fcDetalhe(turnoId) {
     ['Venda produtos', d.venda_prod],
     ['Venda serviços', 0],
     ['Venda combustíveis', d.venda_comb],
-    // comparação (não soma): o que os cupons do TecnoX cobraram de combustível no turno.
-    // Maior que a bomba = preço de tabela do cliente; menor = algo ainda não vendido.
-    ...(d.cupom_comb ? [['Combustível nos cupons (TecnoX)', d.cupom_comb, I]] : []),
+    // (06/10/2026) a linha "Combustível nos cupons (TecnoX)" saiu da tela a pedido do Ronan:
+    // a venda de combustível é a bomba; o total dos cupons segue em d.cupom_comb, sem exibir.
     ['Títulos Recebidos', d.titulos],
     // Remessas = TROCO INICIAL (fundo de abertura) + suprimentos avulsos —
     // SOMA no Total Vendas/Saída (pedido 18/08); o par dele nos Recebimentos
