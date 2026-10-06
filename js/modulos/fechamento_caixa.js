@@ -100,8 +100,11 @@ async function fcCarregarDados() {
   const eid = window._fcEmpresaId;
   const de = window._fcDe + 'T00:00:00';
   const ate = window._fcAte + 'T23:59:59';
+  // 'mesclado' (05/10/2026): turno aberto em DOBRO no PDV por cima do turno real do
+  // TecnoX -- o que apontava para ele foi para o real e ele ficou com janela zero.
   const { data: turnos } = await sb.from('oct_pdv_turnos').select('*')
     .eq('empresa_id', eid).gte('aberto_em', de).lte('aberto_em', ate)
+    .or('status.is.null,status.neq.mesclado')
     .order('aberto_em', { ascending: false });
   const lista = turnos || [];
   if (!lista.length) return { turnos: [], porTurno: {} };
@@ -189,7 +192,7 @@ async function fcCarregarDados() {
       .then(r => r, () => ({ data: [] })),
     // PISTA — fonte IMUTÁVEL da venda de combustível (regra Ronan 19/08): todo
     // litro que saiu da bomba é venda; excluir lançamento afeta só o RECEBIMENTO.
-    _fcTudo(() => sb.from('oct_pdv_abastecimentos').select('id,data_abast,litros,valor_total,tipo')
+    _fcTudo(() => sb.from('oct_pdv_abastecimentos').select('id,data_abast,litros,valor_total,tipo,status')
       .eq('empresa_id', eid).or('tipo.is.null,tipo.neq.afericao')
       .gte('data_abast', janIni).lte('data_abast', janFim).order('data_abast')),
   ]);
@@ -302,10 +305,18 @@ async function fcCarregarDados() {
   // produto de loja (R$ 264,23) não existia na pista. Onde o TecnoX é a fonte
   // do recebimento, ele também é a fonte da VENDA — senão os dois lados do
   // caixa saem de réguas diferentes e a diferença é estrutural.
+  //
+  // 05/10/2026 — A BOMBA VALE EM TODO TURNO, inclusive no espelhado do TecnoX (decisão do
+  // Ronan: "a automação é a fonte da verdade"; o TecnoX para em novembro). Com o cupom como
+  // venda, o caixa errava junto com o espelho: venda em dobro (NFC-e do PDV Octano de
+  // abastecimento já vendido no TecnoX), cupom no turno errado (fuso) e cupom que nem chegava.
+  // A diferença de preço da tabela do cliente (cupom > bomba) aparece no Resultado; o total
+  // dos cupons do TecnoX fica numa linha de comparação.
   ((pRes && pRes.data) || []).forEach(a => {
+    if (String(a.status || '') === 'afericao_autorizada') return;   // aferição que só o status marcava
     const tid = _turnoFila(a.data_abast); const t = tid && porTurno[tid]; if (!t) return;
-    if (turnosTecnox.has(tid)) { t.litros_pista += Number(a.litros || 0); return; }
     const va = Number(a.valor_total || 0);
+    if (turnosTecnox.has(tid)) t.litros_pista += Number(a.litros || 0);
     t.venda_comb += va; t.litros_comb += Number(a.litros || 0); t.venda_total += va;
   });
   // TURNOS COM RECEBIMENTO ESPELHADO DO TECNOX. Nos postos que ainda operam por
@@ -360,14 +371,15 @@ async function fcCarregarDados() {
   // VENDA DO TURNO ESPELHADO vem da view (soma dos itens do cupom, feita no
   // banco). Nos turnos onde o PDV do Octano opera, a venda continua vindo da
   // PISTA -- por isso só se aplica onde há venda 'tecnox'.
+  // 05/10/2026: do cupom só vem a LOJA (a bomba não vê produto); o combustível do cupom fica
+  // só como comparação (cupom_comb), porque a venda de combustível é a bomba.
   ((aggRes && aggRes.data) || []).forEach(g => {
     const t = porTurno[g.turno_id]; if (!t) return;
     if (!turnosTecnox.has(g.turno_id)) return;
-    const comb = Number(g.venda_comb || 0), prod = Number(g.venda_prod || 0);
-    t.venda_comb += comb;
-    t.litros_comb += Number(g.litros_comb || 0);
+    const prod = Number(g.venda_prod || 0);
+    t.cupom_comb = Number(g.venda_comb || 0);
     t.venda_prod += prod;
-    t.venda_total += comb + prod;
+    t.venda_total += prod;
   });
   (cRes.data || []).forEach(m => {
     if (m._excluido) return;
@@ -667,6 +679,9 @@ function fcDetalhe(turnoId) {
     ['Venda produtos', d.venda_prod],
     ['Venda serviços', 0],
     ['Venda combustíveis', d.venda_comb],
+    // comparação (não soma): o que os cupons do TecnoX cobraram de combustível no turno.
+    // Maior que a bomba = preço de tabela do cliente; menor = algo ainda não vendido.
+    ...(d.cupom_comb ? [['Combustível nos cupons (TecnoX)', d.cupom_comb, I]] : []),
     ['Títulos Recebidos', d.titulos],
     // Remessas = TROCO INICIAL (fundo de abertura) + suprimentos avulsos —
     // SOMA no Total Vendas/Saída (pedido 18/08); o par dele nos Recebimentos
