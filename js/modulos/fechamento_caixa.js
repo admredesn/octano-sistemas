@@ -1966,17 +1966,36 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td">${fcEsc(m.descricao) || '—'}${dup ? ' <span style="color:#f59e0b;font-size:0.72rem">— troco inicial do TecnoX: o fundo deste turno já é o do campo acima, não soma</span>' : ''}</td>
         <td class="fc-td fc-r"${dup ? ' style="color:#667;text-decoration:line-through"' : ''}>${fcMoney(m.valor)}</td>`);
     });
+    // CONTA DA LINHA "REMESSAS" (06/10/2026 — pedido do Ronan): a janela dizia "nenhum
+    // suprimento" enquanto Remessas mostrava o troco inicial, e apagar a cópia do TecnoX
+    // não mexia no número. Agora a janela mostra de onde sai o valor — o MESMO cálculo
+    // da tela (fundo do turno + d.suprimento do cache).
+    let conta = '';
+    if (tipo === 'suprimento') {
+      const dT = (cache.porTurno || {})[turnoId] || {};
+      const fundo = Number(t.valor_abertura || 0), sup = Number(dT.suprimento || 0);
+      const naoSoma = ms.filter(m => temFundo && _fcEhTrocoInicialTecnox(m)).reduce((s, m) => s + Number(m.valor || 0), 0);
+      const lin = (r, v, extra) => `<div style="display:flex;justify-content:space-between;${extra || ''}"><span>${r}</span><b>${fcMoney(v)}</b></div>`;
+      conta = `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:8px 12px;margin-top:12px;max-width:440px;font-size:0.8rem;line-height:1.7">
+          <div style="color:#f0b45c;font-weight:700;margin-bottom:2px">Conta da linha Remessas</div>
+          ${lin('Troco inicial (campo acima)', fundo)}
+          ${lin('+ Suprimentos lançados', sup)}
+          ${lin('= Remessas', fundo + sup, 'border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px;color:#fff')}
+          ${naoSoma > 0.009 ? lin('Troco copiado do TecnoX (não soma)', naoSoma, 'color:#667;font-size:0.72rem') : ''}
+        </div>`;
+    }
     fcModal(cfg.titulo, `
       <div style="padding:14px;font-size:0.85rem;color:#cdd6e0">
         <label style="color:#9aa;font-size:0.75rem;display:block;margin-bottom:4px">${rot}</label>
         <input id="fc-troco-inp" type="number" step="0.01" value="${Number(t[campo] || 0).toFixed(2)}" class="fc-inp2" style="width:140px">
         <button class="fc-btn azul" onclick="fcTrocoSalvar('${campo}')">💾 Salvar</button>
         <p style="color:#667;font-size:0.72rem;margin-top:6px">Editar aqui corrige o turno — a conferência de gaveta (esperado × contado) recalcula na hora.</p>
+        ${conta}
         ${tipo === 'suprimento' ? (linhas.length
           ? `<div style="color:#f97316;font-weight:700;font-size:0.8rem;margin:12px 0 4px">Suprimentos avulsos do caixa</div>`
             + _fcToolbar()
             + `<table class="fc-grid"><thead><tr><th></th><th>Hora</th><th>Descrição</th><th>Valor</th><th></th></tr></thead><tbody>${linhas.join('')}</tbody></table>`
-          : '<p style="color:#777;margin-top:12px">Nenhum suprimento avulso lançado neste caixa (use ➕ Incluir no balão Despesas/Depósito se precisar lançar).</p>') : ''}
+          : '<p style="color:#777;margin-top:12px">Nenhum suprimento lançado além do troco inicial (use ➕ Incluir no balão Despesas/Depósito se precisar lançar).</p>') : ''}
       </div>`);
     return;
   }
