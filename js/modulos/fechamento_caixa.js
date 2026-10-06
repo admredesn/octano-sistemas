@@ -74,6 +74,11 @@ function _fcEhTrocoInicialTecnox(m) {
   const d = String((m && m.descricao) || '').toUpperCase();
   return d.includes('TROCO INICIAL') && d.includes('TECNOX');
 }
+// sangria que o TecnoX lança sozinho a cada depósito no cofre ("SANGRIA AUTOMATICA BRINKS (TecnoX)")
+function _fcEhSangriaCofreTecnox(m) {
+  const d = String((m && m.descricao) || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return d.includes('SANGRIA AUTOMATICA') && d.includes('TECNOX');
+}
 // fila/recebimentos: hora LOCAL com +00:00 falso carimbado pelo Postgres →
 // tira o sufixo e parseia como hora local do navegador.
 function _fcTsLocal(s) {
@@ -426,7 +431,11 @@ async function fcCarregarDados() {
     if (m._excluido) return;
     const t = porTurno[m.turno_id]; if (!t) return;
     const tipo = String(m.tipo || '').toLowerCase(); const val = Number(m.valor || 0);
-    if (tipo.includes('sangria')) t.sangria += val;
+    if (tipo.includes('sangria')) {
+      t.sangria += val;
+      // guardada à parte: é o MESMO depósito que o Octano lê do cofre (ver dinheiro_esperado)
+      if (_fcEhSangriaCofreTecnox(m)) t.sangria_cofre_tecnox = (t.sangria_cofre_tecnox || 0) + val;
+    }
     else if (tipo.includes('suprim') && _fcEhTrocoInicialTecnox(m) && _fcFundoTurno[m.turno_id] > 0.009) {
       t.troco_tecnox_dup = (t.troco_tecnox_dup || 0) + val;
     }
@@ -549,7 +558,18 @@ async function fcCarregarDados() {
     const d = porTurno[t.id]; if (!d) return;
     const abertura = Number(t.valor_abertura || 0);
     const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + Number(d.receita || 0);
-    const sai = Number(d.sangria || 0) + Number(d.despesa || 0) + Number(d.deposito || 0);
+    // COFRE EM DOBRO (06/10/2026 — Florestal, turno 1188: esperado −208,35 e "sobra"
+    // de 2.059,90). O depósito no cofre chegava duas vezes: o TecnoX lança uma
+    // "SANGRIA AUTOMATICA BRINKS" a cada depósito (o espelho traz para oct_pdv_caixa)
+    // e o Octano lê o mesmo depósito direto do cofre (receb_ext_cofre, que entra no
+    // CONTADO logo abaixo). Descontar a sangria do esperado E somar o cofre no contado
+    // inflava a diferença exatamente no valor depositado. Régua: se o turno tem cofre
+    // no contado, a sangria automática do TecnoX não desconta. Sem cofre lido pelo
+    // Octano ela continua valendo (aí o contado é só a gaveta). Sangria manual sempre vale.
+    d.sangria_cofre_dup = Number(d.receb_ext_cofre || 0) > 0.009
+      ? Math.round(Number(d.sangria_cofre_tecnox || 0) * 100) / 100 : 0;
+    d.sangria_gaveta = Math.round((Number(d.sangria || 0) - d.sangria_cofre_dup) * 100) / 100;
+    const sai = d.sangria_gaveta + Number(d.despesa || 0) + Number(d.deposito || 0);
     d.dinheiro_esperado = Math.round((entra - sai) * 100) / 100;
     // CONTADO = gaveta no fechamento + DEPOSITADO NO COFRE no turno (18/08):
     // no posto com cofre Brink's o dinheiro não fica na gaveta — sem somar o
@@ -913,7 +933,8 @@ function fcDetalhe(turnoId) {
               <div style="display:flex;justify-content:space-between"><span>+ Vendas em dinheiro</span><b>${fcMoney(rec.dinheiro)}</b></div>
               ${d.suprimento > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Suprimentos</span><b>${fcMoney(d.suprimento)}</b></div>` : ''}
               ${d.receita > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Receitas</span><b>${fcMoney(d.receita)}</b></div>` : ''}
-              ${d.sangria > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Sangrias</span><b>${fcMoney(d.sangria)}</b></div>` : ''}
+              ${d.sangria_gaveta > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Sangrias</span><b>${fcMoney(d.sangria_gaveta)}</b></div>` : ''}
+              ${d.sangria_cofre_dup > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#667;font-size:0.7rem" title="O TecnoX lança uma sangria a cada depósito no cofre. O mesmo depósito já está no Contado (cofre), então não é descontado de novo."><span>Sangrias do cofre (TecnoX) — já no contado</span><span>${fcMoney(d.sangria_cofre_dup)}</span></div>` : ''}
               ${d.despesa > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Despesas</span><b>${fcMoney(d.despesa)}</b></div>` : ''}
               ${d.deposito > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Depósitos</span><b>${fcMoney(d.deposito)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
@@ -2224,10 +2245,14 @@ async function fcNodeDetalhe(tipo) {
   // 2) MOVIMENTOS DE CAIXA (sangria/suprimento/despesa/depósito/receita)
   if (cfg.caixa && cfg.caixa.length) {
     const ms = (rC.data || []).filter(m => cfg.caixa.some(p => String(m.tipo || '').toLowerCase().includes(p)));
+    // sangria automática do cofre (TecnoX) em turno com cofre lido pelo Octano: é o mesmo
+    // depósito da lista de baixo — aparece, com o aviso, e não desconta do esperado
+    const cofreNoContado = Number((((cache.porTurno || {})[turnoId]) || {}).receb_ext_cofre || 0) > 0.009;
     const linhas = ms.map(m => {
       window._fcLancBase['caixa:' + m.id] = { rotulo: fcEsc(m.tipo || 'Movimento'), valor: m.valor, forma_nome: m.forma };
+      const dupCofre = cofreNoContado && String(m.tipo || '').toLowerCase().includes('sangria') && _fcEhSangriaCofreTecnox(m);
       return _fcRow('caixa', m.id, `<td class="fc-td">${_fcHora(m.criado_em)}</td>
-        <td class="fc-td">${fcEsc(m.descricao) || '—'}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
+        <td class="fc-td">${fcEsc(m.descricao) || '—'}${dupCofre ? ' <span style="color:#f59e0b;font-size:0.72rem">— mesmo depósito do cofre (lista abaixo): não desconta de novo</span>' : ''}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
         <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     });
     const total = ms.reduce((s, m) => s + Number(m.valor || 0), 0);
