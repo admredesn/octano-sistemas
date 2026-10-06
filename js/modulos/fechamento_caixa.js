@@ -287,6 +287,34 @@ async function fcCarregarDados() {
     if (tetoVao) return null;
     return janOrd.length ? janOrd[janOrd.length - 1].id : null;
   };
+  // DEPÓSITO NO VÃO ENTRE TURNOS (06/10/2026 — Tijuco). O depósito do cofre que
+  // caía entre o fechamento de um turno e a abertura do seguinte não entrava em
+  // nenhum dos dois (_turnoDe exige estar DENTRO da janela), e o caixa acusava
+  // falta do valor exato do depósito. Dois casos reais:
+  //   - depósito às 07:06 com o turno aberto só às 09:00 (posto vendendo desde
+  //     06:23): é dinheiro das vendas que o turno que ABRE recebe → vai para ele;
+  //   - turno fechado pela vigília às 21:46 (último abastecimento + 60 s) e
+  //     depósito de fechamento às 21:49, sem venda nenhuma no meio: é do turno
+  //     que FECHOU → fica nele.
+  // Régua: houve venda na bomba entre o fechamento anterior e o depósito?
+  const _fcPistaTs = ((pRes && pRes.data) || [])
+    .filter(a => Number(a.valor_total || 0) > 0 && String(a.status || '') !== 'afericao_autorizada')
+    .map(a => _fcTsLocal(a.data_abast)).filter(Boolean).sort((a, b) => a - b);
+  const _vendeuEntre = (ini, fim) => _fcPistaTs.some(ts => ts > ini && ts <= fim);
+  const _turnoDeposito = (iso) => {
+    const ts = _fcTsLocal(iso);
+    if (!ts) return null;
+    const dentro = janelas.find(x => x.ini && ts >= x.ini && ts <= x.fim);
+    if (dentro) return dentro.id;
+    let ant = null, prox = null;
+    janOrd.forEach(j => { if (j.fim <= ts) ant = j; else if (j.ini > ts && !prox) prox = j; });
+    // fechamento de referência: o do turno anterior na lista ou, fora dela, o piso
+    const fechAnt = ant ? ant.fim : (pisoVao || 0);
+    if (fechAnt && ts < fechAnt) return null;        // anterior ao turno de fora da lista: é dele
+    const vendeu = fechAnt ? _vendeuEntre(fechAnt, ts) : true;
+    if (vendeu) return prox ? prox.id : null;        // posto já vendia: turno que abre (se ainda não abriu, espera)
+    return ant ? ant.id : null;                      // sem venda no meio: depósito de fechamento do turno anterior
+  };
   // TURNO ESPELHADO DO TECNOX: precisa ser sabido ANTES da pista, porque nele a
   // venda vem do CUPOM, não da bomba.
   const turnosTecnox = new Set();
@@ -397,9 +425,11 @@ async function fcCarregarDados() {
   // cupons/fila); ficam como movimentação visível e conferência.
   ((rRes && rRes.data) || []).forEach(r => {
     if (r._excluido) return;
-    const tid = _turnoDe(r.recebido_em); const t = tid && porTurno[tid]; if (!t) return;
     const origem = String(r.origem || '').toLowerCase();
     const forma = String(r.forma || '').toLowerCase();
+    // depósito do cofre: vale a régua do vão (ver _turnoDeposito); o resto continua pela janela
+    const tid = origem.includes('cofre') ? _turnoDeposito(r.recebido_em) : _turnoDe(r.recebido_em);
+    const t = tid && porTurno[tid]; if (!t) return;
     const val = Number(r.valor || 0);
     if (origem.includes('sangria')) {
       t.sangria_f7 += val; t.sangria += val; t.sangrias_lst.push(r);
