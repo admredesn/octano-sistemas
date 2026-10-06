@@ -69,6 +69,11 @@ async function moduloFCaixa() {
 // ---- FUSO: os dois relógios do sistema (ver comentário nas janelas) ----
 // turno (aberto_em/fechado_em): UTC verdadeiro → parseia direto.
 function _fcTsUtc(s) { return s ? new Date(s).getTime() : 0; }
+// troco inicial copiado do TecnoX (sync_caixa_tecnox.py grava assim a 1ª linha de tab_suprimento)
+function _fcEhTrocoInicialTecnox(m) {
+  const d = String((m && m.descricao) || '').toUpperCase();
+  return d.includes('TROCO INICIAL') && d.includes('TECNOX');
+}
 // fila/recebimentos: hora LOCAL com +00:00 falso carimbado pelo Postgres →
 // tira o sufixo e parseia como hora local do navegador.
 function _fcTsLocal(s) {
@@ -409,11 +414,22 @@ async function fcCarregarDados() {
     t.venda_prod += prod;
     t.venda_total += prod;
   });
+  // FUNDO DE ABERTURA EM DOBRO (06/10/2026 — Florestal, turno 1188: Remessas R$ 679,50
+  // = 339,75 + 339,75). O turno aberto no PDV do Octano já traz o fundo em
+  // valor_abertura; o espelho do TecnoX grava o MESMO troco de novo, como suprimento
+  // "TROCO INICIAL DE CAIXA (TecnoX)". É o mesmo dinheiro: com fundo no turno, o
+  // troco inicial do TecnoX não soma (fica guardado só para o balão explicar).
+  // Turno espelhado, sem valor_abertura, continua vivendo do suprimento.
+  const _fcFundoTurno = {};
+  lista.forEach(x => { _fcFundoTurno[x.id] = Number(x.valor_abertura || 0); });
   (cRes.data || []).forEach(m => {
     if (m._excluido) return;
     const t = porTurno[m.turno_id]; if (!t) return;
     const tipo = String(m.tipo || '').toLowerCase(); const val = Number(m.valor || 0);
     if (tipo.includes('sangria')) t.sangria += val;
+    else if (tipo.includes('suprim') && _fcEhTrocoInicialTecnox(m) && _fcFundoTurno[m.turno_id] > 0.009) {
+      t.troco_tecnox_dup = (t.troco_tecnox_dup || 0) + val;
+    }
     else if (tipo.includes('suprim')) t.suprimento += val;
     else if (tipo.includes('desp')) t.despesa += val;
     else if (tipo.includes('depos')) t.deposito += val;
@@ -1904,14 +1920,30 @@ async function fcNodeDetalhe(tipo) {
         // quebrava em silêncio e o balão mostrava 0 lançamentos; bug 20/08)
         const r = await sb.from('oct_pdv_caixa').select('id,tipo,valor,descricao,criado_em:data_mov')
           .eq('turno_id', turnoId).order('data_mov');
-        ms = (r.data || []).filter(m => String(m.tipo || '').toLowerCase().includes('suprim'));
+        ms = (r.data || []).filter(m => String(m.tipo || '').toLowerCase().includes('suprim'))
+          // MESMA marca dos outros balões: excluído some, editado mostra o valor novo.
+          // Sem isto o ✖ "não excluía" (06/10/2026, turno 1189 do Florestal): o
+          // lançamento saía das somas, mas continuava na lista como se nada tivesse sido feito.
+          .filter(m => {
+            const a = ((window._fcConf || {})['caixa:' + m.id] || {}).ajuste;
+            if (!a) return true;
+            if (a.excluido) return false;
+            if (a.valor != null) m.valor = a.valor;
+            if (a.descricao) m.descricao = a.descricao;
+            return true;
+          });
       } catch (e) {}
     }
+    // com fundo no turno, o troco inicial vindo do TecnoX não soma: é o mesmo dinheiro do
+    // campo acima — ou o troco do turno SEGUINTE do TecnoX, que a cópia (6/6h) encaixa aqui
+    // pela hora quando o turno do Octano fecha depois (1189: troco das 13:10, turno fechado 15:07)
+    const temFundo = Number(t.valor_abertura || 0) > 0.009;
     const linhas = ms.map(m => {
       window._fcLancBase['caixa:' + m.id] = { rotulo: 'Suprimento', valor: m.valor, forma_nome: 'Dinheiro' };
+      const dup = temFundo && _fcEhTrocoInicialTecnox(m);
       return _fcRow('caixa', m.id, `<td class="fc-td">${_fcHora(m.criado_em)}</td>
-        <td class="fc-td">${fcEsc(m.descricao) || '—'}</td>
-        <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
+        <td class="fc-td">${fcEsc(m.descricao) || '—'}${dup ? ' <span style="color:#f59e0b;font-size:0.72rem">— troco inicial do TecnoX: o fundo deste turno já é o do campo acima, não soma</span>' : ''}</td>
+        <td class="fc-td fc-r"${dup ? ' style="color:#667;text-decoration:line-through"' : ''}>${fcMoney(m.valor)}</td>`);
     });
     fcModal(cfg.titulo, `
       <div style="padding:14px;font-size:0.85rem;color:#cdd6e0">
