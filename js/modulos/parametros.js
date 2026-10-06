@@ -526,8 +526,11 @@ function _parSecaoRecebimentos() {
       <div class="desc">O PDV soma o dinheiro recebido pela <b>tecla R</b> no turno e desconta as sangrias
         já lançadas. Quando o que sobra na gaveta chega a este valor, o recebimento em dinheiro trava e
         exige a sangria (a sangria é só o registro da retirada, com comprovante — não baixa abastecimento).
-        <span style="color:#666"><b>Vazio ou 0 = trava DESLIGADA</b> (a sangria manual continua no PDV).
-        Não se aplica a posto com cofre.</span></div>
+        <span style="color:#666"><b>Vazio ou 0 = trava DESLIGADA</b> (a sangria manual continua no PDV).</span>
+        <br><b>Posto com cofre:</b> preenchido, o frentista recebe o dinheiro pela tecla R e, ao chegar a este
+        valor, o PDV trava e manda <b>depositar no cofre</b>; a mensagem fecha sozinha quando o cofre informa o
+        depósito. Nesse modo o depósito é a retirada da gaveta e <b>deixa de dar baixa em abastecimento</b>.
+        <span style="color:#666">Vazio = como sempre: sem trava, o depósito baixa sozinho as vendas em dinheiro.</span></div>
       <input id="par-sangria-limite" type="number" step="10" min="0" style="width:180px"
         value="${e.sangria_limite != null ? _parEsc(e.sangria_limite) : ''}" placeholder="500">
     </div>
