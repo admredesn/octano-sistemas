@@ -44,13 +44,18 @@ async function _lmcSaidaPorTanqueDia(eid, de, ate) {
   let from = 0; const page = 1000;
   for (;;) {
     const { data, error } = await sb.from("oct_pdv_abastecimentos")
-      .select("tanque_id,litros,tipo,data_abast")
+      .select("tanque_id,litros,tipo,status,data_abast")
       .eq("empresa_id", eid).or("tipo.is.null,tipo.neq.afericao")
       .gte("data_abast", de + "T00:00:00").lte("data_abast", ate + "T23:59:59")
       .order("data_abast").range(from, from + page - 1);
     if (error || !data || !data.length) break;
     data.forEach(a => {
       const tid = a.tanque_id; if (!tid) return;
+      // AFERIÇÃO PELO PDV NOVO (07/10/2026): a aferição autorizada chega da pista
+      // com tipo "abastecimento" e status "afericao_autorizada" — o filtro por
+      // tipo não a pegava, e o combustível que VOLTOU para o tanque entrava como
+      // saída (SEVEN 07/10: 42,7 L de etanol; Florestal out/26: 107 L).
+      if (String(a.status || "").startsWith("afericao")) return;
       const dia = (a.data_abast || "").slice(0, 10);
       const lit = Number(a.litros || 0);
       (saida[tid] = saida[tid] || {})[dia] = (saida[tid][dia] || 0) + lit;
