@@ -118,6 +118,27 @@ async function _acCarregar() {
   _acTimer(_ac.cmds.some(c => c.status === 'pendente' || c.status === 'executando'));
 }
 
+// MOTIVO DA RECUSA (06/10/2026 — SEVEN: "Gravar 1C1" voltou só "o concentrador recusou"). O
+// concentrador responde <comando>E<código>; o código é o da tabela de erros do protocolo. O
+// caso real foi o D: a gravação de bomba só passa com o certificado logado no equipamento.
+const _AC_ERROS_CONC = {
+  '1': 'o bico da posição A já está em uso', '2': 'o bico da posição B já está em uso',
+  '3': 'o bico da posição C já está em uso', '4': 'o bico da posição D já está em uso',
+  '5': 'erro de resposta da bomba', '6': 'a bomba não respondeu a tempo', '7': 'número de bico inexistente',
+  '8': 'bico abastecendo', '9': 'modo inválido', 'A': 'identificador diferente',
+  'B': 'erro ao apagar o identificador', 'C': 'parâmetro inválido',
+  'D': 'certificado inválido — o certificado não está logado no concentrador (HRS Console, menu Certificado)',
+  'E': 'comando inválido',
+};
+function _acMotivoRecusa(r) {
+  const resp = (r && r.resposta) || {};
+  for (const k of Object.keys(resp)) {
+    const v = String(resp[k] || '').toUpperCase();
+    if (v.length >= 4 && v[2] === 'E' && _AC_ERROS_CONC[v[3]]) return _AC_ERROS_CONC[v[3]];
+  }
+  return '';
+}
+
 function _acRender() {
   const el = _ac.el;
   const opts = _ac.empresas.map(e => `<option value="${e.id}" ${e.id === _ac.empresaId ? 'selected' : ''}>${_ac.comPainel[e.id] ? '● ' : ''}${_acEsc(e.nome_fantasia || e.nome)}</option>`).join('');
@@ -169,7 +190,7 @@ function _acRender() {
       : c.tipo === 'gravar_endereco' ? `Gravar ${p.icom}${p.conector}${p.endereco}: ${_AC_MODELOS[p.tipo] || p.tipo}, bicos ${(p.bicos || []).filter(b => +b.numero).map(b => b.numero).join(' ')}` : c.tipo;
     return `<div style="border-top:1px solid #1f2230;padding:8px 2px;font-size:0.82rem">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span style="color:#e2e8f0">${_acEsc(desc)}${r.enviados && !r.enviados.length ? ' <span style="color:#94a3b8">(já estava assim)</span>' : ''}${!p.somente_idf && r.enviados && r.enviados.join() === '1D' ? ' <span style="color:#94a3b8">(só o identificador mudou)</span>' : ''}</span><b style="color:${st[1]}">${st[0]}</b></div>
-      <div style="color:#888;font-size:0.74rem">${new Date(c.criado_em).toLocaleString('pt-BR')} por ${_acEsc(c.criado_por_nome || '—')}${c.erro ? ` · <span style="color:#f87171">${_acEsc(c.erro)}</span>` : ''}${r.aviso && r.enviados && r.enviados.length ? ` · <span style="color:#facc15">${_acEsc(r.aviso)}</span>` : ''}</div>
+      <div style="color:#888;font-size:0.74rem">${new Date(c.criado_em).toLocaleString('pt-BR')} por ${_acEsc(c.criado_por_nome || '—')}${c.erro ? ` · <span style="color:#f87171">${_acEsc(c.erro)}${_acMotivoRecusa(r) ? ': ' + _acEsc(_acMotivoRecusa(r)) : ''}</span>` : ''}${r.aviso && r.enviados && r.enviados.length ? ` · <span style="color:#facc15">${_acEsc(r.aviso)}</span>` : ''}</div>
       ${c.status === 'pendente' ? `<button onclick="_acCancelar('${c.id}')" style="margin-top:4px;padding:4px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#f87171;cursor:pointer">Cancelar</button>` : ''}
     </div>`;
   }).join('');
@@ -186,6 +207,7 @@ function _acRender() {
     ${ferramentas ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0 6px;border-bottom:1px solid #2a2d3e">${_AF_ABAS.map(([k, t]) => `<button onclick="_acAba('${k}')" style="padding:8px 12px;border-radius:8px 8px 0 0;border:1px solid ${k === _ac.aba ? '#f97316' : '#2a2d3e'};border-bottom:none;background:${k === _ac.aba ? '#13151f' : '#0b0d14'};color:${k === _ac.aba ? '#f97316' : '#cbd5e1'};cursor:pointer;font-weight:700;font-size:0.84rem">${t}</button>`).join('')}</div>` : ''}
     ${naAba ? '<div id="af-root"></div>' : `
     <p style="color:#94a3b8;font-size:0.8rem;margin:0 0 8px">Configuração gravada no concentrador. Clique num endereço para configurar ou excluir a bomba. Só o master altera; o posto grava, relê e confere.</p>
+    ${_ac.estado && _ac.estado.info && _ac.estado.info.cert_logado === false ? `<div style="border:1px solid #b45309;background:#3a2410;color:#fbbf24;border-radius:8px;padding:8px 12px;font-size:0.82rem;margin:0 0 10px">🔒 O concentrador está <b>sem certificado logado</b>. Sem ele, a gravação e a exclusão de bomba são recusadas (“certificado inválido”). Entre com o certificado pelo HRS Console, menu Certificado, e mande o pedido de novo.</div>` : ''}
     <div id="ac-form"></div>
     ${corpo}
     <h3 style="color:#e2e8f0;margin:16px 0 2px;font-size:1rem">Últimas alterações</h3>

@@ -1044,7 +1044,16 @@ async function fcNode(tipo) {
     const vs = (vendas || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
     if (tipo === 'cupons') return fcModalCupons(vs);
     if (tipo === 'itens') return fcModalItens(vs);
-    if (tipo === 'combustivel') return fcModalCombustivel(vs);
+    if (tipo === 'combustivel') {
+      // nome do cliente da nota a prazo: o cupom espelhado do TecnoX nem sempre traz
+      let notas = [];
+      try {
+        const rn = await sb.from('oct_pdv_notas_prazo').select('numero_nfe,cliente_nome,status').eq('turno_id', turnoId);
+        notas = (rn.data || []).filter(n => String(n.status || '') !== 'cancelado');
+      } catch (e) {}
+      window._fcComb = { vs, notas };
+      return fcModalCombustivel(vs);
+    }
     if (tipo === 'vendedor') return fcModalVendedor(vs);
   } else if (FC_DETALHES[tipo]) {
     return fcNodeDetalhe(tipo);
@@ -3115,18 +3124,76 @@ async function fcItemVendidoSalvar() {
   _fcToast('✔ Item vendido lançado');
   await fcRecarregar('itens');
 }
-function fcModalCombustivel(vs) {
-  const map = {};
-  vs.forEach(v => (v.itens || []).forEach(it => {
-    if (it.tipo !== 'abastecimento') return;
+// cupom pago (no todo ou em parte) com NOTA A PRAZO. No cupom emitido pelo Octano a forma vem
+// no pagamento (05 / "NOTA A PRAZO"). No cupom espelhado do TecnoX o pagamento a prazo NÃO vem
+// (o título mora em oct_pdv_notas_prazo), então o sinal é o cupom 'tecnox' sem pagamento com valor.
+function _fcCupomAPrazo(v) {
+  const pgs = Array.isArray(v.pagamentos) ? v.pagamentos : [];
+  if (pgs.some(p => _fcGrupoNome(p.nome || p.forma_nome || p.forma, p.forma) === 'prazo')) return true;
+  return String(v.status || '').toLowerCase() === 'tecnox' && !pgs.some(p => Number(p.valor || 0) > 0);
+}
+
+// COMBUSTÍVEL VENDIDO — com o filtro "Só a prazo" (06/10/2026, pedido do Ronan): litros e valor
+// vendidos aos clientes de nota a prazo, por combustível e por cliente.
+// Junto, três acertos da lista (turno 1188 do Florestal mostrava 2.231 L num turno de 1.559 L):
+//  - cupom EXCLUÍDO do fechamento não é venda (o cupom do Octano que repete o do TecnoX somava
+//    a mesma venda duas vezes); o que saiu pelo "Substituir pelo extrato" continua sendo venda;
+//  - produto de loja lançado com item 'abastecimento' (PARAFLU) não é combustível;
+//  - o valor é o total do item no cupom, quando o cupom traz (o arredondamento de litros × preço
+//    somava centavos a mais).
+function fcModalCombustivel(vs, soPrazo) {
+  if (vs) window._fcComb = Object.assign(window._fcComb || {}, { vs });
+  const st = window._fcComb || { vs: [] };
+  soPrazo = !!soPrazo;
+  const cliDaNota = {};
+  (st.notas || []).forEach(n => { if (n.numero_nfe != null) cliDaNota[String(n.numero_nfe)] = n.cliente_nome; });
+  const vale = (st.vs || []).filter(v => {
+    const a = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
+    return !(a && a.excluido && !a.extrato_lote);
+  });
+  const usados = soPrazo ? vale.filter(_fcCupomAPrazo) : vale;
+  const map = {}, porCli = {};
+  let totL = 0, totV = 0;
+  usados.forEach(v => (v.itens || []).forEach(it => {
+    if (it.tipo !== 'abastecimento' || (it.dados && it.dados.tipo === 'produto')) return;
     const k = it.desc || 'Combustível';
+    const litros = Number(it.qtd || 0);
+    const valor = it.total != null ? Number(it.total) : Math.round(litros * Number(it.unit || 0) * 100) / 100;
     if (!map[k]) map[k] = { desc: k, litros: 0, valor: 0 };
-    map[k].litros += Number(it.qtd || 0);
-    map[k].valor += Math.round(Number(it.qtd || 0) * Number(it.unit || 0) * 100) / 100;
+    map[k].litros += litros; map[k].valor += valor;
+    totL += litros; totV += valor;
+    if (soPrazo) {
+      const cli = String(v.cliente_nome || cliDaNota[String(v.numero)] || '(cliente não informado)').trim();
+      const c = porCli[cli] = porCli[cli] || { litros: 0, valor: 0, comb: {} };
+      c.litros += litros; c.valor += valor;
+      const cc = c.comb[k] = c.comb[k] || { litros: 0, valor: 0 };
+      cc.litros += litros; cc.valor += valor;
+    }
   }));
+  const tot = (rot, l, v, col) => `<tr><td class="fc-td"${col ? ` colspan="${col}"` : ''}><b>${rot}</b></td>
+    <td class="fc-td fc-r"><b>${fcNum(l, 3)} L</b></td><td class="fc-td fc-r"><b>${fcMoney(v)}</b></td></tr>`;
   const linhas = Object.values(map).map(m => `<tr><td class="fc-td">${fcEsc(m.desc)}</td>
     <td class="fc-td fc-r">${fcNum(m.litros, 3)} L</td><td class="fc-td fc-r">${fcMoney(m.valor)}</td></tr>`).join('');
-  fcModal('Combustível Vendido', `<table class="fc-grid"><thead><tr><th>Combustível</th><th>Litros</th><th>Valor</th></tr></thead><tbody>${linhas}</tbody></table>`);
+  let html = linhas
+    ? `<table class="fc-grid"><thead><tr><th>Combustível</th><th>Litros</th><th>Valor</th></tr></thead><tbody>${linhas}${tot('Total', totL, totV)}</tbody></table>`
+    : `<p style="padding:14px;color:#888">${soPrazo ? 'Nenhum combustível vendido a prazo neste turno.' : 'Nenhum combustível em cupom neste turno.'}</p>`;
+  if (soPrazo && linhas) {
+    const clis = Object.keys(porCli).sort((a, b) => porCli[b].valor - porCli[a].valor);
+    html += `<div style="color:#f97316;font-weight:700;font-size:0.8rem;margin:14px 0 4px">Por cliente — ${clis.length} cliente(s)</div>
+      <table class="fc-grid"><thead><tr><th>Cliente</th><th>Combustível</th><th>Litros</th><th>Valor</th></tr></thead><tbody>${
+        clis.map(cli => {
+          const c = porCli[cli]; const ks = Object.keys(c.comb);
+          return ks.map((k, i) => `<tr><td class="fc-td">${i === 0 ? fcEsc(cli) : ''}</td><td class="fc-td">${fcEsc(k)}</td>
+            <td class="fc-td fc-r">${fcNum(c.comb[k].litros, 3)} L</td><td class="fc-td fc-r">${fcMoney(c.comb[k].valor)}</td></tr>`).join('')
+            + (ks.length > 1 ? `<tr><td class="fc-td"></td><td class="fc-td" style="color:#9aa">total do cliente</td>
+            <td class="fc-td fc-r" style="color:#9aa">${fcNum(c.litros, 3)} L</td><td class="fc-td fc-r" style="color:#9aa">${fcMoney(c.valor)}</td></tr>` : '');
+        }).join('')}${tot('Total a prazo', totL, totV, 2)}</tbody></table>`;
+  }
+  const bt = (rot, ligado, arg) => `<button class="fc-btn mini" style="${ligado ? 'background:#f97316;border-color:#f97316;color:#111;font-weight:700' : ''}" onclick="fcModalCombustivel(null, ${arg})">${rot}</button>`;
+  fcModal('Combustível Vendido', html, {
+    topo: `<div class="fc-filtros" style="gap:5px">${bt('Todos', !soPrazo, 'false')}${bt('Só a prazo', soPrazo, 'true')}
+      <span style="color:#667;font-size:0.72rem;margin-left:8px">${soPrazo ? 'cupons pagos com nota a prazo' : 'todos os cupons do turno'} — ${usados.length} cupom(ns)</span></div>`,
+  });
 }
 function fcModalVendedor(vs) {
   const map = {};
@@ -3537,7 +3604,16 @@ async function _fcExtratoAlvos(turnoId, d0) {
     if (String(v.status || '').toLowerCase() === 'cancelada') return;
     let pgs = v.pagamentos;
     if (typeof pgs === 'string') { try { pgs = JSON.parse(pgs); } catch (e) { pgs = []; } }
-    const soma = (pgs || []).filter(p => grupos.includes(_fcGrupoNome(p.forma_nome || p.forma, p.forma)))
+    // MESMA classificação da soma do caixa: ajuste do gerente > NOME gravado > código.
+    // Só pelo código, o cupom de CARTÃO FROTA espelhado do TecnoX (nome "Cartão Frota",
+    // código 03) passava por cartão da maquininha e SAÍA do caixa na substituição —
+    // 06/10/2026, turno 1188 do Florestal: R$ 1.570,19 de Fit Card/Prime e Ticket Log
+    // sumiram, e o extrato do PagBank não tem frota para pôr no lugar.
+    const ajV = aj['venda:' + v.id] || {};
+    const grupoPg = p => ajV.forma_nome
+      ? _fcGrupoNome(ajV.forma_nome, p.forma)
+      : _fcGrupoNome(p.nome || p.forma_nome || p.forma, p.forma);
+    const soma = (pgs || []).filter(p => grupos.includes(grupoPg(p)))
       .reduce((s, p) => s + Number(p.valor || 0), 0);
     if (soma > 0) alvos.push({ tipo: 'venda', id: v.id, valor: soma, base: aj['venda:' + v.id] || {} });
   });
