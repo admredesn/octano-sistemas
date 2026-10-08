@@ -225,6 +225,34 @@ async function _monPistaDias(eid, desdeIso) {
 // A venda a prazo sai proporcionalmente: se 30% da receita foi a prazo, 30% do
 // lucro está com o cliente e não no caixa. É o que dá para reinvestir hoje.
 // O lucro cheio continua em `v.lucro` (é o número do B.I).
+// QUANTO SAIU A PRAZO HOJE, por empresa — sem nota cancelada e sem nota em dobro.
+// A soma crua inflava: em 07/10/2026 o Florestal aparecia com R$ 7.481,78 a prazo
+// (53% da venda) quando o TecnoX dizia R$ 5.362,30, e o lucro do dia caia para 5,8%.
+// Tinha dentro: nota CANCELADA (o valor_original fica gravado), a mesma venda lancada
+// no TecnoX e no PDV Octano (posto que usa os dois), e um cupom copiado 6 vezes.
+//   - cancelada nao conta;
+//   - copia do TecnoX = forma "Nota a prazo", com valor_original e sem foto; o resto
+//     e' titulo do PDV Octano (mesma regra do cancelar_np_duplicadas.py);
+//   - titulo do PDV com copia do TecnoX do MESMO cliente e MESMO valor no dia e' a
+//     mesma venda: vale a do TecnoX. Par 1 para 1 — duas vendas iguais de verdade,
+//     com duas copias, contam as duas.
+function _monPrazoDoDia(notas) {
+  const valor = n => Number(n.valor_original != null ? n.valor_original : n.valor || 0);
+  const chave = n => n.empresa_id + '|' + (n.cliente_id || String(n.cliente_nome || '').trim().toUpperCase()) + '|' + valor(n).toFixed(2);
+  const ehCopia = n => n.forma_nome === 'Nota a prazo' && n.valor_original != null && !n.foto_path;
+  const vivas = (notas || []).filter(n => n.status !== 'cancelado' && valor(n) > 0);
+  const copias = {}, out = {};
+  vivas.filter(ehCopia).forEach(n => {
+    copias[chave(n)] = (copias[chave(n)] || 0) + 1;
+    out[n.empresa_id] = (out[n.empresa_id] || 0) + valor(n);
+  });
+  vivas.filter(n => !ehCopia(n)).forEach(n => {
+    if (copias[chave(n)] > 0) { copias[chave(n)]--; return; }   // gemea de uma copia do TecnoX
+    out[n.empresa_id] = (out[n.empresa_id] || 0) + valor(n);
+  });
+  return out;
+}
+
 function _monLucroDisp(v) {
   const total = Number((v && v.total) || 0);
   const lucro = Number((v && v.lucro) || 0);
@@ -289,16 +317,12 @@ async function _monVendas(empIds) {
   // passa a mostrar o que da para reinvestir hoje (pedido Ronan 25/08); o lucro
   // cheio continua existindo e e o numero do B.I.
   const pPrazo = sb.from('oct_pdv_notas_prazo')
-    .select('empresa_id,valor,valor_original,registrado_em')
+    .select('empresa_id,valor,valor_original,registrado_em,status,forma_nome,foto_path,cliente_id,cliente_nome')
     .in('empresa_id', empIds).gte('registrado_em', hojeStr)
     .then(r => r.data || [], () => []);
   const [rCusto, listas, filaTodos, pistas, tqs, bcs, prazos] = await Promise.all(
     [pCusto.then(r => r, () => ({ data: [] })), pVendas, pFila, pPista, pTq, pBc, pPrazo]);
-  const prazoPorEmp = {};
-  (prazos || []).forEach(n => {
-    const v = Number(n.valor_original != null ? n.valor_original : n.valor || 0);
-    if (v > 0) prazoPorEmp[n.empresa_id] = (prazoPorEmp[n.empresa_id] || 0) + v;
-  });
+  const prazoPorEmp = _monPrazoDoDia(prazos);
   const custoMap = {}, nomeProd = {}, custoPorTanque = {}, custoPorNome = {};
   ((rCusto && rCusto.data) || []).forEach(p => {
     custoMap[p.id] = Number(p.preco_custo || 0);
