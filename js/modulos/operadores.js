@@ -29,9 +29,13 @@ async function opListar() {
   const { data: empresas } = await sb.from('oct_empresas').select('id,nome,nome_fantasia');
   _opNomesEmpresa = {};
   (empresas || []).forEach(e => { _opNomesEmpresa[e.id] = e.nome_fantasia || e.nome; });
+  // QUEM ACESSA ESTE POSTO: quem foi cadastrado nele (empresa_id, a "casa" da pessoa) E
+  // quem tem o posto liberado no perfil (coluna empresas). Antes a lista so' olhava a
+  // casa: o Marcos, gerente cadastrado no Miranda com SEVEN/Florestal/Tijuco liberados,
+  // so' aparecia no Miranda (08/10/2026).
   const { data: ops } = await sb.from('oct_perfis')
     .select('*')
-    .eq('empresa_id', empresaId).order('nome');
+    .or(`empresa_id.eq.${empresaId},empresas.cs.{${empresaId}}`).order('nome');
 
   conteudo.innerHTML = `
     <div style="max-width:1000px;padding:18px 20px">
@@ -51,7 +55,8 @@ async function opListar() {
           <tbody>
           ${(ops || []).length ? (ops || []).map(o => `
             <tr style="border-top:1px solid #1c1f2e;color:#ddd">
-              <td style="padding:9px 12px;font-weight:600">${opEsc(o.nome)}</td>
+              <td style="padding:9px 12px;font-weight:600">${opEsc(o.nome)}${(o.empresa_id && o.empresa_id !== empresaId)
+                ? `<div style="font-weight:400;font-size:0.72rem;color:#667">cadastro no ${opEsc(_opNomesEmpresa[o.empresa_id] || 'outro posto')}</div>` : ''}</td>
               <td style="padding:9px 12px;font-family:monospace;color:#f97316">${opEsc(o.usuario) || '<span style="color:#666">— sem usuário —</span>'}</td>
               <td style="padding:9px 12px">${opEsc(_opPapelRot(o))}</td>
               <td style="padding:9px 12px;font-size:0.8rem;color:#9aa">${_opPostosCel(o, _opNomesEmpresa)}</td>
