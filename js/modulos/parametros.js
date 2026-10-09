@@ -85,6 +85,12 @@ const PARAM_DEFS = [
         desc: 'A aferição fica retida até alguém aprovar. Desligado, sai direto do caixa.' },
       { chave: 'exigir_vendedor', pendente: true, rot: 'Exigir frentista identificado no abastecimento', pad: false,
         desc: 'Só ligue onde todos os frentistas têm cartão cadastrado.' },
+      { chave: 'medicao_no_pdv', rot: 'Mostrar medição dos tanques no PDV', pad: false,
+        desc: 'Bolinhas com o nível de cada tanque no rodapé da tela de venda. Só aparece onde a sonda está ligada ao núcleo; o PDV leva até 5 minutos para acompanhar a troca (ou F5).',
+        pai: true },
+      { chave: 'medicao_nivel_baixo_pct', tipo: 'texto', rot: 'Avisar em vermelho abaixo de (%)', pad: '', dica: '15',
+        desc: 'Percentual do tanque a partir do qual a bolinha fica vermelha. Em branco usa 15.',
+        depende: 'medicao_no_pdv' },
     ],
   },
   {
