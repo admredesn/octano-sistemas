@@ -39,6 +39,19 @@ const PARAM_DEFS = [
     ],
   },
   {
+    // 10/10/2026: conta PagBank ÚNICA da rede — o extrato EDI traz as vendas de todas as
+    // maquininhas; o número de série diz de qual posto é cada uma. O núcleo lê esta chave
+    // pelo espelho local (vale sem internet) e, com ela preenchida, desliga a leitura do
+    // e-mail (que é da conta inteira e não diz a maquininha).
+    aba: 'receb',
+    grupo: '💳 PagBank — maquininhas deste posto',
+    itens: [
+      { chave: 'pagbank_maquininhas', tipo: 'texto', rot: 'Números de série das maquininhas', pad: '',
+        dica: 'PB3S262372864=pista 1; PB3S265J77196=loja',
+        desc: 'Só as vendas destas máquinas entram no PDV deste posto. Separe por ponto e vírgula e dê um apelido depois do "=" (aparece na tela do caixa). O número está na etiqueta atrás da máquina ou em http://<pc do posto>:8765/pdv/api/pagbank/edi/maquininhas. Em branco = sem filtro (e o e-mail de venda aprovada continua valendo).' },
+    ],
+  },
+  {
     aba: 'pdv',
     grupo: '📷 Câmera e imagens',
     itens: [
