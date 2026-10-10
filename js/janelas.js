@@ -165,6 +165,20 @@
     if (JAN.ativa === j) { JAN.ativa = null; const o = maisAlta(); if (o) { focar(o); return; } }
     renderBarra(); salvar();
   }
+  // CLICOU NUMA ABA = quer ver a tela principal (10/10/2026). Pedido do Ronan:
+  // "às vezes preciso abrir uma aba rapidinho só para conferir uma informação,
+  // mas como outra janela está aberta ela acaba não aparecendo; tenho que
+  // minimizar a janela da frente para ver o que está no fundo". Então o clique
+  // normal numa aba manda TODAS as janelas abertas para a barra de baixo (elas
+  // continuam lá; clique no nome restaura). Abrir em janela (⧉, Ctrl+clique,
+  // botão do meio/direito) NÃO minimiza: a nova janela nasce na frente.
+  function minimizarTodas() {
+    const abertas = JAN.lista.filter(j => !j.min);
+    if (!abertas.length) return;
+    abertas.forEach(j => { j.min = true; j.el.style.display = 'none'; j.el.classList.remove('ativa'); });
+    JAN.ativa = null;
+    renderBarra(); salvar();
+  }
   // manter=true: tira as janelas da tela SEM apagar o arranjo salvo (login de
   // novo na mesma aba reabre). So' o usuario fechando e' que apaga.
   function fecharTodas(manter) {
@@ -357,12 +371,18 @@
     const item = ev.target && ev.target.closest && ev.target.closest('#toolbar .toolbar-item:not(.breve)');
     return item && item.id && item.id.indexOf('tab-') === 0 ? item : null;
   }
-  // Ctrl+clique: intercepta na captura, antes do onclick inline da aba
+  // Na captura, antes do onclick inline da aba: Ctrl+clique abre em janela;
+  // clique normal navega na tela principal e minimiza as janelas abertas.
+  // (o ⧉ tem o próprio clique — abre janela — e não passa por aqui)
   document.addEventListener('click', ev => {
-    if (!(ev.ctrlKey || ev.metaKey)) return;
     const item = abaDe(ev); if (!item) return;
-    ev.stopPropagation(); ev.preventDefault();
-    abrir(item.id.slice(4));
+    if (ev.target.closest && ev.target.closest('.oct-abrir-jan')) return;
+    if (ev.ctrlKey || ev.metaKey) {
+      ev.stopPropagation(); ev.preventDefault();
+      abrir(item.id.slice(4));
+      return;
+    }
+    if (ev.button === 0) minimizarTodas();
   }, true);
   document.addEventListener('mousedown', ev => { if (ev.button === 1 && abaDe(ev)) ev.preventDefault(); });   // sem auto-rolagem
   document.addEventListener('auxclick', ev => {
@@ -422,4 +442,5 @@
 
   window.octJanelaAbrir = abrir;
   window.octJanelasFecharTodas = fecharTodas;
+  window.octJanelasMinimizarTodas = minimizarTodas;   // a busca (busca.js) usa ao abrir uma tela
 })();

@@ -88,7 +88,12 @@ async function _cbCarregar(sincronizar) {
   if (eC) throw eC;
   _cb.contas = contas || [];
   if (!_cb.contas.length) {
-    document.getElementById('conteudo').innerHTML = '<p style="color:#fbbf24;padding:20px">Este posto ainda não tem contas cadastradas (SQL-LIVRO-FINANCEIRO.sql).</p>';
+    // 10/10/2026: antes só nascia por SQL — agora tem cadastro (cbContas)
+    document.getElementById('conteudo').innerHTML = `<div style="padding:24px;max-width:640px">
+      <p style="color:#fbbf24;margin:0 0 8px">Este posto ainda não tem contas cadastradas.</p>
+      <p style="color:#8892a0;font-size:0.82rem;line-height:1.5;margin:0 0 14px">A Conciliação precisa de pelo menos a conta <b>Caixa / Cofre</b> e a conta do banco (Sicoob, Banco do Brasil…).
+        A mesma lista é usada pelo F.Caixa (🏦 Gerar depósito) e pelo B.I › Disponível.</p>
+      <button onclick="cbContas()" style="padding:8px 16px;border-radius:7px;border:1px solid #2a4a6a;background:#161a26;color:#93c5fd;cursor:pointer;font-size:0.84rem">🏦 Cadastrar contas</button></div>`;
     return;
   }
   if (!_cb.contaId || !_cbConta()) _cb.contaId = _cb.contas[0].id;
@@ -266,6 +271,7 @@ function _cbRender() {
         <button class="cbl-conta ${c.id === _cb.contaId ? 'on' : ''}" onclick="cbTrocarConta(${c.id})">
           ${_cbEsc(c.nome)}${c.numero ? ' <span style="color:#667">' + _cbEsc(c.numero) + '</span>' : ''}</button>`).join('')}
         <button class="cbl-btn" title="Saldo inicial da conta" onclick="cbSaldoInicial()">⚙ Saldo inicial</button>
+        <button class="cbl-btn" title="Cadastrar / alterar as contas deste posto" onclick="cbContas()">🏦 Contas</button>
       </div>
       <button onclick="navegarPara('empresa')" style="background:none;border:none;color:#888;font-size:1.1rem;cursor:pointer" title="Fechar">✕</button>
     </div>
@@ -776,4 +782,154 @@ async function cbSaldoInicial() {
   const { error } = await sb.from('oct_fin_contas').update({ saldo_inicial: n, saldo_inicial_em: c.saldo_inicial_em || _CB_INICIO }).eq('id', c.id);
   if (error) { alert('Erro: ' + error.message); return; }
   _cbCarregar(false);
+}
+
+// ---------- CONTAS DO POSTO (10/10/2026 — Ronan: "onde cadastro a conta bancária?") ----------
+// Até aqui as contas só nasciam por SQL (SQL-LIVRO-FINANCEIRO.sql). Cadastro simples:
+// nome, tipo, número, extrato automático (Sicoob: o gateway lê o extrato), saldo
+// inicial e a data dele, ordem e ativa. O TIPO é o que o livro automático
+// (oct_fin_sincronizar) usa para achar a conta certa: Pix/boleto → sicoob,
+// venda da maquininha → pagbank, cofre e sangria → caixa (a primeira ativa, pela ordem).
+const _CB_TIPOS_CONTA = [
+  ['caixa',   'Caixa / Cofre (dinheiro do posto)'],
+  ['sicoob',  'Sicoob (conta corrente)'],
+  ['bb',      'Banco do Brasil'],
+  ['pagbank', 'PagBank (maquininha)'],
+  ['outro',   'Outro banco / conta'],
+];
+function _cbCssBase() {
+  // as classes cbl-* vivem no <style> do #cb-raiz; o cadastro de contas abre
+  // também FORA da tela (busca, posto sem contas): garante o mínimo
+  if (document.getElementById('cb-css-base')) return;
+  const s = document.createElement('style'); s.id = 'cb-css-base';
+  s.textContent = `
+    .cbl-in{padding:5px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem}
+    .cbl-btn{padding:6px 11px;border-radius:6px;border:1px solid #2a2d3e;background:#161a26;color:#cbd5e1;cursor:pointer;font-size:0.76rem;white-space:nowrap}
+    .cbl-btn:hover{border-color:#3b82f6;color:#93c5fd}
+    .cbl-tab{width:100%;border-collapse:collapse}
+    .cbl-tab th{background:#1a1d2e;color:#94a3b8;font-weight:600;font-size:0.7rem;text-align:left;padding:6px;border-bottom:1px solid #2a2d3e}
+    .cbl-td{padding:4px 6px;border-bottom:1px solid #161a24;vertical-align:top}
+    .cbl-r{text-align:right;font-variant-numeric:tabular-nums}
+    .cbl-mut{color:#7c8698}
+    .cbl-tag{font-size:0.6rem;padding:0 4px;border-radius:3px;background:#1f2937;color:#94a3b8}
+    .cbl-mini{padding:1px 6px;border-radius:4px;border:1px solid #3a3320;background:#221d10;color:#fbbf24;cursor:pointer;font-size:0.68rem}`;
+  document.head.appendChild(s);
+}
+async function cbContas() {
+  if (!podeOuAvisa('conc_banco.saldo_inicial')) return;
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : _cb.eid;
+  if (!eid) { alert('Selecione a empresa.'); return; }
+  _cbCssBase();
+  document.getElementById('cb-modal')?.remove();
+  document.getElementById('cb-modal2')?.remove();
+  const { data, error } = await sb.from('oct_fin_contas').select('*').eq('empresa_id', eid).order('ativo', { ascending: false }).order('ordem').order('id');
+  if (error) { alert('Erro ao ler as contas: ' + error.message); return; }
+  const contas = data || [];
+  const tipoRot = t => (_CB_TIPOS_CONTA.find(x => x[0] === t) || [t, t])[1];
+  const linhas = contas.map(c => `<tr style="${c.ativo ? '' : 'opacity:.5'}">
+    <td class="cbl-td">${_cbEsc(c.nome)}${c.ativo ? '' : ' <span class="cbl-tag">inativa</span>'}</td>
+    <td class="cbl-td">${_cbEsc(tipoRot(c.tipo))}</td>
+    <td class="cbl-td">${_cbEsc(c.numero || '—')}</td>
+    <td class="cbl-td">${c.extrato_banco ? 'Sicoob (automático)' : '—'}</td>
+    <td class="cbl-td cbl-r">${_cbMoney(c.saldo_inicial)}<br><span class="cbl-mut" style="font-size:0.66rem">em ${_cbDt(c.saldo_inicial_em || _CB_INICIO)}</span></td>
+    <td class="cbl-td" style="text-align:center">${c.ordem ?? ''}</td>
+    <td class="cbl-td" style="text-align:center"><button class="cbl-mini" onclick="cbContaForm(${c.id})">✏️ alterar</button></td></tr>`).join('');
+  const div = document.createElement('div');
+  div.id = 'cb-modal';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+  div.innerHTML = `<div id="cb-modal-cx" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;width:800px;max-width:95%;padding:18px;color:#e0e0e0;font-size:0.82rem">
+    <div id="cb-modal-tit" style="display:flex;justify-content:space-between;margin-bottom:10px;cursor:move">
+      <b style="color:#f97316">🏦 Contas deste posto</b>
+      <button onclick="document.getElementById('cb-modal').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem">✕</button></div>
+    <p class="cbl-mut" style="margin:0 0 10px;font-size:0.74rem;line-height:1.5">Caixa / Cofre + a(s) conta(s) do banco. O livro automático usa o <b>tipo</b>: Pix e boletos caem na Sicoob, vendas da maquininha na PagBank, cofre e sangria no Caixa.
+      O F.Caixa (🏦 Gerar depósito) e o B.I › Disponível também usam esta lista.</p>
+    <table class="cbl-tab"><thead><tr><th>Conta</th><th>Tipo</th><th>Número</th><th>Extrato</th><th style="text-align:right">Saldo inicial</th><th style="text-align:center">Ordem</th><th></th></tr></thead>
+    <tbody>${linhas || '<tr><td class="cbl-td cbl-mut" colspan="7">Nenhuma conta ainda.</td></tr>'}</tbody></table>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button class="cbl-btn" onclick="document.getElementById('cb-modal').remove()">Fechar</button>
+      <button class="cbl-btn" style="background:#1f6f43;border-color:#1f6f43;color:#fff" onclick="cbContaForm(null)">＋ Nova conta</button>
+    </div></div>`;
+  document.body.appendChild(div);
+  window._cbContasLista = contas;
+  window._cbContasEid = eid;
+  if (typeof octArrastavel === 'function') octArrastavel(document.getElementById('cb-modal-cx'), document.getElementById('cb-modal-tit'));
+}
+function cbContaForm(id) {
+  const lista = window._cbContasLista || [];
+  const c = lista.find(x => x.id === id) || { id: null, nome: '', tipo: 'outro', numero: '', extrato_banco: null, saldo_inicial: 0, saldo_inicial_em: _CB_INICIO, ordem: lista.length + 1, ativo: true };
+  _cbCssBase();
+  document.getElementById('cb-modal2')?.remove();
+  const campo = (rot, html, span) => `<label style="display:flex;flex-direction:column;gap:3px;${span ? 'grid-column:span ' + span : ''}"><span class="cbl-mut" style="font-size:0.7rem">${rot}</span>${html}</label>`;
+  const opt = _CB_TIPOS_CONTA.map(([k, r]) => `<option value="${k}" ${k === c.tipo ? 'selected' : ''}>${r}</option>`).join('');
+  const div = document.createElement('div');
+  div.id = 'cb-modal2';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center';
+  div.innerHTML = `<div id="cb-modal2-cx" style="background:#0f1117;border:1px solid #2a2d3e;border-radius:12px;width:560px;max-width:95%;padding:18px;color:#e0e0e0;font-size:0.82rem">
+    <div id="cb-modal2-tit" style="display:flex;justify-content:space-between;margin-bottom:12px;cursor:move">
+      <b style="color:#f97316">${c.id ? '✏️ Alterar conta' : '＋ Nova conta'}</b>
+      <button onclick="document.getElementById('cb-modal2').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem">✕</button></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${campo('Tipo', `<select id="cbc-tipo" class="cbl-in" onchange="cbContaTipo()">${opt}</select>`)}
+      ${campo('Nome (como aparece nas telas)', `<input id="cbc-nome" class="cbl-in" value="${_cbEsc(c.nome || '')}" placeholder="ex.: Sicoob, Banco do Brasil, Caixa / Cofre">`)}
+      ${campo('Agência / conta (opcional)', `<input id="cbc-num" class="cbl-in" value="${_cbEsc(c.numero || '')}" placeholder="ex.: 4321 / 7.431.001-1">`)}
+      ${campo('Extrato automático', `<select id="cbc-extrato" class="cbl-in"><option value="" ${!c.extrato_banco ? 'selected' : ''}>Nenhum (lançamento manual)</option><option value="sicoob" ${c.extrato_banco === 'sicoob' ? 'selected' : ''}>Sicoob — o gateway lê o extrato</option></select>`)}
+      ${campo('Saldo inicial (R$)', `<input id="cbc-saldo" type="number" step="0.01" class="cbl-in" value="${Number(c.saldo_inicial || 0).toFixed(2)}">`)}
+      ${campo('Data do saldo inicial', `<input id="cbc-data" type="date" class="cbl-in" value="${c.saldo_inicial_em || _CB_INICIO}">`)}
+      ${campo('Ordem nas telas', `<input id="cbc-ordem" type="number" step="1" min="1" class="cbl-in" value="${c.ordem ?? lista.length + 1}">`)}
+      <label style="display:flex;align-items:center;gap:8px;margin-top:18px"><input id="cbc-ativo" type="checkbox" ${c.ativo !== false ? 'checked' : ''}> Conta ativa</label>
+    </div>
+    <p class="cbl-mut" style="font-size:0.7rem;margin:10px 0 0;line-height:1.5">O saldo inicial é o saldo da conta no começo do dia informado; o livro soma dali em diante. Para o Sicoob, a leitura do extrato se configura em Parâmetros › 🏦 Banco.</p>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <span id="cbc-msg" style="flex:1;color:#f87171;font-size:0.76rem;align-self:center"></span>
+      <button class="cbl-btn" onclick="document.getElementById('cb-modal2').remove()">Cancelar</button>
+      <button class="cbl-btn" style="background:#1f6f43;border-color:#1f6f43;color:#fff" onclick="cbContaSalvar()">💾 Salvar</button>
+    </div></div>`;
+  document.body.appendChild(div);
+  window._cbContaEdit = c.id || null;
+  if (typeof octArrastavel === 'function') octArrastavel(document.getElementById('cb-modal2-cx'), document.getElementById('cb-modal2-tit'));
+  document.getElementById('cbc-nome').focus();
+}
+// tipo escolhido sugere o nome e o extrato (só quando o campo ainda está vazio)
+function cbContaTipo() {
+  const g = id => document.getElementById(id);
+  const t = g('cbc-tipo').value;
+  const sug = { caixa: 'Caixa / Cofre', sicoob: 'Sicoob', bb: 'Banco do Brasil', pagbank: 'PagBank (maquininha)' }[t];
+  if (sug && !g('cbc-nome').value.trim()) g('cbc-nome').value = sug;
+  if (t === 'sicoob' && !g('cbc-extrato').value) g('cbc-extrato').value = 'sicoob';
+  if (t !== 'sicoob' && g('cbc-extrato').value === 'sicoob') g('cbc-extrato').value = '';
+}
+async function cbContaSalvar() {
+  if (!podeOuAvisa('conc_banco.saldo_inicial')) return;
+  const g = id => document.getElementById(id);
+  const msg = t => { g('cbc-msg').textContent = t; };
+  const eid = window._cbContasEid;
+  const editId = window._cbContaEdit;
+  const lista = window._cbContasLista || [];
+  const nome = g('cbc-nome').value.trim();
+  if (!nome) return msg('Informe o nome da conta.');
+  const tipo = g('cbc-tipo').value;
+  const saldo = Math.round(Number(g('cbc-saldo').value || 0) * 100) / 100;
+  if (!isFinite(saldo)) return msg('Saldo inicial inválido.');
+  const data = g('cbc-data').value || _CB_INICIO;
+  const ativo = g('cbc-ativo').checked;
+  const payload = { nome, tipo, numero: g('cbc-num').value.trim() || null, extrato_banco: g('cbc-extrato').value || null,
+    saldo_inicial: saldo, saldo_inicial_em: data, ordem: Math.max(1, Math.round(Number(g('cbc-ordem').value) || 1)), ativo };
+  // o livro automático pega a PRIMEIRA conta ativa de cada tipo especial: avisa se vai haver duas
+  if (ativo && ['caixa', 'sicoob', 'pagbank'].includes(tipo) && lista.some(x => x.id !== editId && x.ativo && x.tipo === tipo)) {
+    const rot = (_CB_TIPOS_CONTA.find(x => x[0] === tipo) || [tipo, tipo])[1];
+    if (!confirm(`Já existe uma conta ativa do tipo "${rot}". O livro automático usa a primeira pela ordem.\nSalvar mesmo assim?`)) return;
+  }
+  try {
+    if (editId) {
+      const { error } = await sb.from('oct_fin_contas').update(payload).eq('id', editId).eq('empresa_id', eid);
+      if (error) throw error;
+    } else {
+      const { error } = await sb.from('oct_fin_contas').insert(Object.assign({ empresa_id: eid }, payload));
+      if (error) throw error;
+    }
+  } catch (e) { return msg('Erro: ' + (e.message || e)); }
+  document.getElementById('cb-modal2')?.remove();
+  await cbContas();   // lista de novo
+  // a tela da Conciliação (se estiver aberta neste posto) ganha a conta nova no cabeçalho
+  if (document.getElementById('cb-raiz') && _cb.eid === eid) { try { await _cbCarregar(false); } catch (e) { /* a tela avisa sozinha */ } }
 }
