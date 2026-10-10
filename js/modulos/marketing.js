@@ -15,7 +15,7 @@
 // ============================================================
 
 const _MK = {
-  aba: 'campanhas', empresas: [], campanhas: [], parceiros: [], firebase: null,
+  aba: 'campanhas', empresas: [], campanhas: [], parceiros: [], premios: null, resgates: [], firebase: null,
   form: null, precos: {}, alcance: null, timerAlcance: null, confirmado: false,
 };
 
@@ -89,12 +89,21 @@ async function _mkCarregar() {
   _MK.campanhas = c.data || [];
   _MK.parceiros = p.data || [];
   _MK.alcance = a.data || null;
+  // pontos (SQL-APP-PONTOS.sql): sem a tabela, a aba Prêmios avisa em vez de quebrar a tela
+  const [pr, rs] = await Promise.all([
+    sb.from('oct_app_premios').select('*').order('destaque', { ascending: false }).order('ordem').order('pontos').limit(300),
+    sb.from('oct_app_resgates').select('codigo,cliente_nome,premio_nome,empresa_id,pontos,status,criado_em,usado_em,usado_por')
+      .order('criado_em', { ascending: false }).limit(60),
+  ]);
+  _MK.premios = pr.error ? null : (pr.data || []);
+  _MK.resgates = rs.error ? [] : (rs.data || []);
   el.innerHTML = `
     <div style="padding:16px 18px;max-width:1200px">
       <div id="mk-cab"></div>
       <div style="display:flex;gap:6px;margin:14px 0 12px">
         <button class="mk-aba" data-aba="campanhas" onclick="_mkAba('campanhas')">📣 Campanhas</button>
         <button class="mk-aba" data-aba="parceiros" onclick="_mkAba('parceiros')">🤝 Parceiros</button>
+        <button class="mk-aba" data-aba="premios" onclick="_mkAba('premios')">🎁 Prêmios</button>
         <div style="flex:1"></div>
         <button id="mk-novo" onclick="_mkNovo()" style="padding:9px 16px;border-radius:8px;border:none;background:#f97316;color:#fff;font-weight:700;cursor:pointer"></button>
       </div>
@@ -131,8 +140,10 @@ function _mkAba(aba) {
   _MK.aba = aba;
   document.querySelectorAll('.mk-aba').forEach(b => b.classList.toggle('on', b.dataset.aba === aba));
   const nb = document.getElementById('mk-novo');
-  if (nb) nb.textContent = aba === 'parceiros' ? '+ Novo parceiro' : '+ Nova campanha';
-  if (aba === 'parceiros') _mkListaParceiros(); else _mkListaCampanhas();
+  if (nb) nb.textContent = aba === 'parceiros' ? '+ Novo parceiro' : aba === 'premios' ? '+ Novo prêmio' : '+ Nova campanha';
+  if (aba === 'parceiros') _mkListaParceiros();
+  else if (aba === 'premios') _mkListaPremios();
+  else _mkListaCampanhas();
 }
 
 function _mkSituacao(c) {
@@ -197,6 +208,7 @@ async function _mkPrecosDoPosto(empresaId) {
 
 function _mkNovo() {
   if (_MK.aba === 'parceiros') { _mkParceiroForm(null); return; }
+  if (_MK.aba === 'premios') { _mkPremioForm(null); return; }
   _mkAbrirForm({
     tipo: 'promocao_preco', titulo: '', texto: '', imagem_url: '', link: '',
     empresa_ids: _MK.empresas.length === 1 ? [_MK.empresas[0].id] : [],
@@ -435,7 +447,7 @@ async function _mkSubirImagem(inp, tipo) {
   const f = inp.files && inp.files[0];
   inp.value = '';
   if (!f) return;
-  const msg = document.getElementById(tipo === 'parceiro' ? 'mkp-msg' : 'mk-msg');
+  const msg = document.getElementById(tipo === 'parceiro' ? 'mkp-msg' : tipo === 'premio' ? 'mkr-msg' : 'mk-msg');
   if (f.size > 1024 * 1024) { msg.style.color = '#f87171'; msg.textContent = 'Imagem acima de 1 MB — reduza antes de enviar.'; return; }
   const ext = (f.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
   const caminho = `${tipo}s/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
@@ -445,6 +457,7 @@ async function _mkSubirImagem(inp, tipo) {
   const url = sb.storage.from(MK_BUCKET).getPublicUrl(caminho).data.publicUrl;
   msg.textContent = '';
   if (tipo === 'parceiro') { document.getElementById('mkp-logo').value = url; _mkParceiroPrevia(); }
+  else if (tipo === 'premio') { document.getElementById('mkr-foto').value = url; _mkPremioPrevia(); }
   else { _MK.form.imagem_url = url; _mkPrevia(); }
 }
 
@@ -616,5 +629,121 @@ async function _mkParceiroSalvar(id) {
   }
   _mkFechar();
   _MK.aba = 'parceiros';
+  await _mkCarregar();
+}
+
+// ------------------------------------------------------------------ prêmios (troca de pontos)
+// 1 ponto por R$ 1, pontos valem 6 meses. O cliente troca no app, recebe um código de 6
+// letras e o caixa dá baixa. Código não retirado em 7 dias devolve os pontos.
+const MK_CATEG = [['conveniencia', '🛒 Conveniência'], ['servicos', '🔧 Serviços'], ['troca_oleo', '🛢 Troca de óleo'],
+  ['aditivos', '🧪 Aditivos'], ['outros', '🎁 Outros']];
+const MK_RESG = { emitido: ['a retirar', '#2a2007', '#fbbf24'], usado: ['entregue', '#052e16', '#4ade80'],
+  expirado: ['venceu (pontos voltaram)', '#1f2433', '#8892a0'], cancelado: ['cancelado', '#1f2433', '#8892a0'] };
+
+function _mkListaPremios() {
+  const el = document.getElementById('mk-lista');
+  if (_MK.premios === null) {
+    el.innerHTML = '<div style="padding:20px;color:#f87171">Falta rodar <b>repo/sql/SQL-APP-PONTOS.sql</b> no Supabase.</div>';
+    return;
+  }
+  const lista = _MK.premios.length ? _MK.premios.map(p => {
+    const cat = (MK_CATEG.find(c => c[0] === p.categoria) || [0, p.categoria])[1];
+    return `<div class="mk-card">
+      ${p.foto_url ? `<img src="${_mkEsc(p.foto_url)}" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:8px;flex:0 0 auto">`
+        : '<div style="width:76px;height:76px;border-radius:8px;background:#0b0d14;border:1px dashed #2a2d3e;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:1.5rem">🎁</div>'}
+      <div style="flex:1;min-width:0">
+        <div>${p.ativo ? '<span class="mk-chip" style="background:#052e16;color:#4ade80">no app</span>' : '<span class="mk-chip" style="background:#1f2433;color:#8892a0">desligado</span>'}<span class="mk-chip" style="background:#1b2130;color:#9fb0c4">${_mkEsc(cat)}</span>${p.destaque ? '<span class="mk-chip" style="background:#1b2130;color:#9fb0c4">destaque</span>' : ''}</div>
+        <div style="font-weight:700;color:#e8eef5;margin-top:4px">${_mkEsc(p.nome)}</div>
+        <div style="color:#fbbf24;font-weight:700">${_mkEsc(p.pontos)} pontos <span style="color:#6b7688;font-weight:400;font-size:.8rem">(cliente gastou R$ ${_mkEsc(p.pontos)} para ganhar)</span></div>
+        <div style="color:#6b7688;font-size:.76rem;margin-top:3px">📍 ${_mkEsc(_mkPostosTxt(p.empresa_ids))} · ${p.estoque == null ? 'sem limite de estoque' : _mkEsc(p.estoque) + ' em estoque'}</div>
+      </div>
+      <button class="mk-btn" onclick="_mkPremioForm('${p.id}')">Editar</button></div>`;
+  }).join('') : '<div style="color:#8892a0;padding:20px;text-align:center">Nenhum prêmio ainda. Ex.: café coado por 50 pontos, ducha por 300, 10% na troca de óleo por 200.</div>';
+  const resg = _MK.resgates.length ? `<div style="margin-top:18px;font-weight:700;color:#e8eef5">Últimas trocas</div>
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-top:6px">
+      <tr style="color:#6b7688;text-align:left"><th style="padding:6px">Código</th><th>Cliente</th><th>Prêmio</th><th>Posto</th><th>Pontos</th><th>Situação</th><th>Quando</th></tr>
+      ${_MK.resgates.map(r => {
+        const st = MK_RESG[r.status] || [r.status, '#1f2433', '#8892a0'];
+        return `<tr style="border-top:1px solid #1c2130;color:#cdd6e0"><td style="padding:6px;font-weight:700;letter-spacing:1px">${_mkEsc(r.codigo)}</td>
+          <td>${_mkEsc(r.cliente_nome || '')}</td><td>${_mkEsc(r.premio_nome)}</td><td>${_mkEsc(_mkNomePosto(r.empresa_id))}</td>
+          <td>${_mkEsc(r.pontos)}</td><td><span class="mk-chip" style="background:${st[1]};color:${st[2]}">${_mkEsc(st[0])}</span></td>
+          <td>${_mkEsc(_mkDataHora(r.usado_em || r.criado_em))}${r.usado_por ? ' · ' + _mkEsc(r.usado_por) : ''}</td></tr>`;
+      }).join('')}</table>` : '';
+  el.innerHTML = lista + resg;
+}
+
+function _mkPremioForm(id) {
+  const p = id ? (_MK.premios || []).find(x => x.id === id) : { ativo: true, categoria: 'conveniencia', empresa_ids: [] };
+  if (!p) return;
+  const md = document.getElementById('mk-modal');
+  md.style.display = 'block';
+  md.innerHTML = `<div style="max-width:760px;margin:0 auto;background:#0f1119;border:1px solid #2a2d3e;border-radius:12px">
+    <div style="display:flex;justify-content:space-between;padding:12px 18px;border-bottom:1px solid #2a2d3e"><b style="color:#f97316">${id ? 'Editar prêmio' : 'Novo prêmio'}</b>
+      <span onclick="_mkFechar()" style="cursor:pointer;color:#aab">✕</span></div>
+    <div style="display:grid;grid-template-columns:1fr 240px;gap:16px;padding:14px 18px">
+      <div>
+        <label class="mk-lb">Nome</label><input id="mkr-nome" class="mk-in" value="${_mkEsc(p.nome || '')}" placeholder="Café coado" oninput="_mkPremioPrevia()">
+        <label class="mk-lb">Descrição (opcional)</label><input id="mkr-desc" class="mk-in" value="${_mkEsc(p.descricao || '')}" oninput="_mkPremioPrevia()">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div><label class="mk-lb">Pontos</label><input id="mkr-pontos" class="mk-in" inputmode="numeric" value="${_mkEsc(p.pontos || '')}" oninput="_mkPremioPrevia()"></div>
+          <div><label class="mk-lb">Categoria</label><select id="mkr-cat" class="mk-in">${MK_CATEG.map(c =>
+            `<option value="${c[0]}" ${c[0] === p.categoria ? 'selected' : ''}>${c[1]}</option>`).join('')}</select></div>
+          <div><label class="mk-lb">Estoque (vazio = sem limite)</label><input id="mkr-estoque" class="mk-in" inputmode="numeric" value="${p.estoque == null ? '' : _mkEsc(p.estoque)}"></div>
+        </div>
+        <div style="color:#6b7688;font-size:.74rem;margin-top:4px">1 ponto = R$ 1 em compras. Um prêmio de 50 pontos sai para quem gastou R$ 50.</div>
+        <label class="mk-lb">Foto</label>
+        <input type="file" accept="image/png,image/jpeg,image/webp" onchange="_mkSubirImagem(this,'premio')" class="mk-in">
+        <input type="hidden" id="mkr-foto" value="${_mkEsc(p.foto_url || '')}">
+        <label class="mk-lb">Onde retirar</label>
+        <select id="mkr-posto" class="mk-in"><option value="">Todos os postos</option>${_MK.empresas.map(e =>
+          `<option value="${e.id}" ${(p.empresa_ids || []).includes(e.id) ? 'selected' : ''}>${_mkEsc(e.nome_fantasia || e.nome)}</option>`).join('')}</select>
+        <label style="display:flex;gap:8px;align-items:center;color:#cdd6e0;font-size:.85rem;margin-top:12px;cursor:pointer">
+          <input type="checkbox" id="mkr-destaque" ${p.destaque ? 'checked' : ''} style="width:auto"> Destaque (aparece primeiro)</label>
+        <label style="display:flex;gap:8px;align-items:center;color:#cdd6e0;font-size:.85rem;margin-top:6px;cursor:pointer">
+          <input type="checkbox" id="mkr-ativo" ${p.ativo !== false ? 'checked' : ''} style="width:auto"> Aparece no app</label>
+      </div>
+      <div><div class="mk-lb">Como aparece no app</div><div id="mkr-previa"></div></div>
+    </div>
+    <div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #2a2d3e">
+      <div id="mkr-msg" style="flex:1;align-self:center;font-size:.84rem;color:#8892a0"></div>
+      <button class="mk-btn" onclick="_mkFechar()">Cancelar</button>
+      <button onclick="_mkPremioSalvar('${id || ''}')" style="padding:9px 18px;border-radius:8px;border:none;background:#f97316;color:#fff;font-weight:700;cursor:pointer">Salvar</button>
+    </div></div>`;
+  _mkPremioPrevia();
+}
+
+function _mkPremioPrevia() {
+  const el = document.getElementById('mkr-previa');
+  if (!el) return;
+  const v = i => (document.getElementById(i) || {}).value || '';
+  const foto = v('mkr-foto');
+  el.innerHTML = `<div style="background:#fff;border-radius:12px;overflow:hidden;color:#1d2532;box-shadow:0 2px 10px rgba(0,0,0,.3)">
+      ${foto ? `<img src="${_mkEsc(foto)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;display:block">` : '<div style="width:100%;aspect-ratio:1;background:#eef1f5;display:flex;align-items:center;justify-content:center;font-size:2.4rem">🎁</div>'}
+      <div style="padding:10px 12px"><div style="font-size:.95rem">${_mkEsc(v('mkr-nome') || 'Nome do prêmio')}</div>
+        <div style="color:#06253E;font-weight:700;font-size:.85rem">${_mkEsc(v('mkr-pontos') || '0')} pontos</div></div></div>`;
+}
+
+async function _mkPremioSalvar(id) {
+  const v = i => ((document.getElementById(i) || {}).value || '').trim();
+  const msg = document.getElementById('mkr-msg');
+  const pontos = parseInt(v('mkr-pontos'), 10);
+  if (!v('mkr-nome') || !(pontos > 0)) { msg.style.color = '#f87171'; msg.textContent = 'Nome e pontos (maior que zero) são obrigatórios.'; return; }
+  const est = v('mkr-estoque');
+  const linha = {
+    nome: v('mkr-nome'), descricao: v('mkr-desc') || null, foto_url: v('mkr-foto') || null, pontos,
+    categoria: v('mkr-cat'), estoque: est === '' ? null : Math.max(0, parseInt(est, 10) || 0),
+    empresa_ids: v('mkr-posto') ? [v('mkr-posto')] : null,
+    destaque: document.getElementById('mkr-destaque').checked, ativo: document.getElementById('mkr-ativo').checked,
+    atualizado_em: new Date().toISOString(),
+  };
+  const r = id ? await sb.from('oct_app_premios').update(linha).eq('id', id).select('id')
+    : await sb.from('oct_app_premios').insert(linha).select('id');
+  if (r.error || !r.data || !r.data.length) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Não salvou: ' + ((r.error && r.error.message) || 'sem permissão para publicar?');
+    return;
+  }
+  _mkFechar();
+  _MK.aba = 'premios';
   await _mkCarregar();
 }
