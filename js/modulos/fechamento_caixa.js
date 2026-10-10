@@ -2287,9 +2287,12 @@ async function fcNodeDetalhe(tipo) {
       const litrosCupom = its.filter(it => it.tipo === 'abastecimento')
         .reduce((s, it) => s + Number(it.qtd || 0), 0);
       window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor, forma_nome: rotF };
+      // CHEQUE (10/10/2026 — Florestal): o PDV grava os dados do cheque no pagamento
+      const chq = p.cheque && typeof p.cheque === 'object' ? p.cheque : null;
+      const chqTxt = chq ? ` <span style="color:#7ea8d8;font-size:0.72rem">🧾 cheque nº ${fcEsc(chq.numero || '?')}${chq.banco ? ' · bco ' + fcEsc(chq.banco) : ''}${chq.emitente ? ' · ' + fcEsc(chq.emitente) : ''}${chq.bom_para ? ' · bom p/ ' + fcEsc(String(chq.bom_para).slice(0, 10).split('-').reverse().join('/')) : ''}</span>` : '';
       entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
         _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
-          <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span></td>
+          <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span>${chqTxt}</td>
           <td class="fc-td">—</td>
           <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
