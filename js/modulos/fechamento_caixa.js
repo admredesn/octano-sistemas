@@ -248,6 +248,7 @@ async function fcCarregarDados() {
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
+    sangria_depositada: 0, sangrias_dep: [],   // sangria que virou depósito em conta (🏦 Gerar depósito)
     fila_total: 0, fila_litros: 0, fila_itens: [],
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
     // v2 — movimentação completa
@@ -431,7 +432,16 @@ async function fcCarregarDados() {
     if (m._excluido) return;
     const t = porTurno[m.turno_id]; if (!t) return;
     const tipo = String(m.tipo || '').toLowerCase(); const val = Number(m.valor || 0);
-    if (tipo.includes('sangria')) {
+    // SANGRIA DEPOSITADA (10/10/2026 — pedido Ronan, SEVEN): o gerente apertou "🏦 Gerar
+    // depósito" nessa sangria → o dinheiro saiu da gaveta E já está no banco. Entra como
+    // Depósito em Conta (linha própria) e não mais como sangria; a régua da gaveta não muda
+    // (sai = sangria + despesa + depósito).
+    const depM = (_aj('caixa', m.id) || {}).deposito;
+    if (tipo.includes('sangria') && depM) {
+      t.deposito += val; t.sangria_depositada += val;
+      t.sangrias_dep.push({ ref: 'caixa:' + m.id, valor: val, hora: m.data_mov || m.criado_em, deposito: depM });
+    }
+    else if (tipo.includes('sangria')) {
       t.sangria += val;
       // guardada à parte: é o MESMO depósito que o Octano lê do cofre (ver dinheiro_esperado)
       if (_fcEhSangriaCofreTecnox(m)) t.sangria_cofre_tecnox = (t.sangria_cofre_tecnox || 0) + val;
@@ -456,7 +466,11 @@ async function fcCarregarDados() {
     const tid = origem.includes('cofre') ? _turnoDeposito(r.recebido_em) : _turnoDe(r.recebido_em);
     const t = tid && porTurno[tid]; if (!t) return;
     const val = Number(r.valor || 0);
-    if (origem.includes('sangria')) {
+    const depR = (_aj('receb', r.id) || {}).deposito;
+    if (origem.includes('sangria') && depR) {
+      t.deposito += val; t.sangria_depositada += val;
+      t.sangrias_dep.push({ ref: 'receb:' + r.id, valor: val, hora: r.recebido_em, deposito: depR });
+    } else if (origem.includes('sangria')) {
       t.sangria_f7 += val; t.sangria += val; t.sangrias_lst.push(r);
     } else {
       t.receb_ext.push(r);
@@ -589,7 +603,13 @@ async function fcCarregarDados() {
     //   recebido: cofre + cartão + pix + frota + prazo + cheque + despesas
     //             + depósito em conta + troco final na gaveta
     //   vendido : produtos + combustíveis + títulos + remessas (fundo+suprimento)
-    const recebido = Number(d.receb_ext_cofre || 0) + Number(d.rec.cartao || 0)
+    // SANGRIA NA PRESTAÇÃO DE CONTAS (10/10/2026 — Ronan conferindo o SEVEN, posto SEM
+    // cofre): a sangria é o dinheiro que saiu da gaveta para o gerente — mesmo papel do
+    // depósito no cofre. Sem ela, o Resultado acusava "falta" exatamente no valor sangrado
+    // (turno 2 do SEVEN: −642,02 com sangrias de 642,00). Vale sangria_gaveta (a automática
+    // do cofre TecnoX já é descontada quando o cofre entra no contado) — e o que virou
+    // depósito já está em d.deposito.
+    const recebido = Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0) + Number(d.rec.cartao || 0)
       + Number(d.rec.pix || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
       + Number(t.valor_fechamento || 0);
@@ -718,7 +738,8 @@ function fcDetalhe(turnoId) {
     // físico que entrou, sem dedução de despesa (despesa tem linha própria e
     // pode nem ter saído do dinheiro). A venda em dinheiro do sistema segue
     // na conferência de gaveta ("Vendas em dinheiro").
-    ['Dinheiro (depositado no cofre)', d.receb_ext_cofre],
+    // (10/10/2026) + SANGRIA da gaveta: no posto sem cofre é ela que presta contas do dinheiro.
+    ['Dinheiro (sangria / cofre)', Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0)],
     ['Cartão', rec.cartao],
     ['Pix', rec.pix],
     ['Cartão Frota', rec.frota],
@@ -1581,6 +1602,145 @@ async function fcLancExcluir(marcados, alvosDiretos) {
   await _fcRecarregarNode();
 }
 
+// ---- GERAR DEPÓSITO (10/10/2026 — pedido Ronan): a sangria marcada no balão
+// 💵 Dinheiro / Sangria vira 🏦 Depósito em Conta. Pergunta a conta (cadastro de
+// Conciliação › contas; sem cadastro, o nome da conta é digitado), a data e a
+// observação. Grava: (a) o overlay da sangria em oct_fc_lancamentos
+// (ajuste.deposito = {conta_id, conta_nome, data, obs, por, em}) — o registro
+// original não muda, como todo ajuste da tela; (b) o lançamento no livro
+// financeiro (oct_fin_lancamentos, tipo 'deposito', duas pernas Caixa → conta,
+// origem 'fcaixa_deposito') quando o posto tem as contas cadastradas — assim o
+// crédito aparece na Conciliação para casar com o extrato do banco.
+async function _fcAutor() {
+  try { const s = await getSession(); return (s && s.user && (s.user.email || s.user.id)) || null; } catch (e) { return null; }
+}
+async function _fcContasDoPosto() {
+  try {
+    const { data } = await sb.from('oct_fin_contas').select('id,nome,tipo,ativo,ordem')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true).order('ordem');
+    return data || [];
+  } catch (e) { return []; }
+}
+function _fcSangriasMarcadas(depositadas) {
+  const d0 = ((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {};
+  const base = window._fcLancBase || {};
+  const out = [];
+  [...window._fcSel].forEach(k => {
+    const i = k.indexOf(':'); const refTipo = k.slice(0, i);
+    if (refTipo !== 'caixa' && refTipo !== 'receb') return;
+    const aj = ((window._fcConf || {})[k] || {}).ajuste || {};
+    const b = base[k] || {};
+    const ehSangria = /sangria/i.test(String(b.rotulo || '')) || (d0.sangrias_dep || []).some(x => x.ref === k);
+    if (!ehSangria) return;
+    if (depositadas ? !aj.deposito : !!aj.deposito) return;
+    out.push({ k, valor: Number(b.valor || 0), rotulo: b.rotulo || 'Sangria' });
+  });
+  return out;
+}
+async function fcGerarDeposito() {
+  if (!podeOuAvisa('fcaixa.lanc_incluir')) return;
+  if (_fcTravado(true)) return;
+  const alvos = _fcSangriasMarcadas(false);
+  if (!alvos.length) { alert('Marque (☑) a(s) sangria(s) que foram depositadas.'); return; }
+  const total = alvos.reduce((s, a) => s + a.valor, 0);
+  const contas = (await _fcContasDoPosto()).filter(c => String(c.tipo || '') !== 'caixa');
+  const hoje = new Date(); const p = n => String(n).padStart(2, '0');
+  const iso = `${hoje.getFullYear()}-${p(hoje.getMonth() + 1)}-${p(hoje.getDate())}`;
+  fcModal('🏦 Gerar depósito', `
+    <div style="padding:6px 4px">
+      <p style="color:#cbd5e1;font-size:0.8rem;margin-bottom:8px">${alvos.length} sangria(s) marcada(s) · total <b style="color:#7ee2a0">${fcMoney(total)}</b></p>
+      <ul style="margin:0 0 10px 16px;color:#9aa;font-size:0.76rem">${alvos.map(a => `<li>${fcEsc(a.rotulo)} — ${fcMoney(a.valor)}</li>`).join('')}</ul>
+      <label style="display:block;color:#9aa;font-size:0.75rem">Em qual conta foi feito o depósito?</label>
+      ${contas.length
+        ? `<select id="fcd-conta" class="fc-inp2" style="width:100%">${contas.map(c => `<option value="${c.id}">${fcEsc(c.nome)}</option>`).join('')}</select>`
+        : `<input id="fcd-conta-nome" class="fc-inp2 lg" style="width:100%" placeholder="ex.: Sicoob, Banco do Brasil">
+           <p style="color:#f0b45c;font-size:0.72rem;margin-top:4px">Este posto ainda não tem contas cadastradas em Conciliação — o depósito fica registrado só aqui no fechamento.</p>`}
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Data do depósito</label>
+      <input id="fcd-data" type="date" class="fc-inp2" value="${iso}">
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Observação</label>
+      <input id="fcd-obs" class="fc-inp2 lg" style="width:100%" placeholder="comprovante, envelope, quem levou…">
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
+        <button class="fc-btn azul" style="flex:1" onclick="fcGerarDepositoSalvar()">💾 Gerar depósito</button>
+      </div>
+    </div>`);
+  window._fcModalVolta = true;
+  window._fcDepAlvos = { alvos, contas };
+}
+async function fcGerarDepositoSalvar() {
+  const st = window._fcDepAlvos || { alvos: [], contas: [] };
+  if (!st.alvos.length) return;
+  const sel = document.getElementById('fcd-conta');
+  const contaId = sel ? Number(sel.value) : null;
+  const conta = contaId ? st.contas.find(c => c.id === contaId) : null;
+  const contaNome = conta ? conta.nome : String((document.getElementById('fcd-conta-nome') || {}).value || '').trim();
+  if (!contaNome) { alert('Informe a conta do depósito.'); return; }
+  const data = (document.getElementById('fcd-data') || {}).value || '';
+  if (!data) { alert('Informe a data do depósito.'); return; }
+  const obs = String((document.getElementById('fcd-obs') || {}).value || '').trim() || null;
+  const por = await _fcAutor();
+  const em = new Date().toISOString();
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
+  const caixa = (await _fcContasDoPosto()).find(c => String(c.tipo || '') === 'caixa');
+  try {
+    for (const a of st.alvos) {
+      const i = a.k.indexOf(':'); const refTipo = a.k.slice(0, i); const refId = a.k.slice(i + 1);
+      const cur = window._fcConf[a.k] = window._fcConf[a.k] || {};
+      cur.ajuste = Object.assign({}, cur.ajuste || {}, { deposito: { conta_id: contaId, conta_nome: contaNome, data, obs, por, em } });
+      const { error } = await sb.from('oct_fc_lancamentos').upsert({
+        empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+        ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido, ajuste: cur.ajuste,
+      }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+      if (error) throw error;
+      // livro financeiro: Caixa → conta (só com as duas contas cadastradas). Apaga a
+      // perna antiga do mesmo ref antes (gerar de novo não duplica).
+      if (contaId && caixa && caixa.id !== contaId) {
+        const tid = (crypto.randomUUID && crypto.randomUUID()) || null;
+        const desc = `DEPÓSITO DE SANGRIA · turno ${t.numero || ''}${t.operador ? ' · ' + t.operador : ''}`.trim();
+        const comum = { empresa_id: window._fcEmpresaId, data, valor: a.valor, tipo: 'deposito', descricao: desc, detalhe: obs,
+          origem: 'fcaixa_deposito', transferencia_id: tid, autor: por, atualizado_em: em };
+        await sb.from('oct_fin_lancamentos').delete().eq('origem', 'fcaixa_deposito').in('origem_id', [a.k + ':D', a.k + ':C']);
+        const { error: e2 } = await sb.from('oct_fin_lancamentos').insert([
+          Object.assign({}, comum, { conta_id: caixa.id, natureza: 'D', origem_id: a.k + ':D' }),
+          Object.assign({}, comum, { conta_id: contaId, natureza: 'C', origem_id: a.k + ':C' }),
+        ]);
+        if (e2) console.warn('livro financeiro:', e2.message);
+      }
+    }
+  } catch (e) { alert('Erro ao gerar o depósito: ' + (e.message || e)); return; }
+  window._fcSel.clear();
+  window._fcDepAlvos = null;
+  _fcToast('✔ Depósito gerado em ' + contaNome);
+  await fcRecarregar('deposito');
+}
+async function fcDesfazerDeposito() {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  if (_fcTravado(true)) return;
+  const alvos = _fcSangriasMarcadas(true);
+  if (!alvos.length) { alert('Marque (☑) o(s) depósito(s) gerado(s) a partir de sangria.'); return; }
+  if (!confirm(`Desfazer ${alvos.length} depósito(s)? A sangria volta para o balão Dinheiro / Sangria e o lançamento sai do livro financeiro (se ainda não estiver conciliado).`)) return;
+  try {
+    for (const a of alvos) {
+      const { data: conc } = await sb.from('oct_fin_lancamentos').select('id,conciliado')
+        .eq('origem', 'fcaixa_deposito').in('origem_id', [a.k + ':D', a.k + ':C']);
+      if ((conc || []).some(l => l.conciliado)) { alert('Este depósito já está conciliado com o extrato do banco: desconcilie na tela de Conciliação antes de desfazer.'); return; }
+      await sb.from('oct_fin_lancamentos').delete().eq('origem', 'fcaixa_deposito').in('origem_id', [a.k + ':D', a.k + ':C']);
+      const i = a.k.indexOf(':'); const refTipo = a.k.slice(0, i); const refId = a.k.slice(i + 1);
+      const cur = window._fcConf[a.k] = window._fcConf[a.k] || {};
+      const aj = Object.assign({}, cur.ajuste || {}); delete aj.deposito;
+      cur.ajuste = Object.keys(aj).length ? aj : null;
+      const { error } = await sb.from('oct_fc_lancamentos').upsert({
+        empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+        ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido, ajuste: cur.ajuste,
+      }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+      if (error) throw error;
+    }
+  } catch (e) { alert('Erro ao desfazer: ' + (e.message || e)); return; }
+  window._fcSel.clear();
+  _fcToast('✔ Depósito desfeito');
+  await fcRecarregar('dinheiro');
+}
+
 // ---- RECARREGAMENTO CENTRAL (18/08): toda ação que muda valor chama isto.
 // Erro aparece (nada de falhar em silêncio e a tela ficar velha).
 async function fcRecarregar(reabrirNode) {
@@ -2030,7 +2190,7 @@ async function fcNodeDetalhe(tipo) {
     (cfg.caixa && cfg.caixa.length)
       ? sb.from('oct_pdv_caixa').select('id,tipo,forma,valor,descricao,operador,criado_em:data_mov').eq('turno_id', turnoId).order('data_mov')
       : Promise.resolve({ data: [] }),
-    (cfg.maq || cfg.cofre)
+    (cfg.maq || cfg.cofre || tipo === 'deposito')   // deposito: sangria F7 que virou depósito (🏦)
       ? sb.from('oct_recebimentos').select('id,recebido_em,forma,bandeira,valor,origem,parcelas').eq('empresa_id', eid)
           .gte('recebido_em', ini).lte('recebido_em', fim).order('recebido_em')
       : Promise.resolve({ data: [] }),
@@ -2277,15 +2437,23 @@ async function fcNodeDetalhe(tipo) {
 
   // 2) MOVIMENTOS DE CAIXA (sangria/suprimento/despesa/depósito/receita)
   if (cfg.caixa && cfg.caixa.length) {
-    const ms = (rC.data || []).filter(m => cfg.caixa.some(p => String(m.tipo || '').toLowerCase().includes(p)));
+    const _depDe = m => ((window._fcConf || {})['caixa:' + m.id] || {}).ajuste && ((window._fcConf || {})['caixa:' + m.id] || {}).ajuste.deposito;
+    // sangria que virou depósito (🏦): some do balão de sangria e aparece no de Depósito em Conta
+    const ms = (rC.data || []).filter(m => {
+      const ehSangria = String(m.tipo || '').toLowerCase().includes('sangria');
+      if (ehSangria && _depDe(m)) return tipo === 'deposito';
+      return cfg.caixa.some(p => String(m.tipo || '').toLowerCase().includes(p));
+    });
     // sangria automática do cofre (TecnoX) em turno com cofre lido pelo Octano: é o mesmo
     // depósito da lista de baixo — aparece, com o aviso, e não desconta do esperado
     const cofreNoContado = Number((((cache.porTurno || {})[turnoId]) || {}).receb_ext_cofre || 0) > 0.009;
     const linhas = ms.map(m => {
       window._fcLancBase['caixa:' + m.id] = { rotulo: fcEsc(m.tipo || 'Movimento'), valor: m.valor, forma_nome: m.forma };
       const dupCofre = cofreNoContado && String(m.tipo || '').toLowerCase().includes('sangria') && _fcEhSangriaCofreTecnox(m);
+      const dep = _depDe(m);
+      const depTxt = dep ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria ${_fcHora(m.criado_em)} depositada em ${fcEsc(dep.conta_nome || 'conta')}${dep.data ? ' · ' + fcEsc(String(dep.data).split('-').reverse().join('/')) : ''}</span>` : '';
       return _fcRow('caixa', m.id, `<td class="fc-td">${_fcHora(m.criado_em)}</td>
-        <td class="fc-td">${fcEsc(m.descricao) || '—'}${dupCofre ? ' <span style="color:#f59e0b;font-size:0.72rem">— mesmo depósito do cofre (lista abaixo): não desconta de novo</span>' : ''}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
+        <td class="fc-td">${fcEsc(m.descricao) || (dep ? 'Depósito da sangria' : '—')}${depTxt}${dupCofre ? ' <span style="color:#f59e0b;font-size:0.72rem">— mesmo depósito do cofre (lista abaixo): não desconta de novo</span>' : ''}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
         <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     });
     const total = ms.reduce((s, m) => s + Number(m.valor || 0), 0);
@@ -2303,22 +2471,32 @@ async function fcNodeDetalhe(tipo) {
   // duas listas juntas confundia (parecia dinheiro em dobro).
 
   // 4) DEPÓSITOS DO COFRE / SANGRIA AUTOMÁTICA (dinheiro) — o VALOR DEPOSITADO
-  if (cfg.cofre) {
-    const rs = (rR.data || []).filter(r => String(r.origem || '').toLowerCase().includes('cofre') ||
-      String(r.origem || '').toLowerCase().includes('sangria') ||
-      String(r.forma || '').toLowerCase().includes('dinheiro'));
+  if (cfg.cofre || tipo === 'deposito') {
+    // sangria do PDV (F7, espelhada em oct_recebimentos) que virou depósito (🏦 Gerar
+    // depósito): sai daqui e aparece no balão Depósito em Conta
+    const _depDeR = r => (((window._fcConf || {})['receb:' + r.id] || {}).ajuste || {}).deposito;
+    const rs = (rR.data || []).filter(r => {
+      const org = String(r.origem || '').toLowerCase();
+      if (org.includes('sangria') && _depDeR(r)) return tipo === 'deposito';
+      if (tipo === 'deposito') return false;
+      return org.includes('cofre') || org.includes('sangria') || String(r.forma || '').toLowerCase().includes('dinheiro');
+    });
     const linhas = rs.map(r => {
       window._fcLancBase['receb:' + r.id] = { rotulo: 'Depósito ' + (r.origem || 'cofre'), valor: r.valor, forma_nome: 'Dinheiro' };
+      const dep = _depDeR(r);
+      const depTxt = dep ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(dep.conta_nome || 'conta')}${dep.data ? ' · ' + fcEsc(String(dep.data).split('-').reverse().join('/')) : ''}</span>` : '';
       return _fcRow('receb', r.id, `<td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
-        <td class="fc-td">${fcEsc(r.origem) || 'cofre'}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
+        <td class="fc-td">${fcEsc(r.origem) || 'cofre'}${depTxt}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
+    if (tipo === 'deposito' && !rs.length) { /* nenhuma sangria F7 depositada: sem seção */ } else {
     const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
     listaN += rs.length; listaTot += total;
-    secoes.push(stit(`Depósitos (cofre/sangria) — ${rs.length}`));
+    secoes.push(stit(tipo === 'deposito' ? `Sangrias do PDV depositadas em conta — ${rs.length}` : `Depósitos (cofre/sangria) — ${rs.length}`));
     secoes.push(rs.length
       ? tab(['', 'Hora', 'Origem', 'Valor', ''], linhas,
             `<tr><td class="fc-td" colspan="3"><b>Total depositado</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum depósito no período do turno.</p>');
+    }
   }
 
   // LANÇAMENTOS MANUAIS desta seção (botão ➕ Incluir) — só quando NÃO foram
@@ -2392,6 +2570,14 @@ async function fcNodeDetalhe(tipo) {
         + ' title="Troca os lançamentos de cartão/Pix pelo que a maquininha reportou"'
         + ' onclick="fcExtratoSubstituir()">🏦 Substituir pelo extrato</button>'
         + (_fcTemLoteExtrato() ? '<button class="fc-btn mini" style="border-color:#6a4a2a;color:#f0b45c" onclick="fcExtratoDesfazer()">↩ Desfazer substituição</button>' : '')
+      : tipo === 'dinheiro'
+      ? '<span class="fc-sep"></span><button class="fc-btn mini" style="border-color:#2a4a6a;color:#7ea8d8"'
+        + ' title="A sangria marcada vira Depósito em Conta (pergunta em qual conta)"'
+        + ' onclick="fcGerarDeposito()">🏦 Gerar depósito</button>'
+      : tipo === 'deposito'
+      ? '<span class="fc-sep"></span><button class="fc-btn mini" style="border-color:#6a4a2a;color:#f0b45c"'
+        + ' title="Volta a sangria marcada para o balão Dinheiro / Sangria"'
+        + ' onclick="fcDesfazerDeposito()">↩ Desfazer depósito</button>'
       : '') + (window.__fcTopoFiltros || ''),
     rodape: _fcRodape(listaN, listaTot),
     lado: window.__fcLadoTotais || '',
