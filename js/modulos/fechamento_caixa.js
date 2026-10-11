@@ -1187,7 +1187,11 @@ function _fcTravado(avisa) {
 }
 async function fcReabrirCaixa(turnoId) {
   if (!podeOuAvisa('fcaixa.reabrir')) return;
-  if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.')) return;
+  if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.\nO que a confirmação lançou no livro financeiro (Conciliação) é apagado.')) return;
+  // as linhas do livro saem junto — presa (conciliada com o extrato) trava a reabertura
+  let des = { ok: true };
+  try { des = await _fcLivroDesfazerTurno(turnoId); } catch (e) { des = { ok: true }; }
+  if (!des.ok) { alert('Este caixa tem lançamento já conciliado com o extrato do banco (' + des.motivo + ').\nDesconcilie na tela de Conciliação antes de reabrir.'); return; }
   const { error } = await sb.from('oct_pdv_turnos').update({ conferido_em: null, conferido_por: null }).eq('id', turnoId);
   if (error) { alert('Erro: ' + error.message); return; }
   fcRecarregar();
@@ -1758,6 +1762,110 @@ async function fcDesfazerDeposito() {
   window._fcSel.clear();
   _fcToast('✔ Depósito desfeito');
   await fcRecarregar('dinheiro');
+}
+
+// ---- LIVRO FINANCEIRO AO CONFIRMAR O CAIXA (11/10/2026, pedido do Ronan) ----
+// "quando cadastrar a forma de pagamento (cartões, pix, cheque) o sistema pede em qual
+// banco/conta os valores entram. quando eu confirmar o lançamento no caixa ele já vai
+// direto para a conciliação." Cada forma (Formas de Pagamento) aponta para uma conta do
+// livro (oct_formas_pagamento.conta_id). Ao ✔ Confirmar conferência, o RECEBIDO do turno
+// por grupo (Cartão, Pix, Cheque, Cartão Frota — os mesmos números da tela) vira um
+// crédito na conta daquele grupo: origem 'fcaixa_turno', origem_id '<turno>:<grupo>'.
+// Confirmar de novo regrava (linha já conciliada com o extrato fica como está); 🔓 Reabrir
+// apaga as linhas — se alguma estiver conciliada, pede para desconciliar antes.
+// Dinheiro e nota a prazo não entram: dinheiro presta contas pela gaveta/sangria/depósito
+// e prazo é direito a receber, não recebimento.
+// CARTÃO fica FORA daqui (11/10/2026, 2º pedido do mesmo dia): o cartão entra na Conciliação pela aba
+// 💳 Cartões, por transação e com a taxa do EDI — se o F.Caixa lançasse o total do turno também,
+// a conta PagBank contaria em dobro. Pix só vai quando a forma Pix tem conta (Florestal: Sicoob);
+// Pix da maquininha também vem pela aba Cartões, então nesses postos a forma Pix fica sem conta.
+const _FC_LIVRO_GRUPOS = { pix: 'PIX', cheque: 'CHEQUE', frota: 'CARTÃO FROTA' };
+function _fcGrupoDaForma(f) {
+  const c = String((f && f.classificacao) || '');
+  if (c === 'cartao_frota') return 'frota';
+  if (c === 'cartao' || c === 'pix' || c === 'cheque') return c;
+  if (c) return null;                                   // dinheiro, nota_prazo, vale, outros
+  const g = _fcGrupoForma(f && f.cod_sefaz);
+  return ['cartao', 'pix', 'cheque'].includes(g) ? g : null;
+}
+function _fcDiaLocal(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  const p = n => String(n).padStart(2, '0');
+  return isNaN(d) ? null : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+// PURA: as linhas do livro para um turno (t) com os totais da tela (d) e as formas do posto.
+// A conta do grupo é a da primeira forma ativa (pela ordem) daquele grupo que tem conta —
+// crédito e débito normalmente apontam para a mesma (PagBank).
+function _fcLinhasLivroTurno(t, d, formas, autor, agora) {
+  const contaDoGrupo = {};
+  (formas || []).filter(f => f && f.ativo !== false && f.conta_id)
+    .sort((a, b) => Number(a.ordem || 0) - Number(b.ordem || 0))
+    .forEach(f => { const g = _fcGrupoDaForma(f); if (g && !contaDoGrupo[g]) contaDoGrupo[g] = { conta_id: Number(f.conta_id), forma: f.nome }; });
+  const data = t && t.aberto_em ? _fcDiaLocal(t.aberto_em) : null;   // turno sem abertura: não lança
+  const rec = (d && d.rec) || {};
+  const linhas = [];
+  Object.keys(_FC_LIVRO_GRUPOS).forEach(g => {
+    const c = contaDoGrupo[g]; const v = Math.round(Number(rec[g] || 0) * 100) / 100;
+    if (!c || !(v >= 0.01) || !data) return;
+    linhas.push({
+      empresa_id: window._fcEmpresaId, conta_id: c.conta_id, data, natureza: 'C', valor: v, tipo: 'venda_caixa',
+      descricao: `CAIXA · turno ${t.numero || ''} · ${_FC_LIVRO_GRUPOS[g]}`.replace(/\s+/g, ' ').trim(),
+      detalhe: [t.operador, 'conferido no F.Caixa'].filter(Boolean).join(' · '),
+      origem: 'fcaixa_turno', origem_id: `${t.id}:${g}`, autor: autor || null, atualizado_em: agora,
+    });
+  });
+  return linhas;
+}
+async function _fcLivroDoTurno(turnoId) {
+  const cache = window._fcCache || {};
+  const t = (cache.turnos || []).find(x => x.id === turnoId);
+  const d = (cache.porTurno || {})[turnoId];
+  if (!t || !d) return { lancadas: [], mantidas: [], aviso: null };
+  let formas = [];
+  try {
+    const r = await sb.from('oct_formas_pagamento').select('id,nome,cod_sefaz,classificacao,conta_id,ordem,ativo')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true);
+    if (r.error) throw r.error;
+    formas = r.data || [];
+  } catch (e) {
+    // coluna conta_id ainda não existe (SQL-FORMA-CONTA.sql) ou sem permissão: segue sem o livro
+    return { lancadas: [], mantidas: [], aviso: /conta_id/.test(String(e.message || '')) ? 'Falta rodar SQL-FORMA-CONTA.sql para o livro financeiro.' : null };
+  }
+  if (!formas.some(f => f.conta_id)) return { lancadas: [], mantidas: [], aviso: null };   // nenhuma forma aponta conta: nada a lançar
+  const linhas = _fcLinhasLivroTurno(t, d, formas, await _fcAutor(), new Date().toISOString());
+  const { data: atuais } = await sb.from('oct_fin_lancamentos').select('id,origem_id,conciliado,valor,conta_id')
+    .eq('origem', 'fcaixa_turno').like('origem_id', turnoId + ':%');
+  const conciliadas = new Set((atuais || []).filter(l => l.conciliado).map(l => l.origem_id));
+  const mantidas = linhas.filter(l => conciliadas.has(l.origem_id));
+  const novas = linhas.filter(l => !conciliadas.has(l.origem_id));
+  const apagar = (atuais || []).filter(l => !l.conciliado).map(l => l.id);
+  if (apagar.length) await sb.from('oct_fin_lancamentos').delete().in('id', apagar);
+  if (novas.length) {
+    const { error } = await sb.from('oct_fin_lancamentos').insert(novas);
+    if (error) return { lancadas: [], mantidas, aviso: 'Livro financeiro: ' + error.message };
+  }
+  return { lancadas: novas, mantidas, aviso: null };
+}
+async function _fcLivroDesfazerTurno(turnoId) {
+  const { data: atuais, error } = await sb.from('oct_fin_lancamentos').select('id,conciliado,descricao')
+    .eq('origem', 'fcaixa_turno').like('origem_id', turnoId + ':%');
+  if (error) return { ok: true };                       // sem a tabela/coluna: nada a desfazer
+  const presas = (atuais || []).filter(l => l.conciliado);
+  if (presas.length) return { ok: false, motivo: presas.map(l => l.descricao).join(', ') };
+  if ((atuais || []).length) await sb.from('oct_fin_lancamentos').delete().in('id', atuais.map(l => l.id));
+  return { ok: true, apagadas: (atuais || []).length };
+}
+function _fcLivroResumo(liv) {
+  if (!liv) return '';
+  const L = String.fromCharCode(10);
+  const nomes = {};
+  (window._fcContasCache || []).forEach(c => { nomes[c.id] = c.nome; });
+  const linha = l => `${l.descricao.replace(/^CAIXA · turno \S* · /, '')}: R$ ${Number(l.valor).toFixed(2).replace('.', ',')} → ${nomes[l.conta_id] || 'conta ' + l.conta_id}`;
+  let s = '';
+  if (liv.lancadas.length) s += L + L + '📒 Lançado no livro financeiro (Conciliação):' + L + liv.lancadas.map(linha).join(L);
+  if (liv.mantidas.length) s += L + L + 'Já conciliado com o extrato (mantido): ' + liv.mantidas.map(linha).join('; ');
+  if (liv.aviso) s += L + L + '⚠ ' + liv.aviso;
+  return s;
 }
 
 // ---- RECARREGAMENTO CENTRAL (18/08): toda ação que muda valor chama isto.
@@ -3665,10 +3773,15 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
       conferido_por: (session && session.user && session.user.email) || 'gerente',
     }).eq('id', turnoId);
     if (error) throw error;
+    // o recebido por forma vai para a conta de cada forma (Formas de Pagamento › Conta onde entra)
+    let liv = null;
+    try { window._fcContasCache = await _fcContasDoPosto(); liv = await _fcLivroDoTurno(turnoId); }
+    catch (e) { liv = { lancadas: [], mantidas: [], aviso: 'Livro financeiro: ' + (e.message || e) }; }
     alert('✔ Conferência confirmada. ' + resumo
       + (pessoaIdVale && dif < 0
           ? String.fromCharCode(10, 10) + '📄 Título gerado no nome de ' + responsavel + ' (Faturar › Notas/Títulos em Aberto).'
-          : ''));
+          : '')
+      + _fcLivroResumo(liv));
     fcRecarregar();
   } catch (e) {
     const m = String(e.message || e);

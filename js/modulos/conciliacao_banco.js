@@ -23,6 +23,7 @@ const _CB_TIPOS = {
   receita_adm:        { rot: 'Receita administrativa', nat: 'C' },
   pagamento_titulo:   { rot: 'Pagamento de título', nat: 'D' },
   venda_maquininha:   { rot: 'Venda na maquininha', nat: 'C' },
+  venda_caixa:        { rot: 'Recebido no caixa (F.Caixa)', nat: 'C' },
   taxa_maquininha:    { rot: 'Taxa da maquininha', nat: 'D' },
   deposito_cofre:     { rot: 'Depósito no cofre', nat: 'C' },
   recebimento_pix:    { rot: 'Recebimento Pix/transferência', nat: 'C' },

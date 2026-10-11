@@ -22,6 +22,7 @@ async function moduloFormasPagamento() {
       <div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #2a2d3e">
         <button id="fp-tab-receb" onclick="fpAba('receb')" class="fp-subtab" style="padding:10px 18px;border:none;background:none;color:#f97316;border-bottom:2px solid #f97316;cursor:pointer;font-weight:500">Forma de recebimento</button>
         <button id="fp-tab-preco" onclick="fpAba('preco')" class="fp-subtab" style="padding:10px 18px;border:none;background:none;color:#888;border-bottom:2px solid transparent;cursor:pointer">Tabela de preço</button>
+        <button id="fp-tab-taxas" onclick="fpAba('taxas')" class="fp-subtab" style="padding:10px 18px;border:none;background:none;color:#888;border-bottom:2px solid transparent;cursor:pointer">💳 Taxas dos cartões</button>
       </div>
       <div id="fp-conteudo"></div>
     </div>`;
@@ -29,11 +30,132 @@ async function moduloFormasPagamento() {
 }
 
 function fpAba(qual) {
-  document.getElementById('fp-tab-receb').style.color = qual === 'receb' ? '#f97316' : '#888';
-  document.getElementById('fp-tab-receb').style.borderBottomColor = qual === 'receb' ? '#f97316' : 'transparent';
-  document.getElementById('fp-tab-preco').style.color = qual === 'preco' ? '#f97316' : '#888';
-  document.getElementById('fp-tab-preco').style.borderBottomColor = qual === 'preco' ? '#f97316' : 'transparent';
-  if (qual === 'receb') fpReceberListar(); else fpPrecoListar();
+  ['receb', 'preco', 'taxas'].forEach(k => {
+    const b = document.getElementById('fp-tab-' + k);
+    if (!b) return;
+    b.style.color = qual === k ? '#f97316' : '#888';
+    b.style.borderBottomColor = qual === k ? '#f97316' : 'transparent';
+  });
+  if (qual === 'receb') fpReceberListar(); else if (qual === 'taxas') fpTaxasListar(); else fpPrecoListar();
+}
+
+// ===================== TAXAS DOS CARTÕES (11/10/2026, pedido do Ronan) =====================
+// O que foi NEGOCIADO com a adquirente, por forma, bandeira e faixa de parcelas. A aba
+// 💳 Cartões compara cada venda do extrato EDI com a regra que vale para ela e aponta o que
+// está fora. Regra sem bandeira vale para qualquer bandeira; regra sem posto vale para a rede
+// (conta PagBank única). Só o dono altera (RLS).
+const FP_BANDEIRAS = ['Visa', 'Mastercard', 'Elo', 'Amex', 'Hipercard', 'Pix'];
+async function fpTaxasListar() {
+  const div = document.getElementById('fp-conteudo');
+  const eid = window._fpEmpresaId;
+  const { data, error } = await sb.from('oct_cartao_taxas').select('*').or(`empresa_id.is.null,empresa_id.eq.${eid}`)
+    .order('adquirente').order('forma').order('bandeira').order('parcelas_de').order('vigencia_de', { ascending: false });
+  if (error) {
+    div.innerHTML = `<p style="color:#fbbf24;padding:16px">${/oct_cartao_taxas/.test(error.message) ? 'Falta rodar <b>repo/sql/SQL-CARTOES.sql</b> no Supabase.' : 'Erro: ' + fpEsc(error.message)}</p>`;
+    return;
+  }
+  const rows = data || [];
+  const forma = f => ({ credito: 'Crédito', debito: 'Débito', pix: 'Pix' })[f] || f;
+  const parc = r => Number(r.parcelas_de) === Number(r.parcelas_ate) ? (Number(r.parcelas_de) === 1 ? 'à vista' : r.parcelas_de + 'x') : `${r.parcelas_de}x a ${r.parcelas_ate}x`;
+  const dt = v => v ? String(v).slice(8, 10) + '/' + String(v).slice(5, 7) + '/' + String(v).slice(0, 4) : '';
+  div.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <p style="color:#888;font-size:0.84rem">Taxas negociadas com a adquirente. A aba <b>💳 Cartões</b> usa estas regras para apontar taxa cobrada diferente da combinada.</p>
+      <button onclick="fpTaxaForm()" class="btn-salvar">+ Nova taxa</button>
+    </div>
+    <div id="fp-taxa-form"></div>
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:hidden;margin-top:12px">
+      <table style="width:100%;border-collapse:collapse;font-size:0.86rem">
+        <thead><tr style="color:#888;text-align:left;background:#0f1119">
+          <th style="padding:10px 12px">Adquirente</th><th style="padding:10px 12px">Forma</th><th style="padding:10px 12px">Bandeira</th><th style="padding:10px 12px">Parcelas</th>
+          <th style="padding:10px 12px;text-align:right">Taxa %</th><th style="padding:10px 12px;text-align:right">Tarifa R$</th><th style="padding:10px 12px">Prazo</th><th style="padding:10px 12px">Vigência</th><th style="padding:10px 12px">Vale para</th><th style="padding:10px 12px">Situação</th><th></th>
+        </tr></thead>
+        <tbody>
+        ${rows.length ? rows.map(r => `
+          <tr style="border-top:1px solid #1c1f2e;color:${r.ativo === false ? '#667' : '#ddd'}">
+            <td style="padding:9px 12px">${fpEsc(r.adquirente)}</td>
+            <td style="padding:9px 12px;font-weight:500">${forma(r.forma)}</td>
+            <td style="padding:9px 12px">${r.bandeira ? fpEsc(r.bandeira) : '<span style="color:#888">qualquer</span>'}</td>
+            <td style="padding:9px 12px">${parc(r)}</td>
+            <td style="padding:9px 12px;text-align:right;font-family:monospace;color:#7dd3fc">${Number(r.taxa_pct).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}%</td>
+            <td style="padding:9px 12px;text-align:right">${Number(r.tarifa_fixa || 0) ? Number(r.tarifa_fixa).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '—'}</td>
+            <td style="padding:9px 12px">${r.prazo_dias != null ? 'D+' + r.prazo_dias : '—'}</td>
+            <td style="padding:9px 12px">${dt(r.vigencia_de)}${r.vigencia_ate ? ' a ' + dt(r.vigencia_ate) : ' em diante'}</td>
+            <td style="padding:9px 12px">${r.empresa_id ? 'este posto' : '<span style="color:#9aa">rede toda</span>'}</td>
+            <td style="padding:9px 12px">${r.ativo === false ? '<span style="color:#888">inativa</span>' : '<span style="color:#4caf50">ativa</span>'}</td>
+            <td style="padding:9px 12px;text-align:right;white-space:nowrap">
+              <button onclick='fpTaxaForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="nfe-aba" style="font-size:0.76rem">Editar</button>
+              <button onclick="fpTaxaExcluir(${r.id})" class="nfe-aba" style="font-size:0.76rem;color:#f87171">Excluir</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="11" style="padding:22px;text-align:center;color:#666">Nenhuma taxa cadastrada — a aba Cartões mostra tudo como "sem taxa cadastrada".</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+}
+function fpTaxaForm(r) {
+  r = r || {};
+  const div = document.getElementById('fp-taxa-form');
+  const inp = 'style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"';
+  const hoje = new Date(); const p = n => String(n).padStart(2, '0');
+  const iso = `${hoje.getFullYear()}-${p(hoje.getMonth() + 1)}-${p(hoje.getDate())}`;
+  div.innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:16px;margin-bottom:8px">
+      <h3 style="color:#ddd;margin-bottom:12px">${r.id ? 'Editar' : 'Nova'} taxa negociada</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div><label style="color:#888;font-size:0.78rem">Adquirente</label><input id="fpt-adq" value="${fpEsc(r.adquirente || 'pagbank')}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Forma</label>
+          <select id="fpt-forma" ${inp}>${[['credito', 'Crédito'], ['debito', 'Débito'], ['pix', 'Pix (maquininha)']].map(x => `<option value="${x[0]}" ${(r.forma || 'credito') === x[0] ? 'selected' : ''}>${x[1]}</option>`).join('')}</select></div>
+        <div><label style="color:#888;font-size:0.78rem">Bandeira (vazio = qualquer)</label><input id="fpt-band" list="fpt-bandeiras" value="${fpEsc(r.bandeira || '')}" placeholder="qualquer" ${inp}>
+          <datalist id="fpt-bandeiras">${FP_BANDEIRAS.map(b => `<option value="${b}">`).join('')}</datalist></div>
+        <div><label style="color:#888;font-size:0.78rem">Vale para</label>
+          <select id="fpt-emp" ${inp}><option value="" ${!r.empresa_id ? 'selected' : ''}>rede toda</option><option value="posto" ${r.empresa_id ? 'selected' : ''}>só este posto</option></select></div>
+        <div><label style="color:#888;font-size:0.78rem">Parcelas de</label><input id="fpt-pde" type="number" min="1" value="${r.parcelas_de ?? 1}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Parcelas até</label><input id="fpt-pate" type="number" min="1" value="${r.parcelas_ate ?? r.parcelas_de ?? 1}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Taxa % *</label><input id="fpt-pct" type="number" step="0.0001" min="0" value="${r.taxa_pct ?? ''}" placeholder="ex.: 1,99" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Tarifa fixa R$ (por venda)</label><input id="fpt-tarifa" type="number" step="0.01" min="0" value="${r.tarifa_fixa ?? 0}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Prazo combinado (D+)</label><input id="fpt-prazo" type="number" min="0" value="${r.prazo_dias ?? ''}" placeholder="ex.: 1 ou 30" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Vigência de</label><input id="fpt-vde" type="date" value="${(r.vigencia_de || iso).slice(0, 10)}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Vigência até (vazio = em diante)</label><input id="fpt-vate" type="date" value="${(r.vigencia_ate || '').slice(0, 10)}" ${inp}></div>
+        <div><label style="color:#888;font-size:0.78rem">Observação</label><input id="fpt-obs" value="${fpEsc(r.obs || '')}" ${inp}></div>
+      </div>
+      <div style="margin-top:12px"><label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpt-ativo" ${r.ativo !== false ? 'checked' : ''}> Ativa</label></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button onclick="fpTaxaSalvar(${r.id || 'null'})" class="btn-salvar">Salvar</button>
+        <button onclick="document.getElementById('fp-taxa-form').innerHTML=''" class="nfe-aba">Cancelar</button>
+      </div>
+      <div id="fpt-msg" style="margin-top:8px;font-size:0.82rem"></div>
+    </div>`;
+}
+async function fpTaxaSalvar(id) {
+  if (!podeOuAvisa('cartoes.taxas')) return;
+  const g = k => document.getElementById('fpt-' + k);
+  const msg = g('msg');
+  const pct = parseFloat(String(g('pct').value).replace(',', '.'));
+  if (!(pct >= 0)) { msg.style.color = '#f87171'; msg.textContent = 'Informe a taxa em %.'; return; }
+  const pde = parseInt(g('pde').value) || 1, pate = parseInt(g('pate').value) || pde;
+  if (pate < pde) { msg.style.color = '#f87171'; msg.textContent = 'Parcelas "até" menor que "de".'; return; }
+  const reg = {
+    empresa_id: g('emp').value === 'posto' ? window._fpEmpresaId : null,
+    adquirente: (g('adq').value || 'pagbank').trim().toLowerCase(), forma: g('forma').value,
+    bandeira: g('band').value.trim(), parcelas_de: pde, parcelas_ate: pate, taxa_pct: pct,
+    tarifa_fixa: parseFloat(String(g('tarifa').value).replace(',', '.')) || 0,
+    prazo_dias: g('prazo').value === '' ? null : parseInt(g('prazo').value),
+    vigencia_de: g('vde').value || null, vigencia_ate: g('vate').value || null,
+    ativo: g('ativo').checked, obs: g('obs').value.trim() || null, atualizado_em: new Date().toISOString(),
+  };
+  try { const s = await getSession(); reg.atualizado_por = (s && s.user && s.user.email) || null; } catch (e) { /* ok */ }
+  const q = id ? sb.from('oct_cartao_taxas').update(reg).eq('id', id) : sb.from('oct_cartao_taxas').insert(reg);
+  const { error } = await q;
+  if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
+  document.getElementById('fp-taxa-form').innerHTML = '';
+  fpTaxasListar();
+}
+async function fpTaxaExcluir(id) {
+  if (!podeOuAvisa('cartoes.taxas')) return;
+  if (!confirm('Excluir esta taxa negociada?')) return;
+  const { error } = await sb.from('oct_cartao_taxas').delete().eq('id', id);
+  if (error) { alert('Erro: ' + error.message); return; }
+  fpTaxasListar();
 }
 
 // ===================== FORMA DE RECEBIMENTO =====================
@@ -42,9 +164,19 @@ async function fpReceberListar() {
   const eid = window._fpEmpresaId;
   const { data } = await sb.from('oct_formas_pagamento').select('*').eq('empresa_id', eid).order('ordem');
   const rows = data || [];
+  // CONTA ONDE O VALOR ENTRA (11/10/2026, pedido do Ronan): cartão, Pix e cheque apontam para uma
+  // conta do livro financeiro (Conciliação › 🏦 Contas). Ao confirmar a conferência de um caixa, o
+  // F.Caixa lança o recebido de cada forma na conta dela — e a Conciliação já enxerga.
+  let contas = [];
+  try {
+    const r = await sb.from('oct_fin_contas').select('id,nome,tipo,ativo,ordem').eq('empresa_id', eid).eq('ativo', true).order('ordem');
+    contas = r.data || [];
+  } catch (e) { contas = []; }
+  window._fpContas = contas;
+  const contaNome = id => { const c = contas.find(x => x.id === id); return c ? c.nome : ''; };
   div.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <p style="color:#888;font-size:0.84rem">Formas sincronizadas automaticamente com o PDV.</p>
+      <p style="color:#888;font-size:0.84rem">Formas sincronizadas automaticamente com o PDV. A coluna <b>Conta</b> diz onde o valor entra quando o caixa é confirmado (F.Caixa).</p>
       <button onclick="fpReceberForm()" class="btn-salvar">+ Nova forma</button>
     </div>
     <div id="fp-receb-form"></div>
@@ -52,7 +184,7 @@ async function fpReceberListar() {
       <table style="width:100%;border-collapse:collapse;font-size:0.86rem">
         <thead><tr style="color:#888;text-align:left;background:#0f1119">
           <th style="padding:10px 12px">Ordem</th><th style="padding:10px 12px">Nome</th>
-          <th style="padding:10px 12px">Código SEFAZ</th><th style="padding:10px 12px">A prazo</th>
+          <th style="padding:10px 12px">Código SEFAZ</th><th style="padding:10px 12px">Conta onde entra</th><th style="padding:10px 12px">A prazo</th>
           <th style="padding:10px 12px">Situação</th><th></th>
         </tr></thead>
         <tbody>
@@ -61,13 +193,14 @@ async function fpReceberListar() {
             <td style="padding:9px 12px">${f.ordem}</td>
             <td style="padding:9px 12px;font-weight:500">${fpEsc(f.nome)}</td>
             <td style="padding:9px 12px"><span style="font-family:monospace;color:#7dd3fc">${f.cod_sefaz}</span> ${fpSefazNome(f.cod_sefaz)}</td>
+            <td style="padding:9px 12px">${f.conta_id && contaNome(f.conta_id) ? '🏦 ' + fpEsc(contaNome(f.conta_id)) : '<span style="color:#667">—</span>'}</td>
             <td style="padding:9px 12px">${f.a_prazo ? '<span style="color:#fbbf24">sim</span>' : '—'}</td>
             <td style="padding:9px 12px">${f.ativo ? '<span style="color:#4caf50">ativo</span>' : '<span style="color:#888">inativo</span>'}</td>
             <td style="padding:9px 12px;text-align:right;white-space:nowrap">
               <button onclick='fpReceberForm(${JSON.stringify(f).replace(/'/g, "&#39;")})' class="nfe-aba" style="font-size:0.76rem">Editar</button>
               <button onclick="fpReceberExcluir('${f.id}')" class="nfe-aba" style="font-size:0.76rem;color:#f87171">Excluir</button>
             </td>
-          </tr>`).join('') : '<tr><td colspan="6" style="padding:22px;text-align:center;color:#666">Nenhuma forma cadastrada.</td></tr>'}
+          </tr>`).join('') : '<tr><td colspan="7" style="padding:22px;text-align:center;color:#666">Nenhuma forma cadastrada.</td></tr>'}
         </tbody>
       </table>
     </div>`;
@@ -89,12 +222,22 @@ function fpReceberForm(f) {
         <div><label style="color:#888;font-size:0.78rem">Ordem</label>
           <input id="fpr-ordem" type="number" value="${f.ordem ?? 0}" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
       </div>
-      <div style="margin-top:12px;max-width:340px">
-        <label style="color:#888;font-size:0.78rem">Classificação (o PDV oculta por aqui conforme a integração)</label>
-        <select id="fpr-classif" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
-          ${['','dinheiro','cartao','cartao_frota','nota_prazo','cheque','pix','vale','outros'].map(c =>
-            `<option value="${c}" ${(f.classificacao||'') === c ? 'selected' : ''}>${({'':'— selecione —','dinheiro':'Dinheiro','cartao':'Cartão (crédito/débito)','cartao_frota':'Cartão Frota','nota_prazo':'Nota a Prazo','cheque':'Cheque','pix':'Pix','vale':'Vale','outros':'Outros'})[c]}</option>`).join('')}
-        </select>
+      <div style="margin-top:12px;display:grid;grid-template-columns:340px 340px;gap:12px">
+        <div>
+          <label style="color:#888;font-size:0.78rem">Classificação (o PDV oculta por aqui conforme a integração)</label>
+          <select id="fpr-classif" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+            ${['','dinheiro','cartao','cartao_frota','nota_prazo','cheque','pix','vale','outros'].map(c =>
+              `<option value="${c}" ${(f.classificacao||'') === c ? 'selected' : ''}>${({'':'— selecione —','dinheiro':'Dinheiro','cartao':'Cartão (crédito/débito)','cartao_frota':'Cartão Frota','nota_prazo':'Nota a Prazo','cheque':'Cheque','pix':'Pix','vale':'Vale','outros':'Outros'})[c]}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="color:#888;font-size:0.78rem">Conta onde o valor entra (ao confirmar o caixa no F.Caixa — Pix, cheque, frota; cartão vai pela aba 💳 Cartões)</label>
+          <select id="fpr-conta" style="width:100%;padding:9px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+            <option value="">— não lança no livro —</option>
+            ${(window._fpContas || []).map(c => `<option value="${c.id}" ${Number(f.conta_id) === c.id ? 'selected' : ''}>${fpEsc(c.nome)}</option>`).join('')}
+          </select>
+          ${(window._fpContas || []).length ? '' : '<p style="color:#f0b45c;font-size:0.72rem;margin:4px 0 0">Este posto ainda não tem contas — cadastre em Conciliação › 🏦 Contas.</p>'}
+        </div>
       </div>
       <div style="margin-top:12px;display:flex;gap:18px;align-items:center">
         <label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpr-prazo" ${f.a_prazo ? 'checked' : ''}> Forma a prazo (fiado)</label>
@@ -121,6 +264,7 @@ async function fpReceberSalvar(id) {
     a_prazo: document.getElementById('fpr-prazo').checked,
     ativo: document.getElementById('fpr-ativo').checked,
     classificacao: document.getElementById('fpr-classif').value || null,
+    conta_id: Number((document.getElementById('fpr-conta') || {}).value) || null,
   };
   const q = id ? sb.from('oct_formas_pagamento').update(reg).eq('id', id)
                : sb.from('oct_formas_pagamento').insert(reg);

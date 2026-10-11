@@ -245,6 +245,14 @@ const PERM_CATALOGO = [
     { c: 'pdv.contingencia', d: 'Ligar/desligar contingência fiscal', p: 'g', s: 1 },
     { c: 'pdv.ambiente_fiscal', d: 'Escolher ambiente fiscal (homologação/produção)', p: '', s: 1 },
   ]},
+  // grupo novo entra no FIM (o código 17.x nasce aqui)
+  { n: 17, area: 'Retaguarda', grupo: 'Financeiro — Cartões (taxas da maquininha)', itens: [
+    { c: 'cartoes.ver', d: 'Acessar Cartões (pré-conferência das taxas)', p: 'gfc' },
+    { c: 'cartoes.baixar', d: 'Baixar o extrato da adquirente (EDI)', p: 'gf' },
+    { c: 'cartoes.conferir', d: 'Marcar transações como conferidas', p: 'gf', s: 1 },
+    { c: 'cartoes.livro', d: 'Enviar cartões conferidos para a Conciliação', p: 'gf', s: 1 },
+    { c: 'cartoes.taxas', d: 'Cadastrar/alterar as taxas negociadas', p: 'g', s: 1 },
+  ]},
 ];
 
 // ---------------- código de cada permissão (1.1, 2.3...) ----------------
