@@ -16,7 +16,7 @@
 // funções puras — testadas fora do navegador.
 // ============================================================
 
-let _cte = { linhas: [], notas: {}, semCte: [], controle: null, erro: null, transp: '', soPosto: false, carregando: false };
+let _cte = { linhas: [], notas: {}, semCte: [], controle: null, erro: null, transp: '', soPosto: false, carga: 'comb', carregando: false };
 
 const _CTE_COLS = 'id,nsu,chave_cte,situacao,desacordo,modelo,serie,numero,emissao,tp_cte,cfop,emit_cnpj,emit_nome,emit_uf,' +
   'tomador_tipo,tomador_cnpj,tomador_nome,rem_cnpj,rem_nome,dest_cnpj,dest_nome,papel,sou_tomador,mun_ini_nome,uf_ini,mun_fim_nome,uf_fim,' +
@@ -28,6 +28,13 @@ function _cteMoney(v) { return v == null ? '—' : 'R$ ' + Number(v).toLocaleStr
 function _cteNum(v, casas) { return v == null ? '—' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas ?? 0, maximumFractionDigits: casas ?? 0 }); }
 function _cteData(iso) { return iso ? String(iso).slice(8, 10) + '/' + String(iso).slice(5, 7) + '/' + String(iso).slice(0, 4) : '—'; }
 function _cteIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+// "BETIM/MG" + UF "MG" -> "Betim/MG" (há transportadora que escreve a UF dentro do nome do município)
+function _cteMun(nome, uf) {
+  let n = String(nome || '').trim(); const u = String(uf || '').trim();
+  if (u && n.toUpperCase().endsWith('/' + u.toUpperCase())) n = n.slice(0, -(u.length + 1));
+  return n ? n + (u ? '/' + u : '') : (u || '—');
+}
+const _CTE_DOC = { '67': 'CT-e OS', '64': 'GTV-e' };   // 57 = CT-e comum (sem etiqueta)
 function _cteCnpj(c) { c = String(c || '').replace(/\D/g, ''); return c.length === 14 ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : c; }
 
 // período: os campos de data do topo da Manifestação; em branco = últimos 60 dias
@@ -48,7 +55,10 @@ function cteLerNota(xml) {
   const pega = (txt, tag) => { const m = txt.match(new RegExp('<' + tag + '>([^<]*)</' + tag + '>')); return m ? m[1] : ''; };
   const dets = xml.match(/<det[\s>][\s\S]*?<\/det>/g) || [];
   dets.forEach(d => {
-    const q = Number(pega(d, 'qCom') || 0), nome = pega(d, 'xProd'), comb = /<comb>/.test(d);
+    const q = Number(pega(d, 'qCom') || 0), nome = pega(d, 'xProd');
+    // COMBUSTÍVEL DE TANQUE: tem o grupo <comb>, vem em litros e não é lubrificante. Óleo de motor também traz
+    // <comb> (código ANP 62…), mas em caixa/frasco — contado como litro, dava "frete de R$ 23 por litro" (11/10/2026).
+    const comb = /<comb>/.test(d) && !/^6/.test(pega(d, 'cProdANP')) && /^(L|LT|LTS|LITRO|LITROS)$/i.test(pega(d, 'uCom').trim());
     if (comb) { out.combustivel = true; out.litros += q; }
     out.produtos.push({ nome, qtd: q, combustivel: comb });
   });
@@ -65,9 +75,13 @@ function cteLigar(linhas, notas) {
   return (linhas || []).map(l => {
     const ns = (l.chaves_nfe || []).map(k => notas[k]).filter(Boolean);
     const litrosNotas = ns.reduce((s, n) => s + Number(n.litros || 0), 0);
-    const litros = litrosNotas > 0 ? litrosNotas : (Number(l.litros_carga || 0) > 0 ? Number(l.litros_carga) : null);
+    // carga de combustível: a nota ligada é de combustível; sem nota no sistema, vale o que o CT-e diz que carrega
+    const ehComb = ns.length ? ns.some(n => n.combustivel) : /COMBUST|GASOL|DIESEL|ETANOL|ALCOOL|INFLAM/i.test(l.produto_pred || '');
+    // litros do próprio CT-e só servem para carga de combustível (encomenda também informa "volume")
+    const litros = litrosNotas > 0 ? litrosNotas : (ehComb && Number(l.litros_carga || 0) > 0 ? Number(l.litros_carga) : null);
     const valor = Number(l.valor_prestacao || 0);
     return Object.assign({}, l, {
+      _combustivel: ehComb,
       _notas: ns,
       _notasFaltando: (l.chaves_nfe || []).filter(k => !notas[k]),
       _litros: litros,
@@ -195,6 +209,8 @@ function _cteFiltradas(ligados) {
   return ligados.filter(l => {
     if (_cte.transp && (l.emit_cnpj || l.emit_nome) !== _cte.transp) return false;
     if (_cte.soPosto && !l.sou_tomador) return false;
+    if (_cte.carga === 'comb' && !l._combustivel) return false;
+    if (_cte.carga === 'outras' && l._combustivel) return false;
     if (busca) {
       const blob = [l.numero, l.emit_nome, l.emit_cnpj, l.chave_cte, l.tomador_nome, l.placa, l.motorista, l.mun_ini_nome, l.mun_fim_nome,
         ...(l._notas || []).map(n => n.numero + ' ' + n.emitente)].join(' ').toLowerCase();
@@ -222,7 +238,7 @@ function cteRender() {
   const todos = cteLigar(_cte.linhas, _cte.notas);
   const resumoGeral = cteResumo(todos);              // marca _fora com a mediana do período inteiro
   const lista = _cteFiltradas(todos);
-  const r = (_cte.transp || _cte.soPosto || (document.getElementById('manif-busca')?.value || '').trim()) ? cteResumo(lista) : resumoGeral;
+  const r = (_cte.transp || _cte.soPosto || _cte.carga || (document.getElementById('manif-busca')?.value || '').trim()) ? cteResumo(lista) : resumoGeral;
   const qtd = document.getElementById('manif-qtd'); if (qtd) qtd.textContent = lista.length;
 
   const k = _cte.controle;
@@ -253,7 +269,8 @@ function cteRender() {
       ? l._notas.map(n => `NF ${_cteEsc(n.numero || '?')} · ${_cteEsc(String(n.emitente || '').slice(0, 26))} · ${n.litros ? _cteNum(n.litros) + ' L' : 's/ litros'}`).join('<br>')
       : ((l.chaves_nfe || []).length ? `<span style="color:#fbbf24" title="${_cteEsc((l.chaves_nfe || []).join(' '))}">${l.chaves_nfe.length} nota(s) fora do sistema</span>` : '<span style="color:#667">sem nota citada</span>');
     const paga = l.sou_tomador ? '<b style="color:#7ee2a0">o posto</b>' : _cteEsc(String(l.tomador_nome || '—').slice(0, 28));
-    const tipo = l.tp_cte === '1' ? ' <span class="cte-tag">complementar</span>' : l.tp_cte === '3' ? ' <span class="cte-tag">substituto</span>' : '';
+    const tipo = (_CTE_DOC[l.modelo] ? ` <span class="cte-tag" title="${l.modelo === '64' ? 'Guia de transporte de valores (cofre): não tem valor de frete' : 'CT-e de outros serviços (ex.: transporte de valores)'}">${_CTE_DOC[l.modelo]}</span>` : '')
+      + (l.tp_cte === '1' ? ' <span class="cte-tag">complementar</span>' : l.tp_cte === '3' ? ' <span class="cte-tag">substituto</span>' : '');
     const avisos = (canc ? '<span class="cte-tag" style="background:#3a1414;color:#f87171">cancelado</span> ' : '')
       + (l.desacordo ? '<span class="cte-tag" style="background:#3a2a10;color:#fbbf24">em desacordo</span> ' : '')
       + (l._fora ? '<span class="cte-tag" style="background:#3a2a10;color:#fbbf24" title="R$/litro mais de 25% acima do normal desta transportadora">acima do normal</span> ' : '');
@@ -262,7 +279,7 @@ function cteRender() {
       <td>${_cteEsc(l.numero || '—')}<span style="color:#667">/${_cteEsc(l.serie || '')}</span>${tipo}</td>
       <td title="${_cteCnpj(l.emit_cnpj)}">${_cteEsc(String(l.emit_nome || '—').slice(0, 30))}${l.placa ? `<br><span style="color:#667;font-size:0.68rem">${_cteEsc(l.placa)}${l.motorista ? ' · ' + _cteEsc(l.motorista) : ''}</span>` : ''}</td>
       <td>${paga}</td>
-      <td style="color:#aab">${_cteEsc(l.mun_ini_nome || '')}/${_cteEsc(l.uf_ini || '')} → ${_cteEsc(l.mun_fim_nome || '')}/${_cteEsc(l.uf_fim || '')}</td>
+      <td style="color:#aab">${l.mun_ini_nome || l.mun_fim_nome ? _cteEsc(_cteMun(l.mun_ini_nome, l.uf_ini)) + ' → ' + _cteEsc(_cteMun(l.mun_fim_nome, l.uf_fim)) : '—'}</td>
       <td style="font-size:0.74rem">${notas}</td>
       <td style="text-align:right">${l._litros ? _cteNum(l._litros) + ' L' + (l._litrosDe === 'cte' ? '<span title="litros informados no CT-e (a nota não está no sistema)" style="color:#667">*</span>' : '') : '—'}</td>
       <td style="text-align:right;font-weight:600">${_cteMoney(l.valor_prestacao)}</td>
@@ -297,6 +314,10 @@ function cteRender() {
     <div style="padding:0 14px 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:0.78rem;color:#9aa">
       <span>Período: <b>${_cteData(per.ini)}</b> a <b>${_cteData(per.fim)}</b> (datas do topo)</span>
       <select class="manif-input" style="width:260px" onchange="_cte.transp=this.value;cteRender()"><option value="">Todas as transportadoras</option>${transpOpts}</select>
+      <select class="manif-input" style="width:170px" onchange="_cte.carga=this.value;cteRender()" title="Combustível = a nota transportada é de combustível de tanque">
+        <option value="comb" ${_cte.carga === 'comb' ? 'selected' : ''}>Só combustível</option>
+        <option value="outras" ${_cte.carga === 'outras' ? 'selected' : ''}>Outras cargas</option>
+        <option value="" ${!_cte.carga ? 'selected' : ''}>Todas as cargas</option></select>
       <label style="cursor:pointer"><input type="checkbox" ${_cte.soPosto ? 'checked' : ''} onchange="_cte.soPosto=this.checked;cteRender()"> só os que o posto paga</label>
       <button class="manif-btn-cinza" onclick="cteRenderAba()">↻ Atualizar</button>
     </div>
@@ -359,10 +380,10 @@ function cteExportarCsv() {
   const lista = window._cteVisiveis || [];
   if (!lista.length) { manifMsg('Nada para exportar.', 'info'); return; }
   const br = v => v == null ? '' : String(Number(v)).replace('.', ',');
-  const cab = ['Emissao', 'Numero', 'Serie', 'Chave CT-e', 'Situacao', 'Transportadora', 'CNPJ transportadora', 'Quem paga', 'CNPJ tomador', 'Posto paga', 'Origem', 'Destino',
+  const cab = ['Emissao', 'Numero', 'Serie', 'Modelo', 'Chave CT-e', 'Situacao', 'Transportadora', 'CNPJ transportadora', 'Quem paga', 'CNPJ tomador', 'Posto paga', 'Origem', 'Destino',
     'Notas', 'Fornecedor', 'Litros', 'Frete', 'R$ por litro', 'CFOP', 'CST ICMS', 'Base ICMS', 'Aliquota', 'ICMS', 'Placa', 'Motorista', 'Conferido'];
-  const linhas = lista.map(l => [_cteData(l.emissao), l.numero, l.serie, l.chave_cte, l.situacao, l.emit_nome, l.emit_cnpj, l.tomador_nome, l.tomador_cnpj, l.sou_tomador ? 'sim' : 'nao',
-    (l.mun_ini_nome || '') + '/' + (l.uf_ini || ''), (l.mun_fim_nome || '') + '/' + (l.uf_fim || ''),
+  const linhas = lista.map(l => [_cteData(l.emissao), l.numero, l.serie, l.modelo, l.chave_cte, l.situacao, l.emit_nome, l.emit_cnpj, l.tomador_nome, l.tomador_cnpj, l.sou_tomador ? 'sim' : 'nao',
+    _cteMun(l.mun_ini_nome, l.uf_ini), _cteMun(l.mun_fim_nome, l.uf_fim),
     (l._notas || []).map(n => n.numero).join(' + '), [...new Set((l._notas || []).map(n => n.emitente))].join(' + '),
     br(l._litros), br(l.valor_prestacao), br(l._porLitro), l.cfop, l.icms_cst, br(l.icms_bc), br(l.icms_aliq), br(l.icms_valor), l.placa, l.motorista, l.conferido ? 'sim' : 'nao']);
   const csv = [cab].concat(linhas).map(r => r.map(c => '"' + String(c ?? '').replace(/"/g, '""') + '"').join(';')).join('\r\n');
