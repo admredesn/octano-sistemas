@@ -36,7 +36,7 @@
     formas_pagamento: 'formas de pagamento cartao pix prazo negociado tabela de preco bandeira',
     importar_sped: 'sped importar arquivo fiscal',
     lmc: 'lmc livro movimentacao combustivel estoque tanque descarga',
-    manifestacao: 'manifestacao nfe sefaz ciencia nota fornecedor xml',
+    manifestacao: 'manifestacao nfe sefaz ciencia nota fornecedor xml frete cte transportadora',
     marketing: 'marketing app campanha notificacao parceiro premio clientes',
     monitor: 'monitor tanques sonda estoque venda ao vivo bomba litros',
     nfe: 'nota fiscal entrada xml fornecedor nfe nf-e saida devolucao',
@@ -71,6 +71,8 @@
     { t: 'Chave geral do cashback', onde: 'Parâmetros › 🎁 Cashback', m: 'parametros', aba: 'cashback', k: 'cashback ligar desligar chave' },
     { t: 'Reajuste de preço na bomba (troca o preço nos bicos)', onde: '⛽ Preço na bomba', m: 'preco_bomba', k: 'preco bomba reajuste gasolina etanol diesel aumentar baixar' },
     { t: 'Prêmio do app (pontos dos clientes)', onde: '📣 Marketing', m: 'marketing', k: 'premio app pontos cliente trocar' },
+    { t: 'Fretes — CT-e recebidos e custo do frete por litro', onde: 'Manifestação › 🚚 Fretes (CT-e)', m: 'manifestacao', acao: 'cteAbrir',
+      k: 'frete fretes cte ct-e conhecimento de transporte transportadora transportadoras custo por litro carga sped d100 conferencia' },
   ];
 
   function norm(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }

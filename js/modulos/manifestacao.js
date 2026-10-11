@@ -13,6 +13,8 @@ const MANIF_ABAS = [
   { id: 'sem_manifestacao', label: 'Sem Manifestação', ico: '📋' },
   { id: 'ciencia',          label: 'Manifestadas',     ico: '✅' },
   { id: 'cancelada',        label: 'Canceladas',       ico: '❌' },
+  // 11/10/2026: CT-e recebidos (frete das cargas) — a aba é desenhada pelo cte.js
+  { id: 'cte',              label: 'Fretes (CT-e)',    ico: '🚚' },
   { id: 'logs',             label: 'Logs da Consulta',  ico: '📜' },
 ];
 
@@ -179,6 +181,10 @@ async function manifCarregarAba(silencioso) {
     await manifRenderLogs();
     return;
   }
+  if (_manifAbaAtual === 'cte') {
+    if (typeof cteRenderAba === 'function') await cteRenderAba(silencioso);
+    return;
+  }
 
   let q = sb.from('oct_nfe_manifestadas').select('*').eq('empresa_id', _manifEmpresaId);
   if (_manifAbaAtual === 'ciencia') {
@@ -209,6 +215,8 @@ function _manifFiltrar() {
 
 function manifRender() {
   if (_manifAbaAtual === 'logs') return;
+  // aba Fretes (CT-e): a busca e o "Pesquisar" do topo valem lá também
+  if (_manifAbaAtual === 'cte') { if (typeof cteRender === 'function') cteRender(); return; }
   const area = document.getElementById('manif-lista-area');
   const acoes = document.getElementById('manif-acoes-area');
   if (!area) return;
