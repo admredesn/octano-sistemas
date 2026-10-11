@@ -247,7 +247,7 @@ async function fcCarregarDados() {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
-    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, outrosCaixa: 0, qtd_vendas: 0,
+    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
     sangria_depositada: 0, sangrias_dep: [],   // sangria que virou depósito em conta (🏦 Gerar depósito)
     fila_total: 0, fila_litros: 0, fila_itens: [],
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
@@ -539,7 +539,20 @@ async function fcCarregarDados() {
     if (a.secao === 'despesa') t.despesa += v;
     else if (a.secao === 'suprimento') t.suprimento += v;
     else if (a.secao === 'deposito') t.deposito += v;
-    else if (a.secao === 'receita') t.receita += v;
+    else if (a.secao === 'receita') {
+      t.receita += v;
+      // RECEITA EM CARTÃO / PIX / CHEQUE (11/10/2026, pedido do Ronan no SEVEN): o dinheiro
+      // não passa pela gaveta — vai para o banco (ou é um cheque). Entra na ORIGEM (receita)
+      // e também no RECEBIDO da mesma forma, para o Resultado fechar e a conciliação bancária
+      // enxergar; e fica FORA do esperado na gaveta (receita_banco). Antes, uma receita em Pix
+      // era cobrada da gaveta E não aparecia no recebido: "falta" dupla no valor da receita.
+      // Só a receita em Dinheiro continua na régua da gaveta.
+      const gR = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(a.forma_nome || ''), '') : null) || 'dinheiro';
+      if (['cartao', 'pix', 'cheque', 'frota'].includes(gR)) {
+        t.rec[gR] = (t.rec[gR] || 0) + v;
+        t.receita_banco = (t.receita_banco || 0) + v;
+      }
+    }
     else if (a.secao === 'sangria') t.sangria += v;
     // manual no balão 💵 Dinheiro/Sangria = DEPÓSITO no cofre lançado à mão
     // (19/08 — caso LUAN: Brink's registrou 1.850, sangria real 1.930): soma na
@@ -571,7 +584,9 @@ async function fcCarregarDados() {
   lista.forEach(t => {
     const d = porTurno[t.id]; if (!d) return;
     const abertura = Number(t.valor_abertura || 0);
-    const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + Number(d.receita || 0);
+    // receita em cartão/pix/cheque (receita_banco) não está na gaveta: só a receita em dinheiro entra
+    d.receita_dinheiro = Math.round((Number(d.receita || 0) - Number(d.receita_banco || 0)) * 100) / 100;
+    const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + d.receita_dinheiro;
     // COFRE EM DOBRO (06/10/2026 — Florestal, turno 1188: esperado −208,35 e "sobra"
     // de 2.059,90). O depósito no cofre chegava duas vezes: o TecnoX lança uma
     // "SANGRIA AUTOMATICA BRINKS" a cada depósito (o espelho traz para oct_pdv_caixa)
@@ -958,7 +973,8 @@ function fcDetalhe(turnoId) {
               <div style="display:flex;justify-content:space-between"><span>Fundo de abertura</span><b>${fcMoney(t.valor_abertura)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>+ Vendas em dinheiro</span><b>${fcMoney(rec.dinheiro)}</b></div>
               ${d.suprimento > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Suprimentos</span><b>${fcMoney(d.suprimento)}</b></div>` : ''}
-              ${d.receita > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Receitas</span><b>${fcMoney(d.receita)}</b></div>` : ''}
+              ${d.receita_dinheiro > 0.009 ? `<div style="display:flex;justify-content:space-between"><span>+ Receitas em dinheiro</span><b>${fcMoney(d.receita_dinheiro)}</b></div>` : ''}
+              ${d.receita_banco > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#667;font-size:0.7rem" title="Receita lançada em cartão, Pix ou cheque: não passa pela gaveta — conta no recebido da forma e na conciliação bancária."><span>Receitas em cartão/pix/cheque — fora da gaveta</span><span>${fcMoney(d.receita_banco)}</span></div>` : ''}
               ${d.sangria_gaveta > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Sangrias</span><b>${fcMoney(d.sangria_gaveta)}</b></div>` : ''}
               ${d.sangria_cofre_dup > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#667;font-size:0.7rem" title="O TecnoX lança uma sangria a cada depósito no cofre. O mesmo depósito já está no Contado (cofre), então não é descontado de novo."><span>Sangrias do cofre (TecnoX) — já no contado</span><span>${fcMoney(d.sangria_cofre_dup)}</span></div>` : ''}
               ${d.despesa > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Despesas</span><b>${fcMoney(d.despesa)}</b></div>` : ''}
@@ -1313,7 +1329,10 @@ async function fcLancIncluir() {
     despesa:      ['Dinheiro'],
     deposito:     ['Dinheiro'],
     suprimento:   ['Dinheiro'],
-    receita:      ['Dinheiro', 'Pix', 'Cheque'],
+    // RECEITA em cartão (11/10/2026, Ronan no SEVEN: "não dá a opção de fazer como cartão"):
+    // Crédito/Débito entram aqui e a receita que não é dinheiro vai para o banco, não para a
+    // gaveta (ver os lançamentos manuais em fcCarregarDados).
+    receita:      ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Cheque'],
     titulos:      ['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Cheque'],
   };
   const formas = FORMAS_SECAO[secao]
@@ -2355,7 +2374,11 @@ async function fcNodeDetalhe(tipo) {
     // 3) lançamentos manuais deste grupo — na MESMA sequência
     // SÓ a seção onde foi lançado. Casar pelo grupo da FORMA trazia a despesa
     // paga em dinheiro para dentro do balão Dinheiro/Sangria (31/08).
-    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao));
+    // + receita lançada em cartão/pix/cheque (11/10/2026): ela soma no campo da forma, então
+    // aparece também no balão da forma (e segue no balão Receita, que é a origem dela).
+    const _gRec = m => (m.secao === 'receita' ? _fcGrupoNome(m.forma_nome, '') : null);
+    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao)
+      || (['cartao', 'pix', 'cheque', 'frota'].includes(_gRec(m)) && grupos.includes(_gRec(m))));
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
