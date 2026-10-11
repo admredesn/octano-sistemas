@@ -69,6 +69,13 @@ function cteLerNota(xml) {
   return out;
 }
 
+// chaves das NF-e canceladas, tiradas do XML dos eventos de cancelamento (110111)
+function cteChavesCanceladas(eventos) {
+  const out = new Set();
+  (eventos || []).forEach(e => { const m = String((e && e.xml) || '').match(/<chNFe>(\d{44})<\/chNFe>/); if (m) out.add(m[1]); });
+  return out;
+}
+
 // Liga cada CT-e às suas notas e calcula litros e R$/litro.
 // notas = { chave: { numero, emitente, emissao, litros, combustivel, produtos, modFrete } }
 function cteLigar(linhas, notas) {
@@ -180,6 +187,13 @@ async function _cteCarregar() {
     const { data } = await sb.from('oct_nfe_manifestadas').select(colsN).eq('empresa_id', eid).in('chave_nfe', faltam.slice(i, i + 40));
     (data || []).forEach(guarda);
   }
+  // NOTA CANCELADA: o cancelamento chega como EVENTO (status 'evento', chave só dentro do XML) e a nota continua
+  // na lista com o status antigo — sem isto, nota cancelada aparecia como "carga sem CT-e" (AC, NF 14693/14694).
+  try {
+    const { data: evs } = await sb.from('oct_nfe_manifestadas').select('xml').eq('empresa_id', eid).eq('status', 'evento')
+      .like('xml', '%<tpEvento>110111</tpEvento>%').limit(500);
+    cteChavesCanceladas(evs).forEach(k => { if (notas[k]) notas[k].status = 'cancelada'; });
+  } catch (e) { /* sem os eventos a lista só fica menos limpa */ }
   _cte.notas = notas;
 
   // cargas de combustível do período sem nenhum CT-e (em qualquer data) que cite a nota
