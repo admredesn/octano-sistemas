@@ -14,8 +14,11 @@
 //   bloco 1  combustíveis: 1300/1310/1320 por produto/tanque/bico/DIA, com
 //            encerrantes e aferições; 1350/1360/1370 se as bombas estiverem
 //            cadastradas no sped_config
-//   B/D/G/H/K sem movimento (abertura=1) — frete/energia/telecom (D100/C500)
-//            ficam para o contador complementar, avisado na tela
+//   bloco D  fretes: D100 + D190 de cada CT-e em que o POSTO É O TOMADOR
+//            (11/10/2026 — os CT-e vêm do buscador, oct_cte_recebidos). Sem
+//            crédito de ICMS: o contador decide se algum frete credita.
+//   B/G/H/K  sem movimento (abertura=1) — energia/telecom (C500/D500) ficam
+//            para o contador complementar, avisado na tela
 //
 // A REGRA DE OURO: este arquivo NÃO vai direto para a Receita. Ele é gerado
 // para o CONTADOR validar no PVA (o validador oficial) — a tela avisa isso.
@@ -28,7 +31,7 @@ const SPED_CAMPOS_REF = {
   "0200": 12, "0206": 1, "0990": 1,
   "B001": 1, "B990": 1,
   "C001": 1, "C100": 28, "C170": 37, "C171": 2, "C190": 11, "C990": 1,
-  "D001": 1, "D990": 1,
+  "D001": 1, "D100": 24, "D190": 8, "D990": 1,
   "E001": 1, "E100": 2, "E110": 14, "E116": 9, "E200": 3, "E210": 14, "E990": 1,
   "G001": 1, "G990": 1, "H001": 1, "H990": 1, "K001": 1, "K990": 1,
   "1001": 1, "1010": 13, "1300": 10, "1310": 9, "1320": 10,
@@ -64,6 +67,38 @@ function _sfCst(fiscal) {
   return orig + (cst || "00");
 }
 
+// ---------- CT-e (bloco D) ----------
+// Entram no SPED do posto só os CT-e em que ELE é o tomador do frete (quem
+// contrata e paga), autorizados (cancelado não se escritura) e dos modelos
+// 57 (CT-e) e 67 (CT-e OS, ex.: transporte de valores). GTV-e (64) não entra.
+function spedCtesDoPeriodo(ctes, dtIni, dtFim) {
+  return (ctes || []).filter(c => c && c.sou_tomador && c.situacao === "autorizado"
+    && (c.modelo === "57" || c.modelo === "67")
+    && _sfDia(c.emissao) >= dtIni && _sfDia(c.emissao) <= dtFim)
+    .sort((a, b) => String(a.emissao).localeCompare(String(b.emissao)) || String(a.numero).localeCompare(String(b.numero)));
+}
+// CFOP de ENTRADA do frete: o CT-e traz o CFOP da TRANSPORTADORA (5xxx/6xxx);
+// para quem contrata é 1xxx/2xxx. O posto é estabelecimento comercial: tudo o
+// que não tiver par exato na tabela de entrada cai em x353 (aquisição de
+// serviço de transporte por estabelecimento comercial) — o 5357 "a não
+// contribuinte" do CT-e OS de transporte de valores, por exemplo, não tem 1357.
+function _sfCfopFrete(cfop) {
+  const c = String(cfop || "").replace(/\D/g, "");
+  const dig = /^6/.test(c) ? "2" : /^7/.test(c) ? "3" : "1";
+  const resto = c.slice(1);
+  return dig + (/^(351|352|353|354|355|356|360|932)$/.test(resto) ? resto : "353");
+}
+// participante (0150) da transportadora: os dados do emitente do CT-e; o
+// endereço sai do XML guardado (o SPED exige logradouro)
+function _sfCteParticipante(c) {
+  const x = String(c.xml || "");
+  const emit = (x.match(/<emit>[\s\S]*?<\/emit>/) || [""])[0];
+  const pega = tag => { const m = emit.match(new RegExp("<" + tag + ">([^<]*)</" + tag + ">")); return m ? m[1] : ""; };
+  return { nome: c.emit_nome || pega("xNome"), documento: c.emit_cnpj, ie: c.emit_ie || pega("IE"),
+           cod_mun: c.emit_mun || pega("cMun"), endereco: [pega("xLgr"), pega("nro")].filter(Boolean).join(", "),
+           bairro: pega("xBairro"), cidade: pega("xMun") };
+}
+
 // ============================================================
 // MONTADOR PURO: recebe todos os dados já carregados, devolve
 // { linhas, avisos, resumo }. Sem rede aqui dentro — dá para testar.
@@ -95,6 +130,13 @@ function spedFiscalMontar(d) {
     const doc = String(p.documento || "").replace(/\D/g, "");
     if (!doc) { A.push(`Entrada ${n.numero || "?"} sem documento do fornecedor — ficará sem participante.`); return; }
     if (!parts.has(doc)) parts.set(doc, p);
+  });
+  // + as transportadoras dos CT-e que o posto pagou (bloco D)
+  const ctes = spedCtesDoPeriodo(d.ctes, d.dtIni, d.dtFim);
+  ctes.forEach(c => {
+    const doc = String(c.emit_cnpj || "").replace(/\D/g, "");
+    if (!doc) { A.push(`CT-e ${c.numero || "?"} sem CNPJ da transportadora — ficará sem participante.`); return; }
+    if (!parts.has(doc)) parts.set(doc, _sfCteParticipante(c));
   });
   parts.forEach((p, doc) => {
     const ehCnpj = doc.length === 14;
@@ -248,10 +290,42 @@ function spedFiscalMontar(d) {
   });
   L.push(`|C990|${L.length - c0 + 1}|`);
 
-  // ---------- BLOCO D (sem movimento — fretes/telecom com o contador) ----------
-  L.push("|D001|1|"); L.push("|D990|2|");
-  if ((d.entradas || []).some(n => Number(n.valor_frete || 0) > 0))
-    A.push("Há frete nas entradas: os CT-e (registro D100) não são gerados nesta fase — o contador complementa.");
+  // ---------- BLOCO D: fretes que o posto contratou (CT-e em que é o tomador) ----------
+  // D100 = o documento; D190 = o analítico por CST/CFOP/alíquota (um por CT-e).
+  // SEM CRÉDITO DE ICMS: quase todo frete de combustível em MG vem isento (CST 40) e,
+  // quando vem tributado (transporte de valores, encomenda), é a destinação que
+  // decide o crédito — coisa que o XML não sabe. Mesma régua do C170: o arquivo
+  // declara o ICMS EFETIVAMENTE creditado, que aqui é zero; o destacado vira aviso.
+  const d0 = L.length;
+  let vCtes = 0, icmsCtes = 0;
+  if (!ctes.length) {
+    L.push("|D001|1|");
+    if ((d.entradas || []).some(n => Number(n.valor_frete || 0) > 0))
+      A.push("Há frete nas notas de entrada, mas nenhum CT-e com o posto como tomador no período — confira na aba Fretes (CT-e) se a transportadora emitiu em nome do posto.");
+  } else {
+    L.push("|D001|0|");
+    ctes.forEach(c => {
+      const doc = String(c.emit_cnpj || "").replace(/\D/g, "");
+      const v = Number(c.valor_prestacao || 0);
+      vCtes += v; icmsCtes += Number(c.icms_valor || 0);
+      const dt = _sfData(c.emissao);
+      const tp = /^[0123]$/.test(String(c.tp_cte || "")) ? String(c.tp_cte) : "0";
+      // IND_FRT (tabela de 2012 em diante): 1 = por conta do destinatário/remetente; 2 = de terceiros
+      const indFrt = (c.tomador_tipo === "0" || c.tomador_tipo === "3") ? "1" : "2";
+      // CST: o do documento quando é isento/não tributado/ST; frete TRIBUTADO (00, 20) lançado sem crédito vai como
+      // 090 (outras), com base e imposto zerados — CST 000 com alíquota zero o PVA acusa.
+      const cst2 = String(c.icms_cst || "").replace(/\D/g, "").padStart(2, "0").slice(-2);
+      const cst = "0" + (/^(40|41|51|60)$/.test(cst2) ? cst2 : "90");
+      const serie = String(c.serie || "").replace(/\D/g, "") || "0";
+      L.push(`|D100|0|1|F${doc}|${c.modelo}|${tp === "1" ? "06" : "00"}|${serie}||${String(c.numero || "").replace(/\D/g, "")}|${c.chave_cte || ""}|${dt}|${dt}|${tp}||${_sfNum(v)}|0|${indFrt}|${_sfNum(v)}|0|0|${_sfNum(v)}|||${String(c.mun_ini || "").replace(/\D/g, "")}|${String(c.mun_fim || "").replace(/\D/g, "")}|`);
+      L.push(`|D190|${cst}|${_sfCfopFrete(c.cfop)}|0|${_sfNum(v)}|0|0|0||`);
+      if (!c.chave_cte || String(c.chave_cte).length !== 44) A.push(`CT-e ${c.numero || "?"} sem chave de 44 dígitos — o PVA vai recusar o D100.`);
+      if (!c.mun_ini || !c.mun_fim) A.push(`CT-e ${c.numero || "?"} sem município de origem/destino (D100).`);
+    });
+    A.push(`Bloco D: ${ctes.length} CT-e em que o posto é o tomador, R$ ${vCtes.toFixed(2)} de frete (D100/D190), lançados SEM crédito de ICMS`
+      + (icmsCtes > 0.005 ? ` — há R$ ${icmsCtes.toFixed(2)} de ICMS destacado nesses CT-e: o contador avalia se algum dá crédito.` : "."));
+  }
+  L.push(`|D990|${L.length - d0 + 1}|`);
 
   // ---------- BLOCO E ----------
   const e0 = L.length;
@@ -519,6 +593,7 @@ function spedFiscalMontar(d) {
     resumo: {
       saidas: nSaidas, canceladas: nCancel, vSaidas, entradas: (d.entradas || []).length,
       vEntradas, debitos, creditos, aRecolher, combustiveis: combys.length,
+      ctes: ctes.length, vCtes, icmsCtes,
     },
   };
 }

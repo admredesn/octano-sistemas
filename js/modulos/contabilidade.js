@@ -230,7 +230,7 @@ async function gerarSpedFiscal() {
   // dia anterior tambem: abre o estoque do 1o dia do 1300
   const dtAntes = new Date(new Date(dtIni + 'T12:00:00').getTime() - 86400000).toISOString().slice(0, 10);
   try {
-    const [nfces, entradas, produtos, tanques, bicos, medicoes, abastecimentos, cfgRow] = await Promise.all([
+    const [nfces, entradas, produtos, tanques, bicos, medicoes, abastecimentos, cfgRow, ctes] = await Promise.all([
       _spedTudo(q => sb.from('oct_nfce')
         .select('numero,serie,chave_nfe,status,valor_total,data_emissao,criado_em,itens')
         .eq('empresa_id', empresaId).gte('data_emissao', dtIni).lte('data_emissao', dtFim + 'T23:59:59')
@@ -252,13 +252,20 @@ async function gerarSpedFiscal() {
         .gte('data_abast', dtIni).lte('data_abast', dtFim + 'T23:59:59')
         .order('data_abast').range(q * 1000, q * 1000 + 999)),
       sb.from('oct_empresas').select('sped_config').eq('id', empresaId).single().then(r => r.data, () => null),
+      // CT-e do período (11/10/2026): o montador escolhe os que entram (posto tomador, autorizado, modelo 57/67).
+      // Tabela ausente ou sem acesso = segue sem o bloco D, como antes.
+      sb.from('oct_cte_recebidos')
+        .select('chave_cte,situacao,modelo,serie,numero,emissao,tp_cte,cfop,emit_cnpj,emit_nome,emit_ie,emit_mun,tomador_tipo,sou_tomador,mun_ini,mun_fim,valor_prestacao,icms_cst,icms_bc,icms_aliq,icms_valor,xml')
+        .eq('empresa_id', empresaId).eq('tipo', 'cte').eq('sou_tomador', true)
+        .gte('emissao', dtIni).lte('emissao', dtFim + 'T23:59:59').order('emissao')
+        .then(r => r.data || [], () => []),
     ]);
     const cfg = (cfgRow && cfgRow.sped_config) || {};
     _spedPreencherCfg(cfg);
     const r = spedFiscalMontar({
       codVer: codVer, dtIni: dtIni, dtFim: dtFim, empresa: empresa, cfg: cfg,
       nfces: nfces, entradas: entradas, produtos: produtos, tanques: tanques,
-      bicos: bicos, medicoes: medicoes, abastecimentos: abastecimentos,
+      bicos: bicos, medicoes: medicoes, abastecimentos: abastecimentos, ctes: ctes,
     });
     window._spedFiscalTxt = r.linhas.join('\r\n') + '\r\n';
     window._spedFiscalNome = 'SPED_FISCAL_' + ano + '_' + String(mes).padStart(2, '0') + '.txt';
@@ -268,6 +275,7 @@ async function gerarSpedFiscal() {
       + '<div style="color:#888;font-size:0.8rem;margin-top:2px">'
       + rs.saidas + ' NFC-e (' + rs.canceladas + ' canc.) R$ ' + rs.vSaidas.toFixed(2)
       + ' · ' + rs.entradas + ' entradas R$ ' + rs.vEntradas.toFixed(2)
+      + ' · ' + (rs.ctes || 0) + ' CT-e R$ ' + Number(rs.vCtes || 0).toFixed(2)
       + ' · débitos R$ ' + rs.debitos.toFixed(2) + ' · créditos R$ ' + rs.creditos.toFixed(2)
       + ' · a recolher R$ ' + rs.aRecolher.toFixed(2) + ' · ' + rs.combustiveis + ' combustível(is) no 1300</div></div>'
       + '<button onclick="downloadSped(&quot;fiscal&quot;)" class="btn-salvar">⬇ Baixar TXT</button></div>'
@@ -278,7 +286,8 @@ async function gerarSpedFiscal() {
         : '')
       + '<div style="background:#1a2a1a;border:1px solid #2a5a3a;border-radius:8px;padding:10px;margin-bottom:12px;color:#7be0a0;font-size:0.8rem">'
       + 'Este arquivo NÃO vai direto para a Receita: envie ao CONTADOR para validar no PVA (o validador oficial). '
-      + 'O que esta fase não cobre (fretes D100, energia C500, inventário H) ele complementa por lá.</div>'
+      + 'Os fretes (D100/D190) entram sozinhos pelos CT-e em que o posto é o tomador, sem crédito de ICMS. '
+      + 'O que esta fase não cobre (energia C500, inventário H) ele complementa por lá.</div>'
       + '<pre style="color:#8a8;font-size:0.72rem;max-height:320px;overflow:auto;margin:0">'
       + escHtml(r.linhas.slice(0, 120).join('\n'))
       + (r.linhas.length > 120 ? '\n... mais ' + (r.linhas.length - 120) + ' registros (baixe o TXT)' : '')

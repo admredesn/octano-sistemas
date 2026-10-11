@@ -16,7 +16,7 @@
 // funções puras — testadas fora do navegador.
 // ============================================================
 
-let _cte = { linhas: [], notas: {}, semCte: [], controle: null, erro: null, transp: '', soPosto: false, carga: 'comb', carregando: false };
+let _cte = { linhas: [], notas: {}, semCte: [], debitos: [], titulos: [], controle: null, erro: null, transp: '', soPosto: false, carga: 'comb', carregando: false };
 
 const _CTE_COLS = 'id,nsu,chave_cte,situacao,desacordo,modelo,serie,numero,emissao,tp_cte,cfop,emit_cnpj,emit_nome,emit_uf,' +
   'tomador_tipo,tomador_cnpj,tomador_nome,rem_cnpj,rem_nome,dest_cnpj,dest_nome,papel,sou_tomador,mun_ini_nome,uf_ini,mun_fim_nome,uf_fim,' +
@@ -158,6 +158,78 @@ function cteResumo(ligados) {
   };
 }
 
+// ---------- conferência do pagamento (puras) ----------
+// CARGA = os CT-e que o posto paga, da mesma transportadora, emitidos no mesmo dia. É assim que se paga:
+// no AC uma viagem sai em 2 ou 3 CT-e (um por nota) e o Pix é um só, do total (R$ 2.412,00 por 10.000 L).
+function cteCargas(ligados) {
+  const por = {};
+  (ligados || []).filter(l => l.sou_tomador && l.situacao !== 'cancelado' && Number(l.valor_prestacao || 0) > 0).forEach(l => {
+    const k = (l.emit_cnpj || l.emit_nome || '?') + '|' + String(l.emissao || '').slice(0, 10);
+    const c = por[k] = por[k] || { k, cnpj: String(l.emit_cnpj || ''), nome: l.emit_nome, dia: String(l.emissao || '').slice(0, 10), ctes: [], valor: 0 };
+    c.ctes.push(l); c.valor = Math.round((c.valor + Number(l.valor_prestacao || 0)) * 100) / 100;
+  });
+  return Object.values(por).sort((a, b) => a.dia.localeCompare(b.dia) || a.k.localeCompare(b.k));
+}
+
+function _cteDias(a, b) { return Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400e3); }
+
+// Casa cada carga com o que a pagou. Devolve as cargas com _pag preenchido (ou null) e marca em cada CT-e.
+//   titulos = contas a pagar [{id, valor, vencimento, status, data_pagamento, doc (CNPJ só dígitos), descricao}]
+//   debitos = saídas do extrato  [{id, data, valor, descricao, info, doc}]
+// Ordem: (1) título do próprio fornecedor com o valor da carga; (2) débito de mesmo valor de D−1 a D+20 dias —
+// "certo" se o extrato traz o CNPJ da transportadora, "provável" se só o valor e a data batem (Pix para o
+// motorista, boleto sem nome); (3) um pagamento que soma várias cargas SEGUIDAS da mesma transportadora (boleto
+// semanal/quinzenal). Cada pagamento serve a uma carga só (ou a um grupo só).
+function cteCasarPagamentos(cargas, debitos, titulos) {
+  const dig = s => String(s || '').replace(/\D/g, '');
+  const igual = (a, b) => Math.abs(Number(a) - Number(b)) <= 0.015;
+  const usadoD = new Set(), usadoT = new Set();
+  const marcar = (cs, pag) => cs.forEach(c => { c._pag = Object.assign({ cargas: cs.length }, pag); c.ctes.forEach(l => { l._pag = c._pag; }); });
+  (cargas || []).forEach(c => { c._pag = null; c.ctes.forEach(l => { l._pag = null; }); });
+  const doCnpj = (x, cnpj) => !!cnpj && (dig(x.doc).slice(0, 8) === cnpj.slice(0, 8) || dig(x.info).includes(cnpj.slice(0, 8)));
+
+  // 1) título em contas a pagar do próprio fornecedor
+  (cargas || []).forEach(c => {
+    const t = (titulos || []).filter(x => !usadoT.has(x.id) && doCnpj(x, c.cnpj) && igual(x.valor, c.valor) && _cteDias(c.dia, x.vencimento || c.dia) >= -3)
+      .sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)))[0];
+    if (t) { usadoT.add(t.id); marcar([c], { tipo: 'titulo', certeza: 'certo', data: t.data_pagamento || t.vencimento, pago: t.status === 'pago' || !!t.data_pagamento, valor: Number(t.valor), descr: t.descricao || 'título' }); }
+  });
+  // 2) débito do extrato com o valor da carga
+  const debs = (debitos || []).map(d => Object.assign({}, d, { valor: Math.abs(Number(d.valor || 0)) })).sort((a, b) => String(a.data).localeCompare(String(b.data)));
+  (cargas || []).filter(c => !c._pag).forEach(c => {
+    const cand = debs.filter(d => !usadoD.has(d.id) && igual(d.valor, c.valor) && _cteDias(c.dia, d.data) >= -1 && _cteDias(c.dia, d.data) <= 20);
+    const d = cand.find(x => doCnpj(x, c.cnpj)) || cand[0];
+    if (d) { usadoD.add(d.id); marcar([c], { tipo: 'extrato', certeza: doCnpj(d, c.cnpj) ? 'certo' : 'provavel', data: d.data, pago: true, valor: d.valor, descr: d.descricao || 'débito' }); }
+  });
+  // 3) um pagamento para várias cargas seguidas da mesma transportadora
+  const porTransp = {};
+  (cargas || []).forEach(c => { (porTransp[c.cnpj || c.nome] = porTransp[c.cnpj || c.nome] || []).push(c); });
+  Object.values(porTransp).forEach(lista => {
+    const pagaveis = [].concat(
+      (titulos || []).filter(x => !usadoT.has(x.id) && doCnpj(x, lista[0].cnpj)).map(x => ({ src: 't', id: x.id, data: x.vencimento, valor: Number(x.valor), pago: x.status === 'pago' || !!x.data_pagamento, quando: x.data_pagamento || x.vencimento, descr: x.descricao || 'título', certeza: 'certo' })),
+      debs.filter(d => !usadoD.has(d.id)).map(d => ({ src: 'd', id: d.id, data: d.data, valor: d.valor, pago: true, quando: d.data, descr: d.descricao || 'débito', certeza: doCnpj(d, lista[0].cnpj) ? 'certo' : 'provavel' })))
+      .sort((a, b) => String(a.data).localeCompare(String(b.data)));
+    pagaveis.forEach(p => {
+      const livres = lista.filter(c => !c._pag && _cteDias(c.dia, p.data) >= -1 && _cteDias(c.dia, p.data) <= 60);
+      for (let i = 0; i < livres.length; i++) {
+        let soma = 0;
+        for (let j = i; j < livres.length && j < i + 12; j++) {
+          soma = Math.round((soma + livres[j].valor) * 100) / 100;
+          if (j > i && igual(soma, p.valor)) {
+            (p.src === 't' ? usadoT : usadoD).add(p.id);
+            marcar(livres.slice(i, j + 1), { tipo: p.src === 't' ? 'titulo' : 'extrato', certeza: p.certeza, data: p.quando, pago: p.pago, valor: p.valor, descr: p.descr });
+            return;
+          }
+          if (soma > p.valor + 0.015) break;
+        }
+      }
+    });
+  });
+  const pagas = (cargas || []).filter(c => c._pag && c._pag.pago), abertas = (cargas || []).filter(c => c._pag && !c._pag.pago), sem = (cargas || []).filter(c => !c._pag);
+  const soma = cs => Math.round(cs.reduce((s, c) => s + c.valor, 0) * 100) / 100;
+  return { cargas: cargas || [], pago: soma(pagas), nPago: pagas.length, aberto: soma(abertas), nAberto: abertas.length, sem: soma(sem), nSem: sem.length };
+}
+
 // ---------- dados ----------
 async function _cteCarregar() {
   const eid = _manifEmpresaId, per = _ctePeriodo();
@@ -206,6 +278,22 @@ async function _cteCarregar() {
     (data || []).filter(c => c.situacao !== 'cancelado').forEach(c => (c.chaves_nfe || []).forEach(k => citadas.add(k)));
   }
   _cte.semCte = comb.filter(n => !citadas.has(n.chave)).sort((a, b) => String(b.emissao).localeCompare(String(a.emissao)));
+
+  // PAGAMENTO dos fretes que o posto paga: saídas do extrato e títulos, do começo do período até 60 dias depois
+  _cte.debitos = []; _cte.titulos = [];
+  if (_cte.linhas.some(l => l.sou_tomador)) {
+    const mais = (d, n) => _cteIso(new Date(new Date(d + 'T12:00:00').getTime() + n * 86400e3));
+    try {
+      const { data: mv } = await sb.from('oct_banco_movimentos').select('id,data,valor,descricao,info,cpf_cnpj').eq('empresa_id', eid).eq('tipo', 'debito')
+        .gte('data', mais(per.ini, -1)).lte('data', mais(per.fim, 60)).order('data').limit(5000);
+      _cte.debitos = (mv || []).map(m => ({ id: m.id, data: m.data, valor: m.valor, descricao: m.descricao, info: m.info, doc: m.cpf_cnpj }));
+    } catch (e) { /* sem extrato: a conferência mostra só os títulos */ }
+    try {
+      const { data: tt } = await sb.from('oct_contas_pagar').select('id,valor,vencimento,status,data_pagamento,descricao,oct_pessoas(documento)').eq('empresa_id', eid)
+        .gte('vencimento', mais(per.ini, -3)).lte('vencimento', mais(per.fim, 90)).limit(3000);
+      _cte.titulos = (tt || []).map(x => ({ id: x.id, valor: x.valor, vencimento: x.vencimento, status: x.status, data_pagamento: x.data_pagamento, descricao: x.descricao, doc: (x.oct_pessoas || {}).documento }));
+    } catch (e) { /* idem */ }
+  }
 }
 
 // chamada pela Manifestação ao abrir a aba (o auto-refresh de 15 s passa silencioso=true: aqui não recarrega)
@@ -251,7 +339,10 @@ function cteRender() {
   const per = _ctePeriodo();
   const todos = cteLigar(_cte.linhas, _cte.notas);
   const resumoGeral = cteResumo(todos);              // marca _fora com a mediana do período inteiro
+  cteCasarPagamentos(cteCargas(todos), _cte.debitos, _cte.titulos);   // marca _pag em cada CT-e que o posto paga
   const lista = _cteFiltradas(todos);
+  const pg = (() => { const cs = cteCargas(lista); const soma = f => Math.round(cs.filter(f).reduce((s, c) => s + c.valor, 0) * 100) / 100;
+    return { pago: soma(c => c.ctes[0]._pag && c.ctes[0]._pag.pago), aberto: soma(c => c.ctes[0]._pag && !c.ctes[0]._pag.pago), sem: soma(c => !c.ctes[0]._pag), nSem: cs.filter(c => !c.ctes[0]._pag).length, n: cs.length }; })();
   const r = (_cte.transp || _cte.soPosto || _cte.carga || (document.getElementById('manif-busca')?.value || '').trim()) ? cteResumo(lista) : resumoGeral;
   const qtd = document.getElementById('manif-qtd'); if (qtd) qtd.textContent = lista.length;
 
@@ -299,6 +390,9 @@ function cteRender() {
       <td style="text-align:right;font-weight:600">${_cteMoney(l.valor_prestacao)}</td>
       <td style="text-align:right;color:${l._fora ? '#fbbf24' : '#e5e7eb'}">${l._porLitro != null ? _cteNum(l._porLitro, 4) : '—'}</td>
       <td style="text-align:right;color:#8892a0" title="CST ${_cteEsc(l.icms_cst || '—')} · base ${_cteNum(l.icms_bc, 2)} · alíquota ${_cteNum(l.icms_aliq, 2)}%">${l.icms_valor ? _cteNum(l.icms_valor, 2) : '—'}</td>
+      <td style="font-size:0.74rem">${!l.sou_tomador || canc ? '<span style="color:#556">—</span>' : !l._pag
+        ? '<span style="color:#fbbf24" title="Nenhuma saída do extrato nem título com o valor desta carga (de 1 dia antes a 20 dias depois)">não achei</span>'
+        : `<span style="color:${l._pag.pago ? (l._pag.certeza === 'certo' ? '#7ee2a0' : '#a3d9b1') : '#fbbf24'}" title="${_cteEsc(l._pag.descr || '')} · ${_cteMoney(l._pag.valor)}${l._pag.cargas > 1 ? ' · um pagamento para ' + l._pag.cargas + ' cargas' : ''}${l._pag.certeza === 'provavel' ? ' · PROVÁVEL: bate o valor e a data, mas o extrato não traz o nome da transportadora' : ''}">${l._pag.pago ? '✓ ' + _cteData(l._pag.data) : 'vence ' + _cteData(l._pag.data)}${l._pag.certeza === 'provavel' ? ' ?' : ''}</span><br><span style="color:#667;font-size:0.66rem">${l._pag.tipo === 'titulo' ? 'contas a pagar' : _cteEsc(String(l._pag.descr || 'extrato').toLowerCase().slice(0, 22))}</span>`}</td>
       <td>${avisos}${l.sou_tomador && !canc ? '<span class="cte-tag" style="background:#10283a;color:#7ab8f0" title="O posto é o tomador: este CT-e entra no SPED como aquisição de frete (D100)">SPED</span>' : ''}</td>
       <td style="white-space:nowrap">
         <label title="${l.conferido ? 'Conferido por ' + _cteEsc(l.conferido_por || '?') + ' em ' + (quando(l.conferido_em) || '') : 'Marcar como conferido'}" style="cursor:pointer;color:${l.conferido ? '#7ee2a0' : '#667'}">
@@ -320,6 +414,7 @@ function cteRender() {
     <div style="padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap">
       ${card('Fretes no período', _cteMoney(r.total), r.n + ' CT-e' + (r.cancelados ? ' · ' + r.cancelados + ' cancelado(s)' : ''))}
       ${card('Pago pelo posto', _cteMoney(r.posto), 'o posto é o tomador' + (r.icmsPosto ? ' · ICMS ' + _cteMoney(r.icmsPosto) : ''), '#7ee2a0')}
+      ${card('Pagamento localizado', _cteMoney(pg.pago), pg.n ? (pg.nSem ? `falta achar ${_cteMoney(pg.sem)} (${pg.nSem} carga${pg.nSem > 1 ? 's' : ''})` : 'todas as cargas') + (pg.aberto ? ' · a vencer ' + _cteMoney(pg.aberto) : '') : 'nenhum frete do posto', pg.nSem ? '#fbbf24' : '#7ee2a0')}
       ${card('Por conta de terceiros', _cteMoney(r.terceiros), 'fornecedor ou outro paga')}
       ${card('Litros transportados', r.litros ? _cteNum(r.litros) + ' L' : '—', 'pelas notas ligadas')}
       ${card('Frete médio por litro', r.medio != null ? 'R$ ' + _cteNum(r.medio, 4) : '—', 'frete ÷ litros', '#fdba74')}
@@ -343,8 +438,8 @@ function cteRender() {
     <div class="cte-sec">CT-e do período (${lista.length})</div>
     <div class="manif-tabela-scroll" style="max-height:48vh"><table class="manif-tabela cte-tab"><thead><tr>
       <th>Emissão</th><th>Nº/série</th><th>Transportadora</th><th>Quem paga</th><th>Percurso</th><th>Notas transportadas</th>
-      <th style="text-align:right">Litros</th><th style="text-align:right">Frete</th><th style="text-align:right">R$/L</th><th style="text-align:right">ICMS</th><th></th><th></th></tr></thead>
-      <tbody>${linhas || '<tr><td colspan="12" class="manif-vazio">Nenhum CT-e encontrado neste período' + (k ? '.' : ' — o robô ainda não fez a primeira consulta.') + '</td></tr>'}</tbody></table></div>
+      <th style="text-align:right">Litros</th><th style="text-align:right">Frete</th><th style="text-align:right">R$/L</th><th style="text-align:right">ICMS</th><th>Pagamento</th><th></th><th></th></tr></thead>
+      <tbody>${linhas || '<tr><td colspan="13" class="manif-vazio">Nenhum CT-e encontrado neste período' + (k ? '.' : ' — o robô ainda não fez a primeira consulta.') + '</td></tr>'}</tbody></table></div>
     ${semCte.length ? `<div class="cte-sec" style="color:#fbbf24">Cargas de combustível sem CT-e (${semCte.length})</div>
       <p style="padding:0 14px 6px;color:#8892a0;font-size:0.74rem">Notas de compra do período que nenhum CT-e recebido cita. Costuma ser frete por conta do fornecedor em que a transportadora não pôs o posto no CT-e — ou CT-e ainda não emitido.</p>
       <div class="manif-tabela-scroll" style="max-height:24vh"><table class="manif-tabela cte-tab"><thead><tr><th>Emissão</th><th>NF</th><th>Fornecedor</th><th style="text-align:right">Litros</th><th style="text-align:right">Valor</th><th>Frete, segundo a nota</th><th>Transportadora na nota</th></tr></thead><tbody>
@@ -395,11 +490,13 @@ function cteExportarCsv() {
   if (!lista.length) { manifMsg('Nada para exportar.', 'info'); return; }
   const br = v => v == null ? '' : String(Number(v)).replace('.', ',');
   const cab = ['Emissao', 'Numero', 'Serie', 'Modelo', 'Chave CT-e', 'Situacao', 'Transportadora', 'CNPJ transportadora', 'Quem paga', 'CNPJ tomador', 'Posto paga', 'Origem', 'Destino',
-    'Notas', 'Fornecedor', 'Litros', 'Frete', 'R$ por litro', 'CFOP', 'CST ICMS', 'Base ICMS', 'Aliquota', 'ICMS', 'Placa', 'Motorista', 'Conferido'];
+    'Notas', 'Fornecedor', 'Litros', 'Frete', 'R$ por litro', 'CFOP', 'CST ICMS', 'Base ICMS', 'Aliquota', 'ICMS', 'Placa', 'Motorista', 'Conferido', 'Pagamento', 'Data pagamento', 'Onde achei'];
   const linhas = lista.map(l => [_cteData(l.emissao), l.numero, l.serie, l.modelo, l.chave_cte, l.situacao, l.emit_nome, l.emit_cnpj, l.tomador_nome, l.tomador_cnpj, l.sou_tomador ? 'sim' : 'nao',
     _cteMun(l.mun_ini_nome, l.uf_ini), _cteMun(l.mun_fim_nome, l.uf_fim),
     (l._notas || []).map(n => n.numero).join(' + '), [...new Set((l._notas || []).map(n => n.emitente))].join(' + '),
-    br(l._litros), br(l.valor_prestacao), br(l._porLitro), l.cfop, l.icms_cst, br(l.icms_bc), br(l.icms_aliq), br(l.icms_valor), l.placa, l.motorista, l.conferido ? 'sim' : 'nao']);
+    br(l._litros), br(l.valor_prestacao), br(l._porLitro), l.cfop, l.icms_cst, br(l.icms_bc), br(l.icms_aliq), br(l.icms_valor), l.placa, l.motorista, l.conferido ? 'sim' : 'nao',
+    !l.sou_tomador ? '' : !l._pag ? 'nao achei' : (l._pag.pago ? (l._pag.certeza === 'certo' ? 'pago' : 'pago (provavel)') : 'a vencer'), l._pag ? _cteData(l._pag.data) : '',
+    l._pag ? (l._pag.tipo === 'titulo' ? 'contas a pagar' : 'extrato: ' + (l._pag.descr || '')) : '']);
   const csv = [cab].concat(linhas).map(r => r.map(c => '"' + String(c ?? '').replace(/"/g, '""') + '"').join(';')).join('\r\n');
   const per = _ctePeriodo();
   const a = document.createElement('a');
