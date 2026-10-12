@@ -6,9 +6,11 @@
 // "o valor que vai para essa aba tem que vir necessariamente do fechamento de caixa, não
 //  puxar direto do banco"  (correção dele no mesmo dia)
 //
-// FONTE = o CAIXA: cada recebimento em cartão/Pix registrado na venda (oct_fila_transmissao,
-// um por abastecimento, com a forma, a bandeira e a taxa que a maquininha informou na hora do
-// casamento). O extrato EDI do PagBank (oct_cartao_transacoes, baixado pelo servidor) entra só
+// FONTE = o CAIXA, como o F.Caixa: os CUPONS (oct_pdv_vendas.pagamentos em cartão/Pix, um por
+// pagamento) + o que ainda está na FILA sem cupom (oct_fila_transmissao status 'fila'). A linha
+// da fila do mesmo cupom (numero_nfce) traz a bandeira e a taxa que a maquininha informou ao casar.
+// (12/10: no SEVEN a fila só passou a ser espelhada em 08/10 — os cupons de 07/10 ficavam de fora.)
+// O extrato EDI do PagBank (oct_cartao_transacoes, baixado pelo servidor) entra só
 // como RETORNO da adquirente: completa taxa/líquido/parcelas/previsão de pagamento do item do
 // caixa e aponta venda que está na maquininha e não no caixa. Taxas negociadas: oct_cartao_taxas
 // (Formas de Pagamento › Taxas dos cartões). Conferência de cada item: oct_cartao_caixa.
@@ -41,7 +43,7 @@ function _ctzSomaDias(iso, n) { const d = new Date(String(iso).slice(0, 10) + 'T
 
 // ---------- puras ----------
 function ctzFormaDe(f) {
-  const n = String((f && f.forma_nome) || '').toLowerCase(); const c = String((f && f.forma) || '').padStart(2, '0');
+  const n = String((f && (f.forma_nome || f.nome)) || '').toLowerCase(); const c = String((f && f.forma) || '').padStart(2, '0');
   if (/pix/.test(n) || ['17', '18', '19'].includes(c)) return 'pix';
   if (/déb|deb/.test(n) || c === '04') return 'debito';
   if (/créd|cred/.test(n) || c === '03') return 'credito';
@@ -119,17 +121,58 @@ function ctzCasarEdi(itens, txs) {
   });
   return (txs || []).filter(t => !livres.find(c => c.t === t).usado);   // o que a maquininha tem e o caixa não
 }
-// o item da aba a partir da linha do caixa (+ turno, + transação do EDI quando casou)
+// o item da aba a partir de uma linha da FILA ainda sem cupom (+ turno)
 function ctzItem(f, turno, taxas, empresaId) {
   const it = {
     id: f.id, empresa_id: empresaId, adquirente: 'pagbank', forma: ctzFormaDe(f), bandeira: f.bandeira || null,
     data_venda: _ctzDiaLocal(f.ocorrido_em), hora: _ctzHora(f.ocorrido_em), ocorrido_em: f.ocorrido_em,
     valor_bruto: ctzBruto(f), taxa_fila: Number(f.taxa || 0) > 0 ? Math.round(Number(f.taxa) * 100) / 100 : null,
-    descricao: f.descricao || '', litros: Number(f.litros || 0), vendedor: f.vendedor || '', status_fila: f.status || '', nfce: f.numero_nfce || null,
+    descricao: f.descricao || '', litros: Number(f.litros || 0), vendedor: f.vendedor || '', status_fila: f.status || '', nfce: f.numero_nfce || null, origem: 'fila',
     turno, turno_num: turno ? turno.numero : null, caixa_confirmado: !!(turno && turno.conferido_em),
     parcelas: 1, taxa_cobrada: null, data_prevista_pagamento: null, nsu: null, transacao: null,
   };
   return it;
+}
+// hora LOCAL do cupom: o abastecimento (dados.ocorrido_em, hora local) ou a emissão (data_venda, UTC de verdade)
+function _ctzHoraCupom(v) {
+  const it0 = (v.itens || []).find(x => x && x.dados && x.dados.ocorrido_em);
+  if (it0) return String(it0.dados.ocorrido_em).slice(0, 19);
+  const d = new Date(v.data_venda); if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+// os itens da aba a partir de um CUPOM: um por pagamento em cartão/Pix. A linha da fila do mesmo
+// cupom (numero_nfce; com mais de uma, a de valor igual) dá a bandeira e a taxa da maquininha.
+function ctzItensDoCupom(v, filaDoCupom, turnos, empresaId) {
+  if (String(v.status || '').toLowerCase() === 'cancelada') return [];
+  const pags = Array.isArray(v.pagamentos) ? v.pagamentos : [];
+  const filas = (filaDoCupom || []).slice();
+  const local = _ctzHoraCupom(v);
+  const turno = (v.turno_id && (turnos || []).find(x => x.id === v.turno_id)) || ctzTurnoDe({ ocorrido_em: local }, turnos);
+  const itens = (v.itens || []).filter(Boolean);
+  const descr = itens.map(i => i.desc || i.descricao || '').filter(Boolean).join(' + ');
+  const litros = itens.filter(i => i.tipo === 'abastecimento').reduce((s, i) => s + Number(i.qtd || 0), 0);
+  const out = [];
+  pags.forEach((p, i) => {
+    const forma = ctzFormaDe(p);
+    if (!forma) return;
+    const valor = Math.round(Number(p.valor || 0) * 100) / 100;
+    if (!(valor > 0)) return;
+    let fi = filas.findIndex(f => Math.abs(ctzBruto(f) - valor) < 0.005);
+    if (fi < 0 && filas.length === 1 && pags.length === 1) fi = 0;
+    const f = fi >= 0 ? filas.splice(fi, 1)[0] : null;
+    const formaFila = f ? ctzFormaDe(f) : null;
+    out.push({
+      id: f ? f.id : `venda:${v.id}:${i}`, venda_id: v.id, empresa_id: empresaId, adquirente: 'pagbank',
+      forma: formaFila || forma, bandeira: (f && f.bandeira) || p.bandeira || null,
+      data_venda: local.slice(0, 10), hora: local.slice(11, 16), ocorrido_em: local,
+      valor_bruto: valor, taxa_fila: f && Number(f.taxa || 0) > 0 ? Math.round(Number(f.taxa) * 100) / 100 : null,
+      descricao: descr, litros, vendedor: v.vendedor || v.operador || (f && f.vendedor) || '', status_fila: f ? f.status : 'cupom', nfce: v.numero || null, origem: 'cupom',
+      turno, turno_num: turno ? turno.numero : null, caixa_confirmado: !!(turno && turno.conferido_em),
+      parcelas: 1, taxa_cobrada: null, data_prevista_pagamento: null, nsu: null, transacao: null,
+    });
+  });
+  return out;
 }
 function ctzCompletar(it, taxas) {
   const tx = it.transacao;
@@ -208,9 +251,13 @@ async function _ctzCarregar() {
   _CTZ.carregando = true;
   try {
     const deTs = _CTZ.de + 'T00:00:00', ateTs = _CTZ.ate + 'T23:59:59';
-    const [fila, turnos, txs, rT, rC, rK] = await Promise.all([
+    const [vendas, fila, turnos, txs, rT, rC, rK] = await Promise.all([
+      // cupons do período (data_venda é UTC de verdade: o dia local vai de 00:00-03:00 a 23:59-03:00)
+      _ctzTudo((a, b) => sb.from('oct_pdv_vendas').select('id,numero,data_venda,turno_id,vendedor,operador,status,pagamentos,itens')
+        .eq('empresa_id', eid).gte('data_venda', deTs + '-03:00').lte('data_venda', ateTs + '-03:00').order('data_venda').order('id').range(a, b)),
+      // fila: a do mesmo período (bandeira/taxa dos cupons) + o que ainda não virou cupom
       _ctzTudo((a, b) => sb.from('oct_fila_transmissao').select('id,turno_id,descricao,litros,valor,valor_final,desconto,acrescimo,forma,forma_nome,bandeira,status,ocorrido_em,taxa,vendedor,numero_nfce')
-        .eq('empresa_id', eid).in('forma_nome', ['Crédito', 'Débito', 'Pix', 'Cartão']).gte('ocorrido_em', deTs).lte('ocorrido_em', ateTs).order('ocorrido_em').order('id').range(a, b)),
+        .eq('empresa_id', eid).in('forma_nome', ['Crédito', 'Débito', 'Pix', 'Cartão']).gte('ocorrido_em', _ctzSomaDias(_CTZ.de, -1) + 'T00:00:00').lte('ocorrido_em', _ctzSomaDias(_CTZ.ate, 1) + 'T23:59:59').order('ocorrido_em').order('id').range(a, b)),
       _ctzTudo((a, b) => sb.from('oct_pdv_turnos').select('id,numero,operador,aberto_em,fechado_em,conferido_em').eq('empresa_id', eid)
         .gte('aberto_em', _ctzSomaDias(_CTZ.de, -2) + 'T00:00:00Z').lte('aberto_em', ateTs + 'Z').order('aberto_em').range(a, b)),
       _ctzTudo((a, b) => sb.from('oct_cartao_transacoes').select('*').eq('empresa_id', eid).gte('data_venda', _CTZ.de).lte('data_venda', _CTZ.ate).order('recebido_em').range(a, b))
@@ -220,7 +267,14 @@ async function _ctzCarregar() {
       sb.from('oct_cartao_controle').select('*').eq('adquirente', 'pagbank').maybeSingle().then(r => r, () => ({ data: null })),
     ]);
     _CTZ.taxas = rT.data || []; _CTZ.contas = rC.data || []; _CTZ.controle = (rK && rK.data) || null; _CTZ.turnos = turnos; _CTZ.txs = txs;
-    const itens = fila.filter(f => ctzFormaDe(f)).map(f => ctzItem(f, ctzTurnoDe(f, turnos), _CTZ.taxas, eid));
+    const filaPorNfce = {};
+    fila.forEach(f => { if (f.numero_nfce != null) (filaPorNfce[String(f.numero_nfce)] = filaPorNfce[String(f.numero_nfce)] || []).push(f); });
+    const itens = [];
+    vendas.forEach(v => itens.push(...ctzItensDoCupom(v, filaPorNfce[String(v.numero)] || [], turnos, eid)));
+    // fila ainda sem cupom, dentro do período da tela
+    fila.filter(f => String(f.status || 'fila') === 'fila' && ctzFormaDe(f) && _ctzDiaLocal(f.ocorrido_em) >= _CTZ.de && _ctzDiaLocal(f.ocorrido_em) <= _CTZ.ate)
+      .forEach(f => itens.push(ctzItem(f, ctzTurnoDe(f, turnos), _CTZ.taxas, eid)));
+    itens.sort((a, b) => String(a.ocorrido_em).localeCompare(String(b.ocorrido_em)));
     _CTZ.fora = ctzCasarEdi(itens, txs);
     itens.forEach(it => ctzCompletar(it, _CTZ.taxas));
     // conferência de cada item (oct_cartao_caixa)
@@ -271,7 +325,7 @@ function _ctzRender() {
       <td class="ctz-td"><input type="checkbox" ${marcado ? 'checked' : ''} onclick="event.stopPropagation();ctzSel('${t.id}', event, true)"></td>
       <td class="ctz-td">${_ctzDt(t.data_venda)}</td><td class="ctz-td ctz-mut">${_ctzEsc(t.hora)}</td>
       <td class="ctz-td" style="font-size:0.7rem">${turnoTxt}<br><span class="ctz-mut">${_ctzEsc((t.vendedor || '').split(' ').slice(0, 2).join(' '))}</span></td>
-      <td class="ctz-td ctz-mut" style="font-size:0.7rem" title="${_ctzEsc(t.descricao)}">${_ctzEsc(t.descricao).slice(0, 18)}${t.litros ? ' · ' + _ctzNum(t.litros, 2) + ' L' : ''}</td>
+      <td class="ctz-td ctz-mut" style="font-size:0.7rem" title="${_ctzEsc(t.descricao)}">${t.origem === 'cupom' ? '🧾 ' + _ctzEsc(t.nfce || '') + ' · ' : '⏳ fila · '}${_ctzEsc(t.descricao).slice(0, 18)}${t.litros ? ' · ' + _ctzNum(t.litros, 2) + ' L' : ''}</td>
       <td class="ctz-td">${_CTZ_FORMA[t.forma] || ''}</td><td class="ctz-td">${_ctzEsc(t.bandeira || '')}</td>
       <td class="ctz-td ctz-r">${Number(t.parcelas || 1) > 1 ? t.parcelas + 'x' : '—'}</td>
       <td class="ctz-td ctz-r">${_ctzNum(t.valor_bruto)}</td>
@@ -364,7 +418,7 @@ function _ctzRender() {
       </table>
     </div>
     ${foraHtml}
-    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa.</p>
+    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa.</p>
   </div>`;
 }
 function ctzFiltro(k, v, digitando) {
