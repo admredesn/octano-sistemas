@@ -47,7 +47,7 @@ const PARAM_DEFS = [
     aba: 'receb',
     grupo: '💳 PagBank — EDI deste posto (aba Cartões)',
     itens: [
-      { chave: 'pagbank_edi_usuario', tipo: 'texto', rot: 'Número do estabelecimento (usuário do EDI)', pad: '',
+      { chave: 'pagbank_edi_usuario', tipo: 'texto', rot: 'Número do estabelecimento (usuário do EDI)', pad: '', validar: 'digitos',
         dica: 'só números',
         desc: 'O mesmo "usuario" da seção pagbank_edi do config_local.json deste posto. Com a conta única da rede, é o mesmo nos postos.' },
       { chave: 'pagbank_edi_token', tipo: 'senha', rot: 'Token do EDI', pad: '',
@@ -231,13 +231,24 @@ async function parGravar(ch, ligado) {
       + '\n\n→ Rode antes o SQL-PARAMETROS-PDV.sql no Supabase.');
     return false;
   }
-  _parAtual[ch] = !!ligado;
+  // TEXTO guarda a string; só liga/desliga vira boolean. Antes era !!ligado para tudo: depois de salvar um texto o valor em
+  // memória virava `true`, o redesenho mostrava "true" no campo e o próximo Salvar gravava "true" (12/10/2026, EDI do Seven).
+  _parAtual[ch] = _parEhTexto(ch) ? String(ligado == null ? '' : ligado) : !!ligado;
   return true;
 }
 
 // grava campo de texto ao sair do campo (nao a cada tecla)
+// campo com formato obrigatório (item.validar): devolve a mensagem de erro ou null
+function _parInvalido(ch, v) {
+  const def = PARAM_DEFS.flatMap(g => g.itens).find(i => i.chave === ch) || {};
+  if (v && def.validar === 'digitos' && !/^\d{4,20}$/.test(v)) return def.rot + ': só números (sem letras, espaços ou pontuação).';
+  return null;
+}
+
 async function parTexto(ch, el) {
   const v = String(el.value || '').trim();
+  const inval = _parInvalido(ch, v);
+  if (inval) { _parToast(inval, 'erro'); el.value = typeof _parAtual[ch] === 'string' ? _parAtual[ch] : ''; el.style.borderColor = '#ef4444'; return; }
   // campo de senha em branco = "nao mexi", nao "apague". Sem isso, abrir a tela
   // e salvar outro campo zeraria a senha sem ninguem perceber.
   const ehSenha = (PARAM_DEFS.flatMap(g => g.itens).find(i => i.chave === ch) || {}).tipo === 'senha';
@@ -383,6 +394,8 @@ async function parSalvarGrupo(gi) {
     const v = String(el.value || '').trim();
     // senha em branco = "nao mexi", nao "apague"
     if (i.tipo === 'senha' && !v) continue;
+    const inval = _parInvalido(i.chave, v);
+    if (inval) { _parToast(inval, 'erro'); return; }
     if (v === (_parAtual[i.chave] || '')) continue;
     const ok = await parGravar(i.chave, v);
     if (!ok) { erro = i.rot; break; }
