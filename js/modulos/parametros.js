@@ -39,6 +39,27 @@ const PARAM_DEFS = [
     ],
   },
   {
+    // 12/10/2026: EDI POR POSTO (pedido do Ronan: "separar por EDI cadastrado, para quando separarmos as contas cada posto
+    // puxar do lugar certo"). O servidor fiscal baixa o extrato de cada credencial cadastrada aqui e alimenta a aba
+    // 💳 Cartões (taxa, líquido e previsão de pagamento). Não muda o que o PDV do posto faz: o núcleo continua lendo o
+    // EDI do config_local.json. Enquanto a conta for única, cadastre a MESMA credencial nos postos e as séries das
+    // maquininhas decidem de quem é cada venda.
+    aba: 'receb',
+    grupo: '💳 PagBank — EDI deste posto (aba Cartões)',
+    itens: [
+      { chave: 'pagbank_edi_usuario', tipo: 'texto', rot: 'Número do estabelecimento (usuário do EDI)', pad: '',
+        dica: 'só números',
+        desc: 'O mesmo "usuario" da seção pagbank_edi do config_local.json deste posto. Com a conta única da rede, é o mesmo nos postos.' },
+      { chave: 'pagbank_edi_token', tipo: 'senha', rot: 'Token do EDI', pad: '',
+        desc: 'O "token" da mesma seção. Fica gravado só no banco; a tela não o mostra de volta (digite para trocar).' },
+      { chave: 'pagbank_maquininhas_cartoes', tipo: 'texto', rot: 'Séries das maquininhas — só para a aba Cartões', pad: '',
+        dica: 'PB3S262372864=pista; PB3S265J77196=loja',
+        desc: 'Diz de qual posto é cada venda do extrato na aba Cartões (separe por ponto e vírgula). NÃO mexe no PDV — diferente do campo "Números de série" do grupo abaixo, que filtra o PDV e desliga a leitura do e-mail.' },
+      { chave: 'pagbank_edi_propria', rot: 'Esta conta PagBank é só deste posto', pad: false,
+        desc: 'Ligue quando TODAS as maquininhas desta conta são deste posto (conta própria): toda venda do extrato vira deste posto, mesmo sem série cadastrada. Com a conta única da rede, deixe desligado e use as séries acima.' },
+    ],
+  },
+  {
     // 10/10/2026: conta PagBank ÚNICA da rede — o extrato EDI traz as vendas de todas as
     // maquininhas; o número de série diz de qual posto é cada uma. O núcleo lê esta chave
     // pelo espelho local (vale sem internet) e, com ela preenchida, desliga a leitura do

@@ -17,7 +17,8 @@
 // Depois de conferir, "Enviar para a Conciliação" grava no livro da conta PagBank (bruto como
 // crédito e taxa como débito, por venda, na data prevista de pagamento).
 // ============================================================
-const _CTZ = { de: null, ate: null, forma: '', bandeira: '', status: '', conf: '', caixa: 'conf', busca: '',
+// Filtros: _CTZ.* é o que está APLICADO na tabela; _CTZ.p é o que está nos campos (só vira filtro ao 🔍 Pesquisar / Enter).
+const _CTZ = { p: null, de: null, ate: null, forma: '', bandeira: '', status: '', conf: '', caixa: 'conf', busca: '',
   sel: new Set(), itens: [], fora: [], txs: [], taxas: [], contas: [], turnos: [], confs: {}, controle: null, carregando: false };
 const _CTZ_FORMA = { credito: 'Crédito', debito: 'Débito', pix: 'Pix' };
 const _CTZ_STATUS = {
@@ -231,9 +232,17 @@ async function moduloCartoes() {
   const conteudo = document.getElementById('conteudo');
   if (!podeOuAvisa('cartoes.ver')) { conteudo.innerHTML = ''; return; }
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando cartões...</p>';
-  if (!_CTZ.de) { const h = new Date(); const d = new Date(h); d.setDate(d.getDate() - 7); _CTZ.de = _ctzIso(d); _CTZ.ate = _ctzIso(h); }
+  if (!_CTZ.de) Object.assign(_CTZ, _ctzFiltrosPadrao());
+  _CTZ.p = _ctzFiltrosAplicados();
   await _ctzCarregar();
 }
+const _CTZ_CAMPOS = ['de', 'ate', 'caixa', 'forma', 'bandeira', 'status', 'conf', 'busca'];
+function _ctzFiltrosPadrao() {
+  const h = new Date(); const d = new Date(h); d.setDate(d.getDate() - 7);
+  return { de: _ctzIso(d), ate: _ctzIso(h), caixa: 'conf', forma: '', bandeira: '', status: '', conf: '', busca: '' };
+}
+function _ctzFiltrosAplicados() { const o = {}; _CTZ_CAMPOS.forEach(k => { o[k] = _CTZ[k]; }); return o; }
+function _ctzPendente() { return !!_CTZ.p && _CTZ_CAMPOS.some(k => String(_CTZ.p[k] ?? '') !== String(_CTZ[k] ?? '')); }
 function _ctzEid() { return (typeof empresaAtiva === 'function') ? empresaAtiva() : null; }
 async function _ctzTudo(fn) {
   const out = [];
@@ -312,6 +321,8 @@ function _ctzRender() {
   const r = ctzResumo(vis);
   const bandeiras = [...new Set(_CTZ.itens.map(t => t.bandeira).filter(Boolean))].sort();
   const contaPag = _CTZ.contas.find(c => c.tipo === 'pagbank');
+  const P = _CTZ.p || _ctzFiltrosAplicados();
+  const pend = _ctzPendente();
   const sel = (id, v, opts) => `<select onchange="ctzFiltro('${id}', this.value)" class="ctz-inp">${opts.map(o => `<option value="${_ctzEsc(o[0])}" ${String(v) === String(o[0]) ? 'selected' : ''}>${_ctzEsc(o[1])}</option>`).join('')}</select>`;
   const card = (rot, val, sub, cor) => `<div class="ctz-card"><div class="ctz-card-rot">${rot}</div><div class="ctz-card-val" style="color:${cor || '#e5e7eb'}">${val}</div>${sub ? `<div class="ctz-card-sub">${sub}</div>` : ''}</div>`;
   const ctrl = _CTZ.controle;
@@ -356,7 +367,7 @@ function _ctzRender() {
   <style>
     .ctz-inp{padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#e5e7eb;font-size:0.8rem}
     .ctz-btn{padding:7px 12px;border-radius:7px;border:1px solid #2a3a4a;background:#161a26;color:#cbd5e1;cursor:pointer;font-size:0.8rem;white-space:nowrap}
-    .ctz-btn:hover{border-color:#4a6a8a}.ctz-btn.azul{border-color:#2a4a6a;color:#93c5fd}.ctz-btn.verde{border-color:#2a5a3a;color:#7be0a0}
+    .ctz-btn:hover{border-color:#4a6a8a}.ctz-btn.azul{border-color:#2a4a6a;color:#93c5fd}.ctz-btn.verde{border-color:#2a5a3a;color:#7be0a0}.ctz-btn.pend{border-color:#f97316;color:#fdba74;background:#2a1a0a}
     .ctz-card{background:#0f1520;border:1px solid #2a3a4a;border-radius:10px;padding:10px 14px;min-width:150px}
     .ctz-card-rot{color:#8892a0;font-size:0.68rem;text-transform:uppercase;letter-spacing:.04em}.ctz-card-val{font-size:1.15rem;font-weight:800}.ctz-card-sub{color:#667;font-size:0.68rem;margin-top:2px}
     .ctz-td{padding:5px 7px;border-bottom:1px solid #1c1f2e;font-size:0.76rem;vertical-align:top}.ctz-r{text-align:right;white-space:nowrap}.ctz-mut{color:#8892a0}
@@ -376,14 +387,16 @@ function _ctzRender() {
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <span style="color:#8892a0;font-size:0.75rem">Venda de</span>
-      <input type="date" class="ctz-inp" value="${_CTZ.de}" onchange="ctzFiltro('de', this.value)"> <span style="color:#667">a</span>
-      <input type="date" class="ctz-inp" value="${_CTZ.ate}" onchange="ctzFiltro('ate', this.value)">
-      ${sel('caixa', _CTZ.caixa, [['conf', 'Só caixa confirmado (F.Caixa)'], ['todos', 'Todos os turnos']])}
-      ${sel('forma', _CTZ.forma, [['', 'Crédito + Débito + Pix'], ['credito', 'Crédito'], ['debito', 'Débito'], ['pix', 'Pix (maquininha)']])}
-      ${sel('bandeira', _CTZ.bandeira, [['', 'Todas as bandeiras']].concat(bandeiras.map(b => [b, b])))}
-      ${sel('status', _CTZ.status, [['', 'Tudo'], ['div', 'Só divergentes'], ['ok', 'Só o que confere'], ['sem_retorno', 'Maquininha não informou'], ['sem_regra', 'Sem taxa cadastrada']])}
-      ${sel('conf', _CTZ.conf, [['', 'Conferidos e não'], ['nao', 'Não conferidos'], ['sim', 'Conferidos'], ['semlivro', 'Ainda fora da Conciliação'], ['livro', 'Já na Conciliação']])}
-      <input class="ctz-inp" placeholder="turno, vendedor, NSU, valor…" value="${_ctzEsc(_CTZ.busca)}" oninput="ctzFiltro('busca', this.value, true)" style="width:190px">
+      <input type="date" class="ctz-inp" value="${P.de}" onchange="ctzFiltro('de', this.value)" onkeydown="_ctzEnter(event)"> <span style="color:#667">a</span>
+      <input type="date" class="ctz-inp" value="${P.ate}" onchange="ctzFiltro('ate', this.value)" onkeydown="_ctzEnter(event)">
+      ${sel('caixa', P.caixa, [['conf', 'Só caixa confirmado (F.Caixa)'], ['todos', 'Todos os turnos']])}
+      ${sel('forma', P.forma, [['', 'Crédito + Débito + Pix'], ['credito', 'Crédito'], ['debito', 'Débito'], ['pix', 'Pix (maquininha)']])}
+      ${sel('bandeira', P.bandeira, [['', 'Todas as bandeiras']].concat(bandeiras.map(b => [b, b])))}
+      ${sel('status', P.status, [['', 'Tudo'], ['div', 'Só divergentes'], ['ok', 'Só o que confere'], ['sem_retorno', 'Maquininha não informou'], ['sem_regra', 'Sem taxa cadastrada']])}
+      ${sel('conf', P.conf, [['', 'Conferidos e não'], ['nao', 'Não conferidos'], ['sim', 'Conferidos'], ['semlivro', 'Ainda fora da Conciliação'], ['livro', 'Já na Conciliação']])}
+      <input class="ctz-inp" id="ctz-busca" placeholder="turno, vendedor, NSU, valor…" value="${_ctzEsc(P.busca)}" oninput="ctzFiltro('busca', this.value)" onkeydown="_ctzEnter(event)" style="width:190px">
+      <button class="ctz-btn ${pend ? 'pend' : 'azul'}" onclick="ctzPesquisar()" title="Aplica os filtros (Enter também)">🔍 Pesquisar${pend ? ' •' : ''}</button>
+      <button class="ctz-btn" onclick="ctzLimpar()" title="Volta os filtros ao padrão (últimos 7 dias, só caixa confirmado)">✖ Limpar filtros</button>
     </div>
     ${_CTZ.caixa === 'conf' && naoConf ? `<div style="color:#fbbf24;font-size:0.74rem;margin-bottom:8px">${naoConf} recebimento(s) do período estão em turnos ainda <b>não confirmados</b> no F.Caixa e ficam de fora até a conferência do caixa. (Para vê-los: "Todos os turnos".)</div>` : ''}
     ${_CTZ.semTabela ? '<div style="color:#fbbf24;font-size:0.74rem;margin-bottom:8px">Falta rodar <b>repo/sql/SQL-CARTOES-CAIXA.sql</b>: a conferência (✔) e o envio para a Conciliação ficam desligados até lá.</div>' : ''}
@@ -421,11 +434,27 @@ function _ctzRender() {
     <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa.</p>
   </div>`;
 }
-function ctzFiltro(k, v, digitando) {
-  _CTZ[k] = v;
-  if (['de', 'ate'].includes(k)) { _ctzCarregar(); return; }
-  if (digitando) { clearTimeout(window._ctzT); window._ctzT = setTimeout(_ctzRender, 250); return; }
-  _ctzRender();
+// os campos só mudam o RASCUNHO (_CTZ.p); a tabela muda ao pesquisar
+function ctzFiltro(k, v) {
+  if (!_CTZ.p) _CTZ.p = _ctzFiltrosAplicados();
+  _CTZ.p[k] = v;
+  const b = document.querySelector('.ctz-btn[onclick="ctzPesquisar()"]');
+  if (b) { b.classList.toggle('pend', _ctzPendente()); b.classList.toggle('azul', !_ctzPendente()); b.textContent = '🔍 Pesquisar' + (_ctzPendente() ? ' •' : ''); }
+}
+function _ctzEnter(ev) { if (ev && ev.key === 'Enter') { ev.preventDefault(); ctzPesquisar(); } }
+function ctzPesquisar() {
+  const p = _CTZ.p || _ctzFiltrosAplicados();
+  if (p.de && p.ate && p.de > p.ate) { alert('A data inicial é depois da final.'); return; }
+  const mudouPeriodo = p.de !== _CTZ.de || p.ate !== _CTZ.ate;
+  _CTZ_CAMPOS.forEach(k => { _CTZ[k] = p[k]; });
+  _CTZ.sel.clear();
+  if (mudouPeriodo) _ctzCarregar(); else _ctzRender();
+}
+function ctzLimpar() {
+  Object.assign(_CTZ, _ctzFiltrosPadrao());
+  _CTZ.p = _ctzFiltrosAplicados();
+  _CTZ.sel.clear();
+  _ctzCarregar();
 }
 function ctzSel(id) { if (_CTZ.sel.has(id)) _CTZ.sel.delete(id); else _CTZ.sel.add(id); _ctzRender(); }
 function ctzSelTodas(marcar) { _CTZ.sel = marcar ? new Set(_ctzVisiveis().map(t => t.id)) : new Set(); _ctzRender(); }
@@ -436,10 +465,11 @@ async function ctzBaixar() {
   const btns = document.querySelectorAll('.ctz-btn'); btns.forEach(b => { b.disabled = true; });
   try {
     const r = await fetch((typeof SEFAZ_URL !== 'undefined' ? SEFAZ_URL : 'https://octano-sefaz-production-66d4.up.railway.app') + '/cartoes/baixar',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ de, ate }) });
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ de, ate, empresa_id: _ctzEid() }) });
     const j = await r.json();
     if (!j.ok) { alert('Não baixou: ' + (j.motivo || 'erro')); return; }
-    alert(`✔ ${j.vendas} transação(ões) da adquirente no período${j.sem_posto ? `\n⚠ ${j.sem_posto} de maquininha sem posto cadastrado (Parâmetros › Recebimentos)` : ''}`);
+    const er = j.erros ? Object.entries(j.erros).map(e => e[0] + ': ' + e[1]).join('\n') : '';
+    alert(`✔ ${j.vendas} transação(ões) da adquirente no período${j.sem_posto ? `\n⚠ ${j.sem_posto} de maquininha sem posto (cadastre a série em Parâmetros › Recebimentos)` : ''}${er ? '\n\n⚠ Credencial com erro:\n' + er : ''}`);
     await _ctzCarregar();
   } catch (e) { alert('Erro: ' + (e.message || e)); }
   finally { btns.forEach(b => { b.disabled = false; }); }
