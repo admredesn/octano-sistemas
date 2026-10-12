@@ -30,6 +30,18 @@ const _CTZ_STATUS = {
 };
 const _CTZ_TOL = 0.01;          // centavo de arredondamento da adquirente
 const _CTZ_CASA_MIN = 20;       // caixa × EDI: mesma venda = mesmo valor e forma, até 20 min de diferença
+const _CTZ_CASA_LOTE_MIN = 120; // cupom emitido em lote / relógio da maquininha: mesmo valor, forma e bandeira, até 2 h
+const _CTZ_CASA_FORMA_MIN = 60; // forma trocada (caixa Débito × maquininha Pix): mesmo valor, até 1 h
+const _CTZ_CASA_CENT = 10;      // cupom × maquininha com poucos centavos de diferença (cupom recalcula litros × preço): até 10 centavos
+// Passos do casamento, do mais seguro ao mais frouxo. Cada passo só vê o que os anteriores deixaram, e dentro dele as
+// duplas mais próximas no tempo vencem (a ordem dos itens na tela não decide quem fica com a transação).
+const _CTZ_PASSOS = [
+  { tipo: 'exato',   forma: 'igual',     band: 'compat',  dc: 0,             min: _CTZ_CASA_MIN },
+  { tipo: 'horario', forma: 'igual',     band: 'compat',  dc: 0,             min: _CTZ_CASA_LOTE_MIN },
+  { tipo: 'forma',   forma: 'diferente', band: 'pix_ou_compat', dc: 0,       min: _CTZ_CASA_FORMA_MIN },
+  { tipo: 'valor',   forma: 'igual',     band: 'compat',  dc: _CTZ_CASA_CENT, min: _CTZ_CASA_MIN },
+  { tipo: 'forma',   forma: 'diferente', band: 'pix_ou_compat', dc: _CTZ_CASA_CENT, min: _CTZ_CASA_MIN },   // forma trocada E centavos
+];
 
 function _ctzEsc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function _ctzNum(v, dec) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: dec == null ? 2 : dec, maximumFractionDigits: dec == null ? 2 : dec }); }
@@ -99,28 +111,70 @@ function ctzAvaliar(it, regra, tol) {
   const prazoDiverge = regra.prazo_dias != null && prazo != null && Number(regra.prazo_dias) !== prazo;
   return Object.assign(base, { dif, prazoDiverge, status: Math.abs(dif) <= tol + 1e-9 ? 'ok' : dif > 0 ? 'maior' : 'menor' });
 }
-// casa cada item do caixa com a transação do EDI: mesma forma, mesmo valor, até 20 min de distância,
-// bandeira igual quando as duas existem; cada transação serve a um item só (a mais próxima no tempo).
+// A bandeira pela FAMÍLIA: o débito da Mastercard é "Maestro", o da Visa é "Visa Electron" — o caixa grava o nome do
+// cartão e o EDI o do arranjo (DEBIT_MASTERCARD), e antes disso eram "bandeiras diferentes" (24 de 71 em 08/10 no SEVEN).
+function _ctzBandeiraChave(b) {
+  const s = String(b || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
+  if (!s) return '';
+  if (/maestro|master/.test(s)) return 'mastercard';
+  if (/visa/.test(s)) return 'visa';
+  if (/^elo/.test(s)) return 'elo';
+  if (/amex|americanexpress/.test(s)) return 'amex';
+  if (/hiper/.test(s)) return 'hipercard';
+  return s;
+}
+// casa cada item do caixa com a transação do EDI, em passos (ver _CTZ_PASSOS): 1) mesma forma/valor/bandeira em até 20 min;
+// 2) o mesmo até 2 h (cupom emitido em lote); 3) forma trocada na maquininha (caixa Débito × Pix) com o mesmo valor em até 1 h;
+// 4) poucos centavos de diferença entre cupom e maquininha, mesma forma e bandeira em até 20 min.
+// Cada transação serve a um item só; dentro de um passo, a dupla mais próxima no tempo ganha.
+// it.casamento = { tipo, min (valor absoluto), dt (min; + = a maquininha registrou depois), dv (maquininha − caixa, R$) }.
 function ctzCasarEdi(itens, txs) {
-  const livres = (txs || []).map(t => ({ t, ts: Date.parse(t.recebido_em), usado: false }));
+  const livres = (txs || []).map(t => ({ t, ts: Date.parse(t.recebido_em), usado: false, cents: Math.round(Number(t.valor_bruto || 0) * 100), band: _ctzBandeiraChave(t.bandeira), forma: String(t.forma || '') }));
+  const porCents = new Map();
+  livres.forEach(c => { if (isNaN(c.ts)) return; const a = porCents.get(c.cents); if (a) a.push(c); else porCents.set(c.cents, [c]); });
+  const pend = [];
   (itens || []).forEach(it => {
-    it.transacao = null;
+    it.transacao = null; it.casamento = null;
     const ts = _ctzTsLocal(it.ocorrido_em);
     if (ts == null) return;
-    let melhor = null;
-    livres.forEach(c => {
-      if (c.usado || isNaN(c.ts)) return;
-      const t = c.t;
-      if (String(t.forma || '') !== it.forma) return;
-      if (Math.abs(Number(t.valor_bruto || 0) - it.valor_bruto) > 0.005) return;
-      const dmin = Math.abs(c.ts - ts) / 60e3;
-      if (dmin > _CTZ_CASA_MIN) return;
-      if (it.bandeira && t.bandeira && String(it.bandeira).toLowerCase() !== String(t.bandeira).toLowerCase()) return;
-      if (!melhor || dmin < melhor.dmin) melhor = { c, dmin };
-    });
-    if (melhor) { melhor.c.usado = true; it.transacao = melhor.c.t; }
+    pend.push({ it, ts, cents: Math.round(Number(it.valor_bruto || 0) * 100), band: _ctzBandeiraChave(it.bandeira), feito: false });
   });
-  return (txs || []).filter(t => !livres.find(c => c.t === t).usado);   // o que a maquininha tem e o caixa não
+  _CTZ_PASSOS.forEach(ps => {
+    const pares = [];
+    pend.forEach((p, ordem) => {
+      if (p.feito) return;
+      for (let d = -ps.dc; d <= ps.dc; d++) {
+        (porCents.get(p.cents + d) || []).forEach(c => {
+          if (c.usado) return;
+          const mesmaForma = c.forma === p.it.forma;
+          if (ps.forma === 'igual' ? !mesmaForma : mesmaForma) return;
+          const compat = !p.band || !c.band || p.band === c.band;
+          if (ps.band === 'compat' ? !compat : !(compat || c.forma === 'pix' || p.it.forma === 'pix')) return;
+          const dt = (c.ts - p.ts) / 60e3;
+          if (Math.abs(dt) > ps.min) return;
+          pares.push({ p, c, dt, dv: d, custo: Math.abs(dt) + Math.abs(d) * 0.5, ordem });
+        });
+      }
+    });
+    pares.sort((a, b) => (a.custo - b.custo) || (a.ordem - b.ordem));
+    pares.forEach(x => {
+      if (x.p.feito || x.c.usado) return;
+      x.p.feito = true; x.c.usado = true;
+      x.p.it.transacao = x.c.t;
+      x.p.it.casamento = { tipo: ps.tipo, min: Math.round(Math.abs(x.dt)), dt: Math.round(x.dt), dv: Math.round((x.c.cents - x.p.cents)) / 100 };
+    });
+  });
+  return livres.filter(c => !c.usado).map(c => c.t);   // o que a maquininha tem e o caixa não
+}
+// o aviso do casamento que NÃO foi exato (a coluna EDI/NSU mostra): null quando casou igualzinho
+function ctzCasamentoAviso(it) {
+  const c = it && it.casamento, t = it && it.transacao;
+  if (!c || !t || c.tipo === 'exato') return null;
+  const quando = c.min ? `${c.min} min ${c.dt > 0 ? 'depois' : 'antes'} do horário do cupom` : 'no mesmo horário';
+  if (c.tipo === 'horario') return { txt: `⏱ ${c.min} min`, cor: '#fbbf24', title: `Mesmo valor, forma e bandeira; a maquininha registrou a venda ${quando} (cupom emitido depois / relógio da maquininha).` };
+  if (c.tipo === 'forma') return { txt: `⚠ maquininha: ${_CTZ_FORMA[t.forma] || t.forma}`, cor: '#f87171', title: `No caixa a venda está como ${_CTZ_FORMA[it.forma_caixa || it.forma] || it.forma_caixa || it.forma}, mas a maquininha registrou ${_CTZ_FORMA[t.forma] || t.forma} (${c.dv ? 'valor ' + _ctzNum(Math.abs(c.dv)) + ' ' + (c.dv > 0 ? 'maior' : 'menor') + ' na maquininha' : 'mesmo valor'}, ${quando}). A taxa é avaliada pela forma da maquininha — confira o recebimento no caixa.` };
+  if (c.tipo === 'valor') return { txt: `≈ ${c.dv > 0 ? '+' : '−'}R$ ${_ctzNum(Math.abs(c.dv))}`, cor: '#fbbf24', title: `Valor do cupom R$ ${_ctzNum(it.valor_bruto)} × valor na maquininha R$ ${_ctzNum(t.valor_bruto)} (diferença de centavos, ${quando}).` };
+  return null;
 }
 // o item da aba a partir de uma linha da FILA ainda sem cupom (+ turno)
 function ctzItem(f, turno, taxas, empresaId) {
@@ -182,7 +236,10 @@ function ctzCompletar(it, taxas) {
     it.taxa_cobrada = Math.round((Number(tx.taxa_valor || 0) + Number(tx.tarifa_valor || 0)) * 100) / 100;
     it.data_prevista_pagamento = tx.data_prevista_pagamento || null;
     it.nsu = tx.nsu || null;
-    if (!it.bandeira && tx.bandeira) it.bandeira = tx.bandeira;
+    // vale o que a ADQUIRENTE registrou (a taxa negociada é por bandeira/forma dela): Maestro vira Mastercard, Débito vira Pix…
+    if (tx.bandeira && it.bandeira && String(tx.bandeira).toLowerCase() !== String(it.bandeira).toLowerCase()) it.bandeira_caixa = it.bandeira;   // Maestro (caixa) × Mastercard (adquirente)
+    if (tx.bandeira) it.bandeira = tx.bandeira;
+    if (tx.forma && tx.forma !== it.forma) { it.forma_caixa = it.forma; it.forma = tx.forma; }
   } else {
     it.taxa_cobrada = it.taxa_fila;      // a taxa que a maquininha informou ao casar (EDI); e-mail não traz
   }
@@ -190,10 +247,12 @@ function ctzCompletar(it, taxas) {
   it.regra = ctzRegra(it, taxas);
   if (!it.data_prevista_pagamento && it.regra && it.regra.prazo_dias != null) it.data_prevista_pagamento = _ctzSomaDias(it.data_venda, it.regra.prazo_dias);
   it._av = ctzAvaliar(it, it.regra);
+  it._av.formaDiverge = !!(it.casamento && it.casamento.tipo === 'forma');
+  it._av.aviso = ctzCasamentoAviso(it);
   return it;
 }
 function ctzResumo(lista) {
-  const r = { n: 0, bruto: 0, taxas: 0, liquido: 0, esperado: 0, dif: 0, nDiv: 0, difDiv: 0, nSem: 0, nSemRet: 0, nConf: 0, nLivro: 0, nPrazo: 0, nCaixa: 0, porForma: {} };
+  const r = { n: 0, bruto: 0, taxas: 0, liquido: 0, esperado: 0, dif: 0, nDiv: 0, difDiv: 0, nSem: 0, nSemRet: 0, nConf: 0, nLivro: 0, nPrazo: 0, nCaixa: 0, nForma: 0, nAprox: 0, porForma: {} };
   (lista || []).forEach(x => {
     const a = x._av || {};
     r.n++; r.bruto += Number(x.valor_bruto || 0);
@@ -202,6 +261,8 @@ function ctzResumo(lista) {
     else if (a.status === 'sem_retorno') r.nSemRet++;
     else { r.esperado += a.esperada || 0; r.dif += a.dif || 0; if (a.status !== 'ok') { r.nDiv++; r.difDiv += a.dif || 0; } }
     if (a.prazoDiverge) r.nPrazo++;
+    if (a.formaDiverge) r.nForma++;
+    if (x.casamento && x.casamento.tipo !== 'exato' && x.transacao) r.nAprox++;
     if (x.conferido) r.nConf++;
     if (x.livro_em) r.nLivro++;
     if (x.caixa_confirmado) r.nCaixa++;
@@ -221,7 +282,9 @@ function ctzLinhasLivro(it, contaId, autor, agora) {
   const venda = `venda ${_ctzDt(it.data_venda)}${it.hora ? ' ' + it.hora : ''}`;
   const detalhe = [venda, it.turno_num ? 'turno ' + it.turno_num : '', it.nsu ? 'NSU ' + it.nsu : '', it.descricao ? it.descricao : ''].filter(Boolean).join(' · ');
   const comum = { empresa_id: it.empresa_id, conta_id: contaId, data, autor: autor || null, atualizado_em: agora, documento: it.nsu || (it.nfce ? 'NFC-e ' + it.nfce : null) };
-  const out = [Object.assign({}, comum, { natureza: 'C', valor: Number(it.valor_bruto || 0), tipo: 'venda_cartao', descricao: 'CARTÃO ' + quem, detalhe, origem: 'cartoes', origem_id: it.id })];
+  // o que o banco recebe é o valor da MAQUININHA: com centavos de diferença entre cupom e máquina, o livro segue a máquina
+  const bruto = (it.transacao && it.casamento && it.casamento.tipo === 'valor') ? Number(it.transacao.valor_bruto || 0) : Number(it.valor_bruto || 0);
+  const out = [Object.assign({}, comum, { natureza: 'C', valor: bruto, tipo: 'venda_cartao', descricao: 'CARTÃO ' + quem, detalhe, origem: 'cartoes', origem_id: it.id })];
   const taxa = it.taxa_cobrada == null ? 0 : Math.round(Number(it.taxa_cobrada) * 100) / 100;
   if (taxa > 0) out.push(Object.assign({}, comum, { natureza: 'D', valor: taxa, tipo: 'taxa_cartao', descricao: 'TAXA ' + quem, detalhe, origem: 'cartoes_taxa', origem_id: it.id }));
   return out.filter(l => l.valor > 0);
@@ -310,7 +373,8 @@ function _ctzVisiveis() {
   return _CTZ.itens.filter(t => (_CTZ.caixa !== 'conf' || t.caixa_confirmado)
     && (!_CTZ.forma || t.forma === _CTZ.forma)
     && (!_CTZ.bandeira || String(t.bandeira || '') === _CTZ.bandeira)
-    && (!_CTZ.status || (_CTZ.status === 'div' ? (t._av.status === 'maior' || t._av.status === 'menor' || t._av.prazoDiverge) : t._av.status === _CTZ.status))
+    && (!_CTZ.status || (_CTZ.status === 'div' ? (t._av.status === 'maior' || t._av.status === 'menor' || t._av.prazoDiverge || t._av.formaDiverge)
+      : _CTZ.status === 'forma' ? !!t._av.formaDiverge : t._av.status === _CTZ.status))
     && (!_CTZ.conf || (_CTZ.conf === 'sim' ? !!t.conferido : _CTZ.conf === 'nao' ? !t.conferido : _CTZ.conf === 'livro' ? !!t.livro_em : !t.livro_em))
     && (!b || [t.bandeira, t.nsu, t.descricao, t.vendedor, t.turno_num, _ctzNum(t.valor_bruto), t.valor_liquido == null ? '' : _ctzNum(t.valor_liquido), t.hora].join(' ').toLowerCase().includes(b)));
 }
@@ -337,7 +401,7 @@ function _ctzRender() {
       <td class="ctz-td">${_ctzDt(t.data_venda)}</td><td class="ctz-td ctz-mut">${_ctzEsc(t.hora)}</td>
       <td class="ctz-td" style="font-size:0.7rem">${turnoTxt}<br><span class="ctz-mut">${_ctzEsc((t.vendedor || '').split(' ').slice(0, 2).join(' '))}</span></td>
       <td class="ctz-td ctz-mut" style="font-size:0.7rem" title="${_ctzEsc(t.descricao)}">${t.origem === 'cupom' ? '🧾 ' + _ctzEsc(t.nfce || '') + ' · ' : '⏳ fila · '}${_ctzEsc(t.descricao).slice(0, 18)}${t.litros ? ' · ' + _ctzNum(t.litros, 2) + ' L' : ''}</td>
-      <td class="ctz-td">${_CTZ_FORMA[t.forma] || ''}</td><td class="ctz-td">${_ctzEsc(t.bandeira || '')}</td>
+      <td class="ctz-td"${t.forma_caixa ? ` title="no caixa: ${_ctzEsc(_CTZ_FORMA[t.forma_caixa] || t.forma_caixa)}"` : ''}>${_CTZ_FORMA[t.forma] || ''}</td><td class="ctz-td"${t.bandeira_caixa ? ` title="no caixa: ${_ctzEsc(t.bandeira_caixa)}"` : ''}>${_ctzEsc(t.bandeira || '')}</td>
       <td class="ctz-td ctz-r">${Number(t.parcelas || 1) > 1 ? t.parcelas + 'x' : '—'}</td>
       <td class="ctz-td ctz-r">${_ctzNum(t.valor_bruto)}</td>
       <td class="ctz-td ctz-r" style="color:#f0b45c">${a.cobrada == null ? '<span class="ctz-mut">—</span>' : _ctzNum(a.cobrada)}</td>
@@ -347,7 +411,7 @@ function _ctzRender() {
       <td class="ctz-td ctz-r" style="color:${a.dif == null ? '#667' : Math.abs(a.dif) <= _CTZ_TOL ? '#7ee2a0' : a.dif > 0 ? '#f87171' : '#fbbf24'};font-weight:${a.dif != null && Math.abs(a.dif) > _CTZ_TOL ? 700 : 400}">${a.dif == null ? '—' : (a.dif > 0 ? '+' : '') + _ctzNum(a.dif)}</td>
       <td class="ctz-td ctz-r" style="font-weight:600">${t.valor_liquido == null ? '<span class="ctz-mut">—</span>' : _ctzNum(t.valor_liquido)}</td>
       <td class="ctz-td ${a.prazoDiverge ? 'ctz-prazo' : ''}" title="${a.prazoDiverge ? 'Combinado: D+' + a.regra.prazo_dias : (t.transacao ? 'previsão informada pela adquirente' : 'previsão pelo prazo combinado')}">${_ctzDt(t.data_prevista_pagamento)}${a.prazo != null ? ` <span class="ctz-mut" style="font-size:0.66rem">D+${a.prazo}${t.transacao ? '' : '*'}</span>` : ''}</td>
-      <td class="ctz-td ctz-mut" style="font-size:0.7rem">${t.transacao ? _ctzEsc(t.nsu || '✓') : '<span title="sem a venda correspondente no extrato EDI">—</span>'}</td>
+      <td class="ctz-td ctz-mut" style="font-size:0.7rem">${t.transacao ? _ctzEsc(t.nsu || '✓') : '<span title="sem a venda correspondente no extrato EDI">—</span>'}${a.aviso ? `<br><span style="color:${a.aviso.cor};white-space:nowrap" title="${_ctzEsc(a.aviso.title)}">${_ctzEsc(a.aviso.txt)}</span>` : ''}</td>
       <td class="ctz-td" style="color:${st.cor};white-space:nowrap">${st.rot}${a.prazoDiverge ? ' <span title="prazo diferente do combinado" style="color:#fbbf24">⏱</span>' : ''}</td>
       <td class="ctz-td" style="text-align:center">${t.conferido ? `<span style="color:#7ee2a0" title="por ${_ctzEsc(t.conferido_por || '')} em ${t.conferido_em ? new Date(t.conferido_em).toLocaleString('pt-BR') : ''}">✓</span>` : '<span class="ctz-mut">·</span>'}${t.livro_em ? ' <span style="color:#7ea8d8" title="já na Conciliação (livro da conta PagBank)">📒</span>' : ''}</td>
     </tr>`;
@@ -356,7 +420,7 @@ function _ctzRender() {
   const foraHtml = foraVis.length ? `
     <div style="margin-top:16px">
       <div style="color:#f0b45c;font-weight:700;font-size:0.86rem;margin-bottom:6px">⚠ Na maquininha e fora do caixa (${foraVis.length}) — R$ ${_ctzNum(foraVis.reduce((s, t) => s + Number(t.valor_bruto || 0), 0))}</div>
-      <div style="color:#8892a0;font-size:0.72rem;margin-bottom:6px">Vendas que a adquirente informou no período e que não têm um recebimento igual (mesma forma, mesmo valor, até ${_CTZ_CASA_MIN} min) registrado no caixa.</div>
+      <div style="color:#8892a0;font-size:0.72rem;margin-bottom:6px">Vendas que a adquirente informou no período e que não acharam um recebimento do caixa com o mesmo valor (mesma forma e bandeira até ${_CTZ_CASA_LOTE_MIN / 60} h; forma trocada até ${_CTZ_CASA_FORMA_MIN} min; centavos de diferença até ${_CTZ_CASA_MIN} min).</div>
       <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;overflow:auto;max-height:36vh">
         <table style="width:100%;border-collapse:collapse"><thead><tr><th class="ctz-th">Data</th><th class="ctz-th">Hora</th><th class="ctz-th">Maquininha</th><th class="ctz-th">Forma</th><th class="ctz-th">Bandeira</th><th class="ctz-th" style="text-align:right">Bruto</th><th class="ctz-th" style="text-align:right">Taxa</th><th class="ctz-th" style="text-align:right">Líquido</th><th class="ctz-th">Previsão</th><th class="ctz-th">NSU</th></tr></thead>
         <tbody>${foraVis.map(t => `<tr><td class="ctz-td">${_ctzDt(t.data_venda)}</td><td class="ctz-td ctz-mut">${_ctzEsc(t.hora || '')}</td><td class="ctz-td ctz-mut" style="font-size:0.7rem">${_ctzEsc(t.maquininha || '')}</td><td class="ctz-td">${_CTZ_FORMA[t.forma] || _ctzEsc(t.forma || '')}</td><td class="ctz-td">${_ctzEsc(t.bandeira || '')}</td>
@@ -392,7 +456,7 @@ function _ctzRender() {
       ${sel('caixa', P.caixa, [['conf', 'Só caixa confirmado (F.Caixa)'], ['todos', 'Todos os turnos']])}
       ${sel('forma', P.forma, [['', 'Crédito + Débito + Pix'], ['credito', 'Crédito'], ['debito', 'Débito'], ['pix', 'Pix (maquininha)']])}
       ${sel('bandeira', P.bandeira, [['', 'Todas as bandeiras']].concat(bandeiras.map(b => [b, b])))}
-      ${sel('status', P.status, [['', 'Tudo'], ['div', 'Só divergentes'], ['ok', 'Só o que confere'], ['sem_retorno', 'Maquininha não informou'], ['sem_regra', 'Sem taxa cadastrada']])}
+      ${sel('status', P.status, [['', 'Tudo'], ['div', 'Só divergentes'], ['ok', 'Só o que confere'], ['sem_retorno', 'Maquininha não informou'], ['forma', 'Forma diferente na maquininha'], ['sem_regra', 'Sem taxa cadastrada']])}
       ${sel('conf', P.conf, [['', 'Conferidos e não'], ['nao', 'Não conferidos'], ['sim', 'Conferidos'], ['semlivro', 'Ainda fora da Conciliação'], ['livro', 'Já na Conciliação']])}
       <input class="ctz-inp" id="ctz-busca" placeholder="turno, vendedor, NSU, valor…" value="${_ctzEsc(P.busca)}" oninput="ctzFiltro('busca', this.value)" onkeydown="_ctzEnter(event)" style="width:190px">
       <button class="ctz-btn ${pend ? 'pend' : 'azul'}" onclick="ctzPesquisar()" title="Aplica os filtros (Enter também)">🔍 Pesquisar${pend ? ' •' : ''}</button>
@@ -406,7 +470,8 @@ function _ctzRender() {
       ${card('Taxas cobradas', 'R$ ' + _ctzNum(r.taxas), 'média ' + _ctzNum(r.pctMedia, 2) + '%', '#f0b45c')}
       ${card('Líquido', 'R$ ' + _ctzNum(r.liquido), null, '#7ee2a0')}
       ${card('Divergentes', _ctzNum(r.nDiv, 0), r.nDiv ? ('diferença ' + (r.difDiv > 0 ? '+' : '') + 'R$ ' + _ctzNum(r.difDiv)) : 'nenhuma taxa fora do negociado', r.nDiv ? '#f87171' : '#7ee2a0')}
-      ${r.nSemRet ? card('Maquininha não informou', _ctzNum(r.nSemRet, 0), 'sem taxa no caixa nem no EDI', '#f0b45c') : ''}
+      ${r.nSemRet ? card('Maquininha não informou', _ctzNum(r.nSemRet, 0), 'sem a venda no extrato EDI nem taxa no caixa', '#f0b45c') : ''}
+      ${r.nForma ? card('Forma diferente', _ctzNum(r.nForma, 0), 'caixa ≠ maquininha (ex.: Débito × Pix)', '#f87171') : ''}
       ${card('Sem taxa cadastrada', _ctzNum(r.nSem, 0), r.nSem ? 'cadastre em Taxas negociadas' : '', r.nSem ? '#fbbf24' : '#8892a0')}
       ${r.nPrazo ? card('Prazo diferente', _ctzNum(r.nPrazo, 0), 'previsão ≠ combinado', '#fbbf24') : ''}
       ${card('Conferidas', `${_ctzNum(r.nConf, 0)} / ${_ctzNum(r.n, 0)}`, `${_ctzNum(r.nLivro, 0)} na Conciliação`)}
@@ -431,7 +496,7 @@ function _ctzRender() {
       </table>
     </div>
     ${foraHtml}
-    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa.</p>
+    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa. Na coluna EDI/NSU: ⏱ = a maquininha registrou a venda com minutos de diferença do cupom; ⚠ maquininha: Pix = o caixa tem outra forma (confira o recebimento); ≈ = centavos de diferença entre cupom e maquininha.</p>
   </div>`;
 }
 // os campos só mudam o RASCUNHO (_CTZ.p); a tabela muda ao pesquisar
