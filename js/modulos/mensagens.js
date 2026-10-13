@@ -18,7 +18,7 @@ const MSG_MODELOS = [
   { chave: 'fatura_whatsapp',     rot: '📄 Fatura — WhatsApp',    email: false,
     desc: 'Mensagem que acompanha os PDFs no WhatsApp. Use *asterisco* para negrito.' },
   { chave: 'cobranca_email',      rot: '📣 Cobrança — e-mail',    email: true,
-    desc: 'Reenvio da fatura com lembrete de vencimento. Use {situacao} — ele vira "vencida há 5 dias", "vence hoje" ou "vence em 3 dias" sozinho.' },
+    desc: 'Reenvio da fatura com lembrete de vencimento. Escreva "...que {situacao}" — ele vira "venceu há 5 dias", "vence hoje" ou "vence em 3 dias" sozinho.' },
   { chave: 'cobranca_whatsapp',   rot: '📣 Cobrança — WhatsApp',  email: false,
     desc: 'Mesma coisa no WhatsApp, que é por onde 85 dos 91 clientes são alcançados.' },
   { chave: 'comprovante_email',   rot: '🧾 Comprovante — e-mail', email: true,
@@ -35,7 +35,7 @@ const MSG_VARS = [
   ['{valor}',      'valor (2.057,58)'],
   ['{vencimento}', 'vencimento (10/09/2026)'],
   ['{emissao}',    'data de emissão'],
-  ['{situacao}',   'vencida há N dias / vence hoje / vence em N dias'],
+  ['{situacao}',   'venceu há N dias / vence hoje / vence em N dias (escreva "que {situacao}")'],
   ['{atraso}',     'dias de atraso (0 se não venceu)'],
 ];
 
@@ -46,9 +46,19 @@ const MSG_EXEMPLO = {
   '{valor}': '2.057,58',
   '{vencimento}': '10/09/2026',
   '{emissao}': '02/09/2026',
-  '{situacao}': 'vencida há 5 dias',
+  '{situacao}': 'venceu há 5 dias',
   '{atraso}': '5',
 };
+
+// 13/10/2026 (Florestal): alguem colou a PREVIA ("Como o cliente vê") dentro do campo Texto e as 44 cobranças
+// saíram, para todos os clientes, com o nome, o nº da fatura e o valor do EXEMPLO. Estes trechos só existem na prévia:
+// se aparecerem no texto salvo, é dado fixo no lugar da variável.
+const MSG_LITERAIS_EXEMPLO = ['CENTRO DE FORMAÇÃO DE CONDUTORES', '2.057,58', '10/09/2026', '02/09/2026',
+                              'vencida há 5 dias', 'venceu há 5 dias'];
+function _msgLiteraisDeExemplo(texto) {
+  const s = String(texto || '').toUpperCase();
+  return MSG_LITERAIS_EXEMPLO.filter(l => s.includes(l.toUpperCase()));
+}
 
 let _msgAtual = {};       // chave -> linha do banco
 let _msgEmpresa = null;
@@ -177,6 +187,17 @@ async function msgSalvarTudo() {
     ativo: !!document.getElementById('msg-ativo-' + i).checked,
     atualizado_em: new Date().toISOString(), atualizado_por: quem,
   }));
+  const fixos = [];
+  linhas.forEach((l, i) => {
+    const ach = _msgLiteraisDeExemplo((l.assunto || '') + ' ' + (l.corpo || ''));
+    if (ach.length) fixos.push(MSG_MODELOS[i].rot.replace(/^[^A-Za-zÀ-ú]+/, '') + ': "' + ach.join('", "') + '"');
+  });
+  if (fixos.length) {
+    st.style.color = '#f87171';
+    st.textContent = 'Não salvei: o texto tem dados de EXEMPLO da prévia no lugar das variáveis — todo cliente receberia esse nome/valor/data. ' +
+      'Troque por {cliente}, {numero}, {valor}, {vencimento}, {situacao}. Em ' + fixos.join(' | ');
+    return;
+  }
   const vazios = linhas.filter(l => l.ativo && !String(l.corpo || '').trim());
   if (vazios.length) {
     st.style.color = '#f87171';
