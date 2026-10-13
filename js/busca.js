@@ -31,6 +31,7 @@
     cartoes: 'cartoes cartao cartões taxa taxas maquininha pagbank adquirente bandeira credito debito pix conferencia pre-conferencia divergente negociada edi',
     contabilidade: 'contabil plano de contas sped ecd contador lancamento contabil fiscal',
     contas_pagar: 'contas a pagar fornecedor boleto vencimento banco despesa titulo pagar conta fixa',
+    requisicoes: 'requisicao requisicoes compra pedido de compra fornecedor mercadoria chegada recebimento recebida duplicidade pagamento sem mercadoria divergente',
     empresa: 'empresa posto cnpj certificado digital inscricao estadual endereco dados do posto regime',
     fcaixa: 'fechamento de caixa turno sangria dinheiro resultado conferencia sobra falta deposito cofre troco operador caixa',
     faturar: 'faturar fatura boleto nota a prazo cliente cobranca receber titulo nf-e parcelar',

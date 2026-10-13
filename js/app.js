@@ -35,6 +35,7 @@ const MODULOS = [
   { id: 'prontidao',     label: '🎯 Prontidão',   breve: false },
   { id: 'produtos',      label: 'Produtos',       breve: false },
   { id: 'relatorios',    label: '📊 Relatórios',  breve: false },
+  { id: 'requisicoes',   label: '📋 Requisições', breve: false },
   { id: 'servicos',      label: '🔧 Serviços',    breve: false },
   { id: 'tanques',       label: 'Tanques',        breve: false },
   { id: 'whatsapp',      label: '📱 WhatsApp',    breve: false },
@@ -52,7 +53,7 @@ const PAPEIS = {
   gerente: { rot: 'Gerente — tudo', modulos: '*' },
   financeiro: {
     rot: 'Financeiro — faturar, pagar, conciliar',
-    modulos: ['faturar', 'contas_pagar', 'conc_banco', 'fcaixa', 'notas_prazo',
+    modulos: ['faturar', 'contas_pagar', 'requisicoes', 'conc_banco', 'fcaixa', 'notas_prazo',
               'pessoas', 'relatorios', 'bi', 'comissoes', 'cashback'],
   },
   fiscal: {
@@ -366,6 +367,7 @@ function navegarPara(modulo){
     formas_pagamento: moduloFormasPagamento,
     lmc:           moduloLmc,
     relatorios:    moduloRelatorios,
+    requisicoes:   moduloRequisicoes,
     whatsapp:      moduloWhatsapp,
     cartoes:       moduloCartoes,
     cashback:      moduloCashback,

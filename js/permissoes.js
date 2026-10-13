@@ -33,6 +33,13 @@ const PERM_CATALOGO = [
     { c: 'contas_pagar.bancos', d: 'Gerenciar bancos', p: 'gf', s: 1 },
     { c: 'contas_pagar.plano', d: 'Incluir conta no plano de contas', p: 'gfc', s: 1 },
   ]},
+  { n: 18, area: 'Retaguarda', grupo: 'Financeiro — Requisições de compra', itens: [
+    { c: 'requisicoes.ver', d: 'Acessar Requisições de compra', p: 'gfc' },
+    { c: 'requisicoes.incluir', d: 'Lançar requisição de compra', p: 'gf', s: 1 },
+    { c: 'requisicoes.receber', d: 'Confirmar a chegada da mercadoria', p: 'gf', s: 1 },
+    { c: 'requisicoes.vincular', d: 'Ligar título do Contas a pagar à requisição', p: 'gf', s: 1 },
+    { c: 'requisicoes.cancelar', d: 'Cancelar requisição', p: 'g', s: 1 },
+  ]},
   { n: 2, area: 'Retaguarda', grupo: 'Financeiro — Conciliação bancária', itens: [
     { c: 'conc_banco.ver', d: 'Acessar Conciliação', p: 'gfc' },
     { c: 'conc_banco.sincronizar', d: 'Atualizar o livro (contas pagas e vendas)', p: 'gf' },

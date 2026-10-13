@@ -19,6 +19,9 @@ async function moduloContasPagar(){
   window._todasContas=cR.data||[];
   window._bancosContas=bR.data||[];
   window._planoContas=pR.data||[];
+  // requisicoes de compra ligadas aos titulos (selo "aguardando chegada"); sem o SQL, segue sem
+  window._requisicoesTit={};
+  try{if(typeof rqMapaDosTitulos==='function')window._requisicoesTit=await rqMapaDosTitulos(window._todasContas);}catch(e){window._requisicoesTit={};}
   const abertas=window._todasContas.filter(c=>c.status==='aberto');
   const vencidas=abertas.filter(c=>c.vencimento<hoje);
   const pagas=window._todasContas.filter(c=>c.status==='pago');
@@ -155,6 +158,8 @@ function tabelaTitulos(lista,hoje){
     const corValor=pago?'#4caf50':vencida?'#f44':'#e0e0e0';
     const txtSit=pago?'LIQUIDADO':vencida?'VENCIDO':'ABERTO';
     const nfe=c.oct_nfe_entrada?'NF Nº: '+c.oct_nfe_entrada.numero+'/'+c.oct_nfe_entrada.serie:'';
+    const _rqt=c.requisicao_id?(window._requisicoesTit||{})[c.requisicao_id]:null;
+    const selo=(_rqt&&typeof rqNumero==='function')?(['pedida','parcial','divergente'].includes(_rqt.status)?'<div title="A mercadoria desta compra ainda nao chegou — baixar pede motivo" style="color:'+(c.status==='pago'?'#f87171':'#fbbf24')+';font-weight:700;font-size:0.72rem">'+(c.status==='pago'?'⚠ pago, mercadoria ainda não chegou ':'⛔ aguardando chegada ')+rqNumero(_rqt.numero)+'</div>':'<div title="Requisição '+rqNumero(_rqt.numero)+'" style="color:#4ade80;font-size:0.72rem">✔ '+rqNumero(_rqt.numero)+'</div>'):'';
     const r='<tr style="'+bg+'">'+
       '<td style="color:#555;font-size:0.75rem;text-align:center;padding:6px 8px">'+(seq++)+'</td>'+
       '<td style="font-family:monospace;font-size:0.78rem;padding:6px 8px">'+(c.n_documento||'—')+'</td>'+
@@ -164,7 +169,7 @@ function tabelaTitulos(lista,hoje){
       '<td style="font-size:0.78rem;padding:6px 8px;color:'+(pago?'#4caf50':'#555')+'">'+fmtDt(c.data_pagamento)+'</td>'+
       '<td style="font-weight:700;padding:6px 8px;color:'+corValor+'">R$ '+f(c.valor)+'</td>'+
       '<td style="padding:6px 8px"><span style="font-size:0.72rem;padding:2px 8px;border-radius:10px;font-weight:700;background:'+(pago?'#1a3a1a':vencida?'#3a1a1a':'#2a1a00')+';color:'+corSit+'">'+txtSit+'</span></td>'+
-      '<td style="font-size:0.75rem;color:#888;padding:6px 8px">'+nfe+'</td>'+
+      '<td style="font-size:0.75rem;color:#888;padding:6px 8px">'+nfe+selo+'</td>'+
       '<td style="font-size:0.75rem;color:#555;padding:6px 8px">'+(c.oct_bancos?c.oct_bancos.banco:'')+'</td>'+
       '<td style="font-size:0.72rem;color:#555;padding:6px 8px">'+(c.oct_plano_contas?c.oct_plano_contas.codigo:'')+'</td>'+
       '<td style="padding:6px 8px">'+
@@ -216,6 +221,7 @@ async function pagarConta(id){
       ' <strong style="color:#f97316">R$ '+f(conta?.valor)+'</strong>'+
       (conta?.vencimento?' <span style="color:#888">| Venc: '+new Date(conta.vencimento+'T12:00:00').toLocaleDateString('pt-BR')+'</span>':'')+
     '</div>'+
+    '<div id="pg-alerta"></div>'+
     '<div class="form-grid" style="max-width:600px">'+
       '<div class="form-group"><label>Data pagamento</label><input id="pg-data" type="date" value="'+hoje+'" /></div>'+
       '<div class="form-group"><label>Valor pago</label><input id="pg-valor" type="number" step="0.01" value="'+(conta?.valor||0)+'" /></div>'+
@@ -233,14 +239,19 @@ async function pagarConta(id){
     '</div>'+
   '</div>';
   div.scrollIntoView({behavior:'smooth'});
+  if(typeof rqPrepararAlertaPagamento==='function')rqPrepararAlertaPagamento(conta);
 }
 
 async function confirmarPagamento(id){
   if (!podeOuAvisa('contas_pagar.baixar')) return;
   const msg=document.getElementById('pg-msg');msg.textContent='Salvando...';msg.style.color='#aaa';
+  // mercadoria que nao chegou / possivel duplicidade: pede motivo/conferencia (alerta, nao bloqueio)
+  window._rqMotivoPag='';
+  if(typeof rqValidarPagamento==='function'){const v=await rqValidarPagamento(id);if(!v.ok){msg.textContent=v.erro;msg.style.color='#f44';return;}window._rqMotivoPag=v.motivo||'';}
   const{error}=await sb.from('oct_contas_pagar').update({status:'pago',data_pagamento:document.getElementById('pg-data').value,valor_pago:parseFloat(document.getElementById('pg-valor').value)||0,forma_pagamento:document.getElementById('pg-forma').value,banco_id:document.getElementById('pg-banco').value||null}).eq('id',id);
   if(error){msg.textContent='Erro: '+error.message;msg.style.color='#f44';return;}
   msg.textContent='Liquidado!';msg.style.color='#4caf50';
+  if(typeof rqRegistrarPagamento==='function'){try{await rqRegistrarPagamento(id,window._rqMotivoPag||'',parseFloat(document.getElementById('pg-valor').value)||0);}catch(e){}}
   setTimeout(()=>moduloContasPagar(),600);
 }
 
