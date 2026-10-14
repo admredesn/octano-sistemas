@@ -751,6 +751,33 @@ function abrirImportarNfe(){const a=document.getElementById('nfe-importar');cons
 function lerXmlNfe(input){if(!input.files.length)return;lerXmlNfeFile(input.files[0]);}
 function lerXmlNfeFile(file){const r=new FileReader();r.onload=async(e)=>{try{const parser=new DOMParser();const xml=parser.parseFromString(e.target.result,'text/xml');const{data:tanques}=await sb.from('oct_tanques').select('*').eq('empresa_id',_empresaId).order('numero');nfeTanques=tanques||[];await processarXmlNfe(xml,file.name,null);}catch(err){alert('Erro: '+err.message);}};r.readAsText(file,'UTF-8');}
 
+// Casa o item da nota com um produto JA' CADASTRADO (14/10/2026). Combustivel (precisaTanque + cProdANP):
+// pelo codigo ANP do cadastro — o unico com esse ANP, ou o unico COM tanque entre varios. O nome do fornecedor
+// ("GASOLINA C COMUM") e o cProd dele nao servem: nao batem com o cadastro. Codigo/nome so' valem quando nao
+// contradizem o ANP. Item que nao e' combustivel segue como antes (codigo, depois nome). Devolve {produto, via}.
+function nfeAcharProdutoDoItem(it,lista){
+  const norm=s=>(s||'').toString().trim().toLowerCase();
+  const anp=String(it.codAnp||'').trim();
+  const contradiz=p=>!!(anp&&p.cod_anp&&String(p.cod_anp).trim()!==anp);
+  if(it.precisaTanque&&anp){
+    const iguais=lista.filter(p=>p.cod_anp&&String(p.cod_anp).trim()===anp);
+    if(iguais.length===1)return{produto:iguais[0],via:'código ANP '+anp};
+    if(iguais.length>1){
+      const comTanque=iguais.filter(p=>p.tanque_id);
+      if(comTanque.length===1)return{produto:comTanque[0],via:'código ANP '+anp+' (o que tem tanque)'};
+    }
+  }
+  if(it.codigo){
+    const p=lista.find(p=>p.codigo&&norm(p.codigo)===norm(it.codigo)&&!contradiz(p));
+    if(p)return{produto:p,via:'código'};
+  }
+  if(it.descricao){
+    const p=lista.find(p=>norm(p.nome)===norm(it.descricao)&&!contradiz(p));
+    if(p)return{produto:p,via:'nome'};
+  }
+  return{produto:null,via:null};
+}
+
 async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   const d=parseNFe(xml);
   const xmlString=new XMLSerializer().serializeToString(xml);
@@ -759,19 +786,17 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   nfeXmlDados.fornecedorExistente=fornExist||null;
 
   // Para cada item, tenta identificar produto ja cadastrado: primeiro por codigo, depois por nome
-  const{data:prodsEmpresa}=await sb.from('oct_produtos').select('id,nome,codigo,unidade,estoque').eq('empresa_id',_empresaId).eq('ativo',true);
+  const{data:prodsEmpresa}=await sb.from('oct_produtos').select('id,nome,codigo,unidade,estoque,cod_anp,tanque_id').eq('empresa_id',_empresaId).eq('ativo',true);
   const lista=prodsEmpresa||[];
-  const norm=s=>(s||'').toString().trim().toLowerCase();
   for(const it of d.itens){
-    let achado=null;
-    if(it.codigo){
-      achado=lista.find(p=>p.codigo&&norm(p.codigo)===norm(it.codigo))||null;
-    }
-    if(!achado&&it.descricao){
-      achado=lista.find(p=>norm(p.nome)===norm(it.descricao))||null;
-    }
-    it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque:achado.estoque}:null;
+    const r=nfeAcharProdutoDoItem(it,lista);
+    const achado=r.produto;
+    it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque:achado.estoque,via:r.via}:null;
   }
+  // a nota e' de OUTRA empresa? Os produtos acima sao procurados no cadastro da empresa ativa.
+  const _cEmp=String((typeof _empresa!=='undefined'&&_empresa&&_empresa.cnpj)||'').replace(/\D/g,'');
+  const _cDest=String(d.destCnpj||'').replace(/\D/g,'');
+  nfeXmlDados.destDiverge=(_cEmp&&_cDest&&_cEmp!==_cDest)?{nome:d.destNome||'',cnpj:_cDest,ativa:(_empresa&&_empresa.nome)||''}:null;
 
   // Plano de contas (custo) para vinculo contabil da nota + sugestao automatica
   const{data:contas}=await sb.from('oct_plano_contas').select('id,codigo,descricao,tipo').eq('empresa_id',_empresaId).eq('ativo',true).eq('tipo','custo').order('codigo');
@@ -818,6 +843,7 @@ function renderPreviewNfe(){
         <h3 style="color:#f97316">📄 NF-e ${d.numero}/${d.serie} — ${d.emitNome}</h3>
         <button onclick="cancelarNfe()" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.2rem">✕</button>
       </div>
+      ${d.destDiverge?`<div style="background:#2a1a00;border:1px solid #f59e0b;color:#fbbf24;padding:10px 12px;border-radius:8px;font-size:0.8rem;margin-bottom:14px">⚠ Esta nota é para <strong>${d.destDiverge.nome||'outra empresa'}</strong> (${d.destDiverge.cnpj}), mas a empresa ativa é <strong>${d.destDiverge.ativa||'?'}</strong>. Os produtos são procurados no cadastro da empresa ATIVA: troque de empresa antes de importar.</div>`:''}
 
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
         <div><span class="nfe-label">Nº/Série</span><br><strong>${d.numero}/${d.serie}</strong></div>
@@ -921,7 +947,7 @@ function renderPreviewNfe(){
                 </td>
                 <td>
                   ${it.produtoExistente
-                    ? `<div style="font-size:0.72rem;color:#4caf50;margin-bottom:3px">✓ Já cadastrado:<br><strong>${it.produtoExistente.nome}</strong></div>`
+                    ? `<div style="font-size:0.72rem;color:#4caf50;margin-bottom:3px">✓ Já cadastrado:<br><strong>${it.produtoExistente.nome}</strong>${it.produtoExistente.via?`<br><span style="font-size:0.66rem;color:#888">encontrado pelo ${it.produtoExistente.via}</span>`:''}</div>`
                     : `<input id="prod-nome-${i}" type="text" value="${it.descricao}" style="width:130px;padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem" />`}
                 </td>
                 <td>
