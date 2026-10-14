@@ -509,15 +509,35 @@ async function colabInit(empresaPessoaId, empresaId) {
 async function colabCarregar(empresaPessoaId) {
   const el = document.getElementById('fpe-colab-lista');
   if (!el) return;
-  const { data } = await sb.from('oct_pessoas')
-    .select('id,nome,documento').eq('frota_empresa_id', empresaPessoaId).order('nome');
+  // app_ve_faturas (13/10/2026, SQL-AREA-CLIENTE-FATURAS.sql): colaborador que pode ver as faturas e os
+  // comprovantes da EMPRESA no app/PC do cliente. Sem a coluna (SQL não rodado) a lista segue como antes.
+  let semCol = false;
+  let r = await sb.from('oct_pessoas')
+    .select('id,nome,documento,app_ve_faturas').eq('frota_empresa_id', empresaPessoaId).order('nome');
+  if (r.error) {
+    semCol = true;
+    r = await sb.from('oct_pessoas').select('id,nome,documento').eq('frota_empresa_id', empresaPessoaId).order('nome');
+  }
+  const data = r.data;
   el.innerHTML = (data || []).length
     ? data.map(x => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #1a1d2e;font-size:0.84rem;color:#ddd">
-        <span>👤 ${x.nome} <small style="color:#888">${x.documento || ''}</small></span>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px solid #1a1d2e;font-size:0.84rem;color:#ddd">
+        <span style="flex:1">👤 ${x.nome} <small style="color:#888">${x.documento || ''}</small></span>
+        <label title="${semCol ? 'Rode o SQL-AREA-CLIENTE-FATURAS.sql para liberar' : 'Pode ver as faturas e os comprovantes da empresa no app e no PC do cliente'}" style="display:flex;align-items:center;gap:5px;color:${x.app_ve_faturas ? '#4ade80' : '#888'};cursor:${semCol ? 'not-allowed' : 'pointer'};white-space:nowrap">
+          <input type="checkbox" ${x.app_ve_faturas ? 'checked' : ''} ${semCol ? 'disabled' : ''} onchange="colabVeFaturas('${x.id}', this)"> 💳 vê as faturas
+        </label>
         <button onclick="colabRemover('${x.id}','${empresaPessoaId}')" style="padding:3px 9px;border-radius:5px;border:1px solid #5a2a2a;background:transparent;color:#f44;cursor:pointer">✕</button>
       </div>`).join('')
     : '<span style="color:#666;font-size:0.8rem">Nenhum colaborador vinculado.</span>';
+}
+// libera/retira a visão das faturas DA EMPRESA no app do cliente (dado financeiro: só quem altera limite/prazo)
+async function colabVeFaturas(pessoaId, cb) {
+  const quer = cb.checked;
+  if (!podeOuAvisa('pessoas.alterar_limite')) { cb.checked = !quer; return; }
+  const { error } = await sb.from('oct_pessoas').update({ app_ve_faturas: quer }).eq('id', pessoaId);
+  if (error) { cb.checked = !quer; alert('Não consegui salvar: ' + error.message); return; }
+  const lab = cb.closest('label');
+  if (lab) lab.style.color = quer ? '#4ade80' : '#888';
 }
 async function colabAdd(pessoaId, empresaPessoaId) {
   const { error } = await sb.from('oct_pessoas').update({ frota_empresa_id: empresaPessoaId }).eq('id', pessoaId);
