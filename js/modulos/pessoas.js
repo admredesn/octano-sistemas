@@ -195,9 +195,9 @@ async function abrirFormPessoa(id, empresaId) {
           </div>
           <div style="font-size:0.8rem;color:#9aa;margin-top:8px;line-height:1.55">
             Painel na web para o <b>financeiro</b> da empresa: placas, consumo de cada abastecimento com a foto do cupom assinado,
-            faturas, Pix e boleto novo. A empresa entra com o <b>CNPJ</b>: o código de acesso chega por <b>WhatsApp</b> para o financeiro
-            (quem está marcado <b>💳 vê as faturas</b>; sem ninguém marcado, vai para o WhatsApp desta ficha). Quem já usa o app também entra
-            com CPF e senha. O motorista nunca vê as faturas.
+            faturas, Pix e boleto novo. A empresa entra com o <b>CNPJ e uma senha</b>. No <b>primeiro acesso</b> (ou se esquecer a senha) o código de 6 números chega por
+            <b>WhatsApp</b> para o financeiro (quem está marcado <b>💳 vê as faturas</b>; sem ninguém marcado, vai para o WhatsApp desta ficha)
+            e com ele a empresa <b>cria a própria senha</b>. Quem já usa o app também entra com CPF e senha do app. O motorista nunca vê as faturas.
             <b style="color:#f59e0b">Ligado, a placa que não estiver na frota (aba Venda a prazo) NÃO abastece a prazo para esta empresa.</b>
           </div>
           <div style="margin-top:12px">
@@ -625,8 +625,8 @@ async function portalEmpRefresh(pessoaId) {
   else if (dig.length === 11) h += falta('o documento desta ficha é um <b>CPF</b> — para entrar com CNPJ, cadastre o CNPJ da empresa (aba Cadastro)');
   else h += falta('<b>cadastre o CNPJ</b> da empresa na aba Cadastro — é com ele que ela entra no portal');
   if (!finComZap && !zapFicha) h += falta('<b>ninguém vai receber o código</b>: informe o WhatsApp de um financeiro (aba Venda a prazo › Colaboradores) ou o WhatsApp da empresa (aba Contato)');
-  else if (!finComZap) h += ok('O código de acesso vai para o <b>WhatsApp da ficha da empresa</b> (nenhum financeiro com WhatsApp)');
-  else h += ok(`O código de acesso vai para o WhatsApp de <b>${finComZap}</b> financeiro(s)`);
+  else if (!finComZap) h += ok('O código do primeiro acesso vai para o <b>WhatsApp da ficha da empresa</b> (nenhum financeiro com WhatsApp)');
+  else h += ok(`O código do primeiro acesso vai para o WhatsApp de <b>${finComZap}</b> financeiro(s)`);
   box.innerHTML = h;
   const bt = document.getElementById('fpe-portal-enviar');
   if (bt) { bt.disabled = !ligado; bt.style.opacity = ligado ? '1' : '.5'; bt.title = ligado ? '' : 'Ligue o Portal Empresas desta empresa primeiro'; }
