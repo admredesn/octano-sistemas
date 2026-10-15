@@ -186,6 +186,18 @@ async function abrirFormPessoa(id, empresaId) {
         </div>
         ${id ? `
         <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+            <input id="fpe-portal-emp" type="checkbox" ${p && p.portal_empresas ? 'checked' : ''} onchange="portalEmpresasLiga('${id}', this)" style="width:auto" />
+            🖥 Portal Empresas (web)
+          </label>
+          <div style="font-size:0.78rem;color:#888;margin-top:4px;line-height:1.5">
+            Libera para o <b>financeiro</b> da empresa (colaboradores marcados <b>💳 vê as faturas</b>, abaixo) o painel em
+            <b>www.redesn.com.br/empresas/</b>: placas, consumo com a foto do cupom, faturas, Pix e boleto — mesmo CPF e senha do app.
+            O motorista nunca vê as faturas. <b style="color:#f59e0b">Ligado, a placa que não estiver na frota abaixo NÃO abastece a prazo para esta empresa.</b>
+            Cadastre as placas antes de ligar.
+          </div>
+        </div>
+        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
           <label>🏢 Colaboradores autorizados <span style="font-size:0.72rem;color:#888">(abastecem a prazo pelo app NA CONTA desta empresa — o cupom sai no nome dela)</span></label>
           <div id="fpe-colab-lista" style="margin:6px 0"><span style="color:#666;font-size:0.8rem">Carregando…</span></div>
           <input id="fpe-colab-busca" placeholder="Adicionar: busque a pessoa por nome ou CPF…" autocomplete="off"
@@ -530,6 +542,25 @@ async function colabCarregar(empresaPessoaId) {
       </div>`).join('')
     : '<span style="color:#666;font-size:0.8rem">Nenhum colaborador vinculado.</span>';
 }
+// liga/desliga o PORTAL EMPRESAS (web) da empresa — e, com ele, a regra "placa fora da frota não abastece a prazo" (14/10/2026)
+async function portalEmpresasLiga(pessoaId, cb) {
+  const quer = cb.checked;
+  if (!podeOuAvisa('pessoas.alterar_limite')) { cb.checked = !quer; return; }
+  if (quer) {
+    const { count } = await sb.from('oct_frota_veiculos').select('id', { count: 'exact', head: true })
+      .eq('pessoa_id', pessoaId).eq('ativo', true);
+    if (!count) {
+      const ok = confirm('Esta empresa não tem NENHUMA placa ativa na frota.\n\nLigando agora, o caixa passa a recusar toda venda a prazo dela (placa fora da lista não abastece).\n\nCadastre as placas antes. Ligar mesmo assim?');
+      if (!ok) { cb.checked = false; return; }
+    }
+  }
+  const { error } = await sb.from('oct_pessoas').update({ portal_empresas: quer, portal_empresas_em: new Date().toISOString() }).eq('id', pessoaId);
+  if (error) {
+    cb.checked = !quer;
+    alert('Não consegui salvar: ' + error.message + '\n\n→ Rode antes o SQL-PORTAL-EMPRESAS.sql no Supabase.');
+  }
+}
+
 // libera/retira a visão das faturas DA EMPRESA no app do cliente (dado financeiro: só quem altera limite/prazo)
 async function colabVeFaturas(pessoaId, cb) {
   const quer = cb.checked;

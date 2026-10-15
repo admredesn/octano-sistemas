@@ -169,6 +169,19 @@ const PARAM_DEFS = [
         depende: 'cobranca_envio_ativo' },
     ],
   },
+  {
+    // 14/10/2026 (pedido do Ronan): multa e juros do atraso. Valem para o boleto novo e para o Pix gerado pelo
+    // Portal Empresas e pelo app: depois do vencimento o valor já sai com multa (uma vez, % sobre o valor) e juros
+    // (% ao mês, proporcional aos dias de atraso). Em branco = sem multa e sem juros.
+    aba: 'cobranca',
+    grupo: '⚖ Multa e juros por atraso',
+    itens: [
+      { chave: 'cobranca_multa_pct', tipo: 'texto', rot: 'Multa por atraso (%)', pad: '', dica: '2', validar: 'percentual',
+        desc: 'Cobrada uma vez sobre o valor da fatura vencida. Ex.: 2 para 2%. Em branco = sem multa.' },
+      { chave: 'cobranca_juros_mes_pct', tipo: 'texto', rot: 'Juros por atraso (% ao mês)', pad: '', dica: '1', validar: 'percentual',
+        desc: 'Proporcional aos dias de atraso (1% ao mês = 0,033% ao dia). Ex.: 1 para 1% ao mês. Em branco = sem juros.' },
+    ],
+  },
   // (29/09/2026) o grupo '🎁 Cashback' saiu daqui, mas a chave 'cashback' de
   // oct_parametros CONTINUA sendo gravada: e' o gate do PDV (cashback.js:36,
   // decide se nasce o pendente), enquanto oct_empresas.cashback_ativo e' o gate
@@ -242,6 +255,10 @@ async function parGravar(ch, ligado) {
 function _parInvalido(ch, v) {
   const def = PARAM_DEFS.flatMap(g => g.itens).find(i => i.chave === ch) || {};
   if (v && def.validar === 'digitos' && !/^\d{4,20}$/.test(v)) return def.rot + ': só números (sem letras, espaços ou pontuação).';
+  if (v && def.validar === 'percentual') {
+    const n = Number(String(v).replace(',', '.'));
+    if (!isFinite(n) || n < 0 || n > 100 || !/^\d{1,3}([.,]\d{1,3})?$/.test(v)) return def.rot + ': informe um número de 0 a 100 (ex.: 2 ou 0,5).';
+  }
   return null;
 }
 
