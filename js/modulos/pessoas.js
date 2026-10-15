@@ -185,17 +185,35 @@ async function abrirFormPessoa(id, empresaId) {
           </div>
         </div>
         ${id ? `
-        <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
-            <input id="fpe-portal-emp" type="checkbox" ${p && p.portal_empresas ? 'checked' : ''} onchange="portalEmpresasLiga('${id}', this)" style="width:auto" />
-            🖥 Portal Empresas (web)
-          </label>
-          <div style="font-size:0.78rem;color:#888;margin-top:4px;line-height:1.5">
-            Libera para o <b>financeiro</b> da empresa (colaboradores marcados <b>💳 vê as faturas</b>, abaixo) o painel em
-            <b>www.redesn.com.br/empresas/</b>: placas, consumo com a foto do cupom, faturas, Pix e boleto — mesmo CPF e senha do app.
-            O motorista nunca vê as faturas. <b style="color:#f59e0b">Ligado, a placa que não estiver na frota abaixo NÃO abastece a prazo para esta empresa.</b>
-            Cadastre as placas antes de ligar.
+        <div class="form-group span2" id="fpe-portal-box" style="border:1px solid #1e3a5f;background:#0d1626;border-radius:10px;padding:16px">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:700;color:#93c5fd;font-size:1rem;margin:0">
+              <input id="fpe-portal-emp" type="checkbox" ${p && p.portal_empresas ? 'checked' : ''} onchange="portalEmpresasLiga('${id}', this)" style="width:auto" />
+              🖥 Portal Empresas (web) — ligar para esta empresa
+            </label>
+            <span id="fpe-portal-st" style="font-size:0.78rem;color:#888"></span>
           </div>
+          <div style="font-size:0.8rem;color:#9aa;margin-top:8px;line-height:1.55">
+            Painel na web para o <b>financeiro</b> da empresa: placas, consumo de cada abastecimento com a foto do cupom assinado,
+            faturas, Pix e boleto novo. Entra com o <b>CPF e a senha do app</b> Postos SN. O motorista nunca vê as faturas.
+            <b style="color:#f59e0b">Ligado, a placa que não estiver na frota (aba Venda a prazo) NÃO abastece a prazo para esta empresa.</b>
+          </div>
+          <div style="margin-top:12px">
+            <label style="color:#888;font-size:0.76rem">Link para enviar ao cliente</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <input id="fpe-portal-link" type="text" readonly value="https://www.redesn.com.br/empresas/" onclick="this.select()"
+                style="flex:1;min-width:260px;padding:9px;border-radius:6px;border:1px solid #2a3a55;background:#0a1220;color:#7dd3fc;font-weight:600" />
+              <button type="button" onclick="portalEmpCopiar()" style="padding:9px 14px;border-radius:6px;border:1px solid #2a3a55;background:#13203a;color:#cbd5e1;cursor:pointer">📋 Copiar link</button>
+            </div>
+          </div>
+          <div id="fpe-portal-check" style="margin-top:12px;font-size:0.84rem;line-height:1.75"><span style="color:#666">Conferindo…</span></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button id="fpe-portal-enviar" type="button" onclick="portalEmpEnviar('${id}')" class="btn-salvar" style="padding:10px 18px">📲 Enviar acesso ao Web Empresas</button>
+            <input id="fpe-portal-extra" type="text" placeholder="Outro WhatsApp (opcional): (31) 99999-8888" inputmode="tel" autocomplete="off"
+              style="flex:1;min-width:230px;padding:9px;border-radius:6px;border:1px solid #2a3a55;background:#0a1220;color:#ddd" />
+          </div>
+          <div style="font-size:0.74rem;color:#667;margin-top:6px">Envia o link por WhatsApp (número da rede) para quem está marcado <b>💳 vê as faturas</b> e, se preencher, para este outro número.</div>
+          <div id="fpe-portal-res" style="margin-top:8px;font-size:0.82rem;line-height:1.6"></div>
         </div>
         <div class="form-group span2" style="border-top:1px solid #2a2d3e;padding-top:12px">
           <label>🏢 Colaboradores autorizados <span style="font-size:0.72rem;color:#888">(abastecem a prazo pelo app NA CONTA desta empresa — o cupom sai no nome dela)</span></label>
@@ -227,7 +245,7 @@ async function abrirFormPessoa(id, empresaId) {
   `;
   _pessoaMontarAbas(div);
   _pessoaFaAtualizar();
-  if (id) { colabInit(id, empresaId); frotaInit(id, empresaId); }
+  if (id) { window._portalEmpId = id; colabInit(id, empresaId); frotaInit(id, empresaId); portalEmpRefresh(id); }
   pessoaTabelaInit(id || '', empresaId);
   _pessoaMontarCompart(_dono, _ehDono);
 }
@@ -238,9 +256,10 @@ async function abrirFormPessoa(id, empresaId) {
 // aba onde aparece. O nome fica fixo em cima de todas.
 // ============================================================
 const _PES_ABAS = [['cadastro', 'Cadastro'], ['contato', 'Contato e endereço'], ['prazo', 'Venda a prazo'],
-                   ['faturamento', 'Faturamento'], ['pista', 'Pista e cashback']];
+                   ['faturamento', 'Faturamento'], ['pista', 'Pista e cashback'], ['portal', '🖥 Portal Empresas']];
 // a aba de cada grupo, pelo id do campo que ele tem (a ordem importa: prazo-dias e' faturamento)
 const _PES_ABA_DE = [
+  [/^fpe-portal/, 'portal'],
   [/^fpe-(fat-|fa-|prazo-dias$)/, 'faturamento'],
   [/^fpe-(compart|doc|ie$|nasc|obs|classif)/, 'cadastro'],
   [/^fpe-(tel|whatsapp|email|end|bairro|cep|cidade|uf)$/, 'contato'],
@@ -275,7 +294,8 @@ function _pessoaMontarAbas(raiz) {
   if (gPrazo && gExtras) gExtras.before(gPrazo);
   const barra = document.createElement('div');
   barra.className = 'form-group span2 fpe-abas';
-  barra.innerHTML = _PES_ABAS.map(([k, r]) => `<button type="button" data-aba="${k}">${r}</button>`).join('');
+  const _abasUsadas = _PES_ABAS.filter(([k]) => grupos.some(g => g.dataset.aba === k));
+  barra.innerHTML = _abasUsadas.map(([k, r]) => `<button type="button" data-aba="${k}">${r}</button>`).join('');
   (nome || grid.firstElementChild).after(barra);
   const mostrar = k => {
     grupos.forEach(g => { if (g !== nome) g.style.display = g.dataset.aba === k ? '' : 'none'; });
@@ -283,7 +303,7 @@ function _pessoaMontarAbas(raiz) {
     window._pessoaAba = k;
   };
   barra.addEventListener('click', e => { const b = e.target.closest('button[data-aba]'); if (b) mostrar(b.dataset.aba); });
-  mostrar(_PES_ABAS.some(([k]) => k === window._pessoaAba) ? window._pessoaAba : 'cadastro');
+  mostrar(_abasUsadas.some(([k]) => k === window._pessoaAba) ? window._pessoaAba : 'cadastro');
 }
 
 // ============================================================
@@ -449,6 +469,7 @@ async function frotaInit(empresaPessoaId, empresaId) {
 async function frotaCarregar(empresaPessoaId) {
   const el = document.getElementById('fpe-frota-lista');
   if (!el) return;
+  if (typeof portalEmpRefresh === 'function') portalEmpRefresh(empresaPessoaId);
   const { data: veics } = await sb.from('oct_frota_veiculos')
     .select('id,placa,veiculo,motorista_pessoa_id').eq('pessoa_id', empresaPessoaId)
     .eq('ativo', true).order('placa');
@@ -521,6 +542,7 @@ async function colabInit(empresaPessoaId, empresaId) {
 async function colabCarregar(empresaPessoaId) {
   const el = document.getElementById('fpe-colab-lista');
   if (!el) return;
+  if (typeof portalEmpRefresh === 'function') portalEmpRefresh(empresaPessoaId);
   // app_ve_faturas (13/10/2026, SQL-AREA-CLIENTE-FATURAS.sql): colaborador que pode ver as faturas e os
   // comprovantes da EMPRESA no app/PC do cliente. Sem a coluna (SQL não rodado) a lista segue como antes.
   let semCol = false;
@@ -559,6 +581,87 @@ async function portalEmpresasLiga(pessoaId, cb) {
     cb.checked = !quer;
     alert('Não consegui salvar: ' + error.message + '\n\n→ Rode antes o SQL-PORTAL-EMPRESAS.sql no Supabase.');
   }
+  portalEmpRefresh(pessoaId);
+}
+
+// ---- aba "Portal Empresas" da ficha (15/10/2026): link, conferencia do que falta e envio do acesso ----
+const PORTAL_EMP_LINK = 'https://www.redesn.com.br/empresas/';
+async function portalEmpRefresh(pessoaId) {
+  const box = document.getElementById('fpe-portal-check');
+  if (!box || !pessoaId) return;
+  const cb = document.getElementById('fpe-portal-emp');
+  const ligado = !!(cb && cb.checked);
+  const st = document.getElementById('fpe-portal-st');
+  if (st) { st.textContent = ligado ? '● LIGADO' : '○ desligado'; st.style.color = ligado ? '#4ade80' : '#888'; }
+  const ok = (t) => `<div style="color:#4ade80">✔ ${t}</div>`;
+  const falta = (t) => `<div style="color:#fbbf24">⚠ ${t}</div>`;
+  let placas = 0, fin = [], semCol = false;
+  try {
+    const r = await sb.from('oct_frota_veiculos').select('id', { count: 'exact', head: true }).eq('pessoa_id', pessoaId).eq('ativo', true);
+    placas = r.count || 0;
+  } catch (e) { /* segue */ }
+  try {
+    const r = await sb.from('oct_pessoas').select('id,nome,whatsapp,telefone,app_ve_faturas').eq('frota_empresa_id', pessoaId).eq('app_ve_faturas', true).order('nome');
+    if (r.error) semCol = true; else fin = r.data || [];
+  } catch (e) { semCol = true; }
+  const temZap = (x) => String((x.whatsapp || x.telefone || '')).replace(/\D/g, '').length >= 10;
+  let h = '';
+  h += placas ? ok(`<b>${placas}</b> placa(s) ativa(s) na frota`)
+              : falta('<b>nenhuma placa ativa</b> — cadastre na aba <b>Venda a prazo › Frota da empresa</b> (com o portal ligado, placa fora da lista não abastece a prazo)');
+  if (semCol) h += falta('rode o <b>SQL-AREA-CLIENTE-FATURAS.sql</b> para liberar o "vê as faturas"');
+  else if (fin.length) {
+    h += ok(`Financeiro com acesso: ` + fin.map(x => `<b>${x.nome}</b>${temZap(x) ? '' : ' <span style="color:#fbbf24">(sem WhatsApp no cadastro)</span>'}`).join(', '));
+  } else h += falta('<b>nenhum colaborador com “💳 vê as faturas”</b> — marque na aba <b>Venda a prazo › Colaboradores autorizados</b> (é quem entra no portal)');
+  h += ligado ? ok('Portal ligado — o link abaixo já funciona para quem está liberado')
+              : falta('Portal <b>desligado</b> — marque a caixa acima para liberar o acesso');
+  box.innerHTML = h;
+  const bt = document.getElementById('fpe-portal-enviar');
+  if (bt) { bt.disabled = !ligado; bt.style.opacity = ligado ? '1' : '.5'; bt.title = ligado ? '' : 'Ligue o Portal Empresas desta empresa primeiro'; }
+}
+function portalEmpCopiar() {
+  const el = document.getElementById('fpe-portal-link');
+  const fim = () => { const b = document.getElementById('fpe-portal-res'); if (b) b.innerHTML = '<span style="color:#4ade80">Link copiado: ' + PORTAL_EMP_LINK + '</span>'; };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(PORTAL_EMP_LINK).then(fim, () => { el.select(); document.execCommand('copy'); fim(); }); return; }
+  } catch (e) { /* cai no metodo antigo */ }
+  el.select(); try { document.execCommand('copy'); } catch (e) { /* ignora */ } fim();
+}
+async function _portalEmpToken(forcar) {
+  let { data: { session } } = await sb.auth.getSession();
+  const vence = ((session && session.expires_at) || 0) * 1000;
+  if (forcar || !session || vence - Date.now() < 120000) {
+    const { data, error } = await sb.auth.refreshSession();
+    if (!error && data && data.session) session = data.session;
+  }
+  return session ? session.access_token : null;
+}
+async function portalEmpEnviar(pessoaId) {
+  if (!podeOuAvisa('pessoas.alterar_limite')) return;
+  const cb = document.getElementById('fpe-portal-emp');
+  const res = document.getElementById('fpe-portal-res');
+  if (!cb || !cb.checked) { alert('Ligue o Portal Empresas desta empresa antes de enviar o acesso.'); return; }
+  const extra = (document.getElementById('fpe-portal-extra').value || '').trim();
+  if (!confirm('Enviar o acesso ao Portal Empresas por WhatsApp para o financeiro desta empresa' + (extra ? ' e para ' + extra : '') + '?\n\nLink: ' + PORTAL_EMP_LINK)) return;
+  const bt = document.getElementById('fpe-portal-enviar');
+  bt.disabled = true; res.innerHTML = '<span style="color:#9aa">Enviando…</span>';
+  try {
+    const enviar = async () => fetch(SEFAZ_URL + '/empresas/admin/enviar-acesso', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: await _portalEmpToken(false), pessoa_id: pessoaId, extra_whatsapp: extra }),
+    });
+    let r = await enviar();
+    if (r.status === 401) { await _portalEmpToken(true); r = await enviar(); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && !j.resultados) { res.innerHTML = '<span style="color:#f87171">Não enviei: ' + (j.erro || ('erro ' + r.status)) + '</span>'; return; }
+    res.innerHTML = (j.resultados || []).map(x => x.ok
+      ? `<div style="color:#4ade80">✔ Enviado${x.nome ? ' para <b>' + x.nome + '</b>' : ''} (${x.destino || ''})</div>`
+      : `<div style="color:#f87171">✘ ${x.nome ? '<b>' + x.nome + '</b>: ' : ''}${x.erro || 'não enviou'}${x.destino ? ' (' + x.destino + ')' : ''}</div>`).join('')
+      + (j.ok ? '' : '<div style="color:#fbbf24;margin-top:4px">Nada foi entregue. Corrija o WhatsApp no cadastro da pessoa ou use “Copiar link” e mande manualmente.</div>');
+  } catch (e) {
+    res.innerHTML = '<span style="color:#f87171">Falha ao falar com o servidor: ' + e.message + '</span>';
+  } finally {
+    bt.disabled = false;
+  }
 }
 
 // libera/retira a visão das faturas DA EMPRESA no app do cliente (dado financeiro: só quem altera limite/prazo)
@@ -569,6 +672,7 @@ async function colabVeFaturas(pessoaId, cb) {
   if (error) { cb.checked = !quer; alert('Não consegui salvar: ' + error.message); return; }
   const lab = cb.closest('label');
   if (lab) lab.style.color = quer ? '#4ade80' : '#888';
+  if (window._portalEmpId) portalEmpRefresh(window._portalEmpId);
 }
 async function colabAdd(pessoaId, empresaPessoaId) {
   const { error } = await sb.from('oct_pessoas').update({ frota_empresa_id: empresaPessoaId }).eq('id', pessoaId);
