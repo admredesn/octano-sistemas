@@ -452,7 +452,11 @@ async function fcCarregarDados() {
     else if (tipo.includes('suprim')) t.suprimento += val;
     else if (tipo.includes('desp')) t.despesa += val;
     else if (tipo.includes('depos')) t.deposito += val;
-    else if (tipo.includes('receita')) t.receita += val;
+    else if (tipo.includes('receita')) {
+      t.receita += val;
+      // recebimento de título/fatura em DINHEIRO no PDV também vira receita no caixa (receber_titulo.js) — ver receita_titulo
+      if (/^recebimento de (t[ií]tulo|fatura)/i.test(String(m.descricao || ''))) t.receita_receb_tit = (t.receita_receb_tit || 0) + val;
+    }
     else t.outrosCaixa += val;
   });
   // RECEBIMENTOS externos (maquininha/cofre/sangria) — casa por horário no turno.
@@ -520,6 +524,8 @@ async function fcCarregarDados() {
     const t = porTurno[x.turno_id]; if (!t) return;
     t.titulos += Number(x.valor || 0);
     t.titulos_lst.push(x);
+    if (x.origem === 'pdv' && /dinheiro/i.test(String(x.forma || '')))
+      t.titulos_din_pdv = (t.titulos_din_pdv || 0) + Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0);
   });
   // LANÇAMENTOS MANUAIS (botão ➕ Incluir do balão): entram nas somas do lado
   // dos RECEBIMENTOS (revelam diferença contra as vendas — é essa a função) ou
@@ -583,6 +589,10 @@ async function fcCarregarDados() {
   //   contado  = valor_fechamento (o operador informa ao fechar o turno)
   lista.forEach(t => {
     const d = porTurno[t.id]; if (!d) return;
+    // TÍTULO EM DINHEIRO NO PDV CONTAVA EM DOBRO (16/10/2026, Florestal turno 1205 — Juarez R$ 108,01): o PDV grava o
+    // recebimento (Títulos Recebidos) E lança a mesma quantia como receita no caixa (para o esperado da gaveta). O
+    // Vendido somava as duas. receita_titulo sai do Vendido e da linha Receitas; continua no esperado da gaveta.
+    d.receita_titulo = Math.round(Math.min(Number(d.receita_receb_tit || 0), Number(d.titulos_din_pdv || 0)) * 100) / 100;
     const abertura = Number(t.valor_abertura || 0);
     // receita em cartão/pix/cheque (receita_banco) não está na gaveta: só a receita em dinheiro entra
     d.receita_dinheiro = Math.round((Number(d.receita || 0) - Number(d.receita_banco || 0)) * 100) / 100;
@@ -630,7 +640,7 @@ async function fcCarregarDados() {
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
       + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
-      + Number(d.receita || 0);   // receita lançada entra na origem, como na coluna do detalhe
+      + Number(d.receita || 0) - Number(d.receita_titulo || 0);   // receita lançada entra na origem (menos a de título, que já está em Títulos Recebidos)
     d.recebido_caixa = Math.round(recebido * 100) / 100;
     d.vendido_caixa = Math.round(vendido * 100) / 100;
     d.resultado_caixa = Math.round((recebido - vendido) * 100) / 100;
@@ -795,7 +805,7 @@ function fcDetalhe(turnoId) {
     // lançada (balão Receitas ou oct_pdv_caixa tipo 'receita') aparecia no balão e entrava
     // no esperado da gaveta, mas o campo ficava 0,00 e o Resultado a ignorava. É dinheiro
     // que entrou sem ser venda — mesma natureza de Títulos Recebidos: SOMA em Vendas/Saídas.
-    ['Receitas', d.receita],
+    ['Receitas', Math.round((Number(d.receita || 0) - Number(d.receita_titulo || 0)) * 100) / 100],   // sem o dinheiro de título (já em Títulos Recebidos)
   ];
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
