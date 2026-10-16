@@ -17,6 +17,18 @@
 
 const PARAM_DEFS = [
   {
+    // 15/10/2026 (Ronan: "tem que ter a opção de desligar e ligar, senão quando formos reativar tem que digitar as
+    // maquininhas de novo"). Chave geral do recebimento automático do PagBank deste posto: desligada, o NÚCLEO não busca
+    // nem o EDI nem o e-mail; o cadastro das maquininhas, o usuário/token do EDI e o e-mail ficam como estão. Ausente =
+    // ligado. Precisa do núcleo com a versão que traz a pausa (publicação de 16/10).
+    aba: 'receb',
+    grupo: '💳 PagBank — recebimento automático',
+    itens: [
+      { chave: 'pagbank_recebimento_ativo', rot: 'Receber as vendas do PagBank neste posto (EDI e e-mail)', pad: true,
+        desc: 'Desligue para PAUSAR a entrada automática de cartão e Pix no PDV deste posto. As séries das maquininhas, o usuário/token do EDI e o e-mail continuam salvos: para voltar é só ligar de novo, sem digitar nada. Vale em até 5 minutos, sem reiniciar o posto. Pausado, cartão e Pix só pelo F1 (e o Dinheiro, pelo cofre/tecla R).' },
+    ],
+  },
+  {
     // 16/09/2026: antes isso só existia no config_local.json do PC do posto —
     // para ligar o e-mail do PagBank na AC era preciso ir até lá. O núcleo passa
     // a ler estas chaves da nuvem quando não acha a seção no arquivo local.
@@ -586,8 +598,8 @@ function _parSecaoRecebimentos() {
     <div class="par-card-desc">Ligue conforme o que o posto usa. O PDV oculta as formas de pagamento
       correspondentes (com EDI ligado o cartão entra automático e some do PDV; com cofre, o dinheiro some).</div>
     <label class="par-check"><input type="checkbox" id="par-usa-edi" ${e.usa_edi ? 'checked' : ''}>
-      <span><strong>EDI (PagBank)</strong> — recebimentos de cartão automáticos.
-        <span style="color:#888">O PDV oculta as formas classificadas como <em>Cartão</em>.</span></span></label>
+      <span><strong>EDI (PagBank)</strong> — esconder Crédito/Débito no PDV (o cartão entra só pelo recebimento do banco).
+        <span style="color:#888">O PDV oculta as formas classificadas como <em>Cartão</em>. Isto <strong>não liga nem desliga</strong> o recebimento: para pausar, use <em>Receber as vendas do PagBank</em> mais abaixo.</span></span></label>
     <label class="par-check"><input type="checkbox" id="par-usa-cofre" ${e.usa_cofre ? 'checked' : ''}>
       <span><strong>Cofre inteligente</strong> — o dinheiro vai pro cofre.
         <span style="color:#888">O PDV oculta as formas classificadas como <em>Dinheiro</em>.</span></span></label>
