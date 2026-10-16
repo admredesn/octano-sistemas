@@ -1380,6 +1380,20 @@ async function fcLancIncluir() {
   };
   const formas = FORMAS_SECAO[secao]
     || ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Nota a prazo', 'Cheque', 'Outro'];
+  // DEPÓSITO EM CONTA (16/10/2026, Ronan: "temos que poder colocar a data do depósito e escolher o banco")
+  let depHtml = '';
+  if (secao === 'deposito') {
+    const contasDep = (await _fcContasDoPosto()).filter(c => String(c.tipo || '') !== 'caixa');
+    window._fcDepContasManual = contasDep;
+    const hj = new Date(); const p2 = n => String(n).padStart(2, '0');
+    depHtml = `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Em qual conta (banco) foi o depósito? *</label>
+      ${contasDep.length
+        ? `<select id="fcm-dep-conta" class="fc-inp2" style="width:100%">${contasDep.map(c => `<option value="${c.id}">${fcEsc(c.nome)}</option>`).join('')}</select>`
+        : `<input id="fcm-dep-conta-nome" class="fc-inp2 lg" style="width:100%" placeholder="ex.: Sicoob, Banco do Brasil">
+           <p style="color:#f0b45c;font-size:0.72rem;margin-top:4px">Este posto ainda não tem contas cadastradas em Conciliação — o depósito fica registrado só aqui no fechamento.</p>`}
+      <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Data do depósito *</label>
+      <input id="fcm-dep-data" type="date" class="fc-inp2" value="${hj.getFullYear()}-${p2(hj.getMonth() + 1)}-${p2(hj.getDate())}">`;
+  }
 
   // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h).
   // SÓ na nota a prazo (31/08): é lá que se amarra o abastecimento ao título;
@@ -1497,6 +1511,7 @@ async function fcLancIncluir() {
                   ${bandeiras.map(b => `<option value="${fcEsc(b)}">${fcEsc(b)}</option>`).join('')}
                 </select>${avisoBand}`
              : `<input type="hidden" id="fcm-bandeira" value="">`}`}
+      ${depHtml}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
@@ -1594,12 +1609,43 @@ async function fcLancIncluirSalvar(secao) {
     ajuste.cliente_id = (document.getElementById('fcm-cliente-id') || {}).value || null;
     if (!ajuste.descricao && ajuste.cliente_nome) ajuste.descricao = ajuste.cliente_nome;
   }
+  let depConta = null;
+  if (secao === 'deposito') {
+    const selC = document.getElementById('fcm-dep-conta');
+    const contaId = selC ? Number(selC.value) : null;
+    const conta = contaId ? (window._fcDepContasManual || []).find(c => c.id === contaId) : null;
+    const contaNome = conta ? conta.nome : String((document.getElementById('fcm-dep-conta-nome') || {}).value || '').trim();
+    const dataDep = (document.getElementById('fcm-dep-data') || {}).value || '';
+    if (!contaNome) { alert('Informe a conta (banco) do depósito.'); return; }
+    if (!dataDep) { alert('Informe a data do depósito.'); return; }
+    ajuste.deposito = { conta_id: contaId, conta_nome: contaNome, data: dataDep, obs: ajuste.descricao, por: await _fcAutor(), em: new Date().toISOString() };
+    depConta = contaId;
+  }
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
   const { error } = await sb.from('oct_fc_lancamentos').insert({
     empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
     ref_tipo: 'manual', ref_id: refId, conferido: false, ajuste,
   });
   if (error) { alert('Erro: ' + error.message); return; }
+  // livro financeiro do depósito: Caixa → conta (como o 🏦 Gerar depósito da sangria) — vai para a Conciliação
+  if (secao === 'deposito' && depConta) {
+    try {
+      const caixa = (await _fcContasDoPosto()).find(c => String(c.tipo || '') === 'caixa');
+      if (caixa && caixa.id !== depConta) {
+        const t = ((window._fcCache || {}).turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
+        const k = 'manual:' + refId;
+        const comum = { empresa_id: window._fcEmpresaId, data: ajuste.deposito.data, valor, tipo: 'deposito',
+          descricao: `DEPÓSITO · turno ${t.numero || ''}${t.operador ? ' · ' + t.operador : ''}`.trim(), detalhe: ajuste.descricao,
+          origem: 'fcaixa_deposito', transferencia_id: (crypto.randomUUID && crypto.randomUUID()) || null,
+          autor: ajuste.deposito.por, atualizado_em: ajuste.deposito.em };
+        const { error: e2 } = await sb.from('oct_fin_lancamentos').insert([
+          Object.assign({}, comum, { conta_id: caixa.id, natureza: 'D', origem_id: k + ':D' }),
+          Object.assign({}, comum, { conta_id: depConta, natureza: 'C', origem_id: k + ':C' }),
+        ]);
+        if (e2) console.warn('livro financeiro:', e2.message);
+      }
+    } catch (e) { console.warn('livro financeiro:', e); }
+  }
   _fcToast('✔ Lançamento incluído');
   await _fcRecarregarNode();
 }
@@ -1645,6 +1691,13 @@ async function fcLancExcluir(marcados, alvosDiretos) {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
     try {
       if (refTipo === 'manual') {
+        const ajM = ((window._fcConf || {})[k] || {}).ajuste || {};
+        if (ajM.deposito) {             // depósito lançado à mão: as duas pernas do livro saem junto
+          const { data: concM } = await sb.from('oct_fin_lancamentos').select('id,conciliado')
+            .eq('origem', 'fcaixa_deposito').in('origem_id', [k + ':D', k + ':C']);
+          if ((concM || []).some(l => l.conciliado)) { alert('Este depósito já está conciliado com o extrato do banco: desconcilie na tela de Conciliação antes de excluir.'); return; }
+          await sb.from('oct_fin_lancamentos').delete().eq('origem', 'fcaixa_deposito').in('origem_id', [k + ':D', k + ':C']);
+        }
         await sb.from('oct_fc_lancamentos').delete()
           .eq('empresa_id', window._fcEmpresaId).eq('turno_id', window._fcTurnoAtual)
           .eq('ref_tipo', 'manual').eq('ref_id', refId);
@@ -2689,7 +2742,7 @@ async function fcNodeDetalhe(tipo) {
       const linM = mans.map(m => {
         totM += Number(m.valor || 0);
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
-        const depN = _manDepN(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}</span>` : '';
+        const depN = m.deposito ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 ${_manDepN(m) ? 'sangria depositada' : 'depositado'} em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}</span>` : '';
         return _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '✍ manual'}</td>
           <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
