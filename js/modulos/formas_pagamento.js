@@ -181,7 +181,7 @@ function fpAjusteRotulo(a) {
   if (!a) return '<span style="color:#667">—</span>';
   const v = a.modo === 'percentual'
     ? String(a.valor).replace('.', ',') + '%'
-    : 'R$ ' + Number(a.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    : 'R$ ' + Number(a.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) + '/L';
   return a.tipo === 'desconto' ? `<span style="color:#4ade80">− ${v}</span>` : `<span style="color:#fbbf24">+ ${v}</span>`;
 }
 async function fpAjustesCarregar(eid) {
@@ -295,7 +295,7 @@ function fpReceberForm(f) {
         const sel = (v, x) => v === x ? 'selected' : '';
         return `<div style="margin-top:12px">
         <label style="color:#888;font-size:0.78rem">Acréscimo ou desconto no valor cobrado quando o PDV escolher esta forma
-          <span style="color:#667">(vale para a venda inteira; não soma com a tabela de preço do cliente; esta forma deixa de entrar em pagamento dividido)</span></label>
+          <span style="color:#667">(% sobre a venda inteira; R$ por litro só no combustível; não soma com a tabela de preço do cliente; esta forma deixa de entrar em pagamento dividido)</span></label>
         <div style="display:flex;gap:8px;margin-top:4px;align-items:center;flex-wrap:wrap">
           <select id="fpr-aj-tipo" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
             <option value="nenhum" ${sel(a.tipo, 'nenhum')}>Nenhum</option>
@@ -306,7 +306,7 @@ function fpReceberForm(f) {
             style="width:120px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
           <select id="fpr-aj-modo" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
             <option value="percentual" ${sel(a.modo, 'percentual')}>% do valor da venda</option>
-            <option value="fixo" ${sel(a.modo, 'fixo')}>R$ por venda</option>
+            <option value="fixo" ${sel(a.modo, 'fixo')}>R$ por litro (combustível)</option>
           </select>
         </div></div>`;
       })()}
