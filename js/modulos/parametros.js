@@ -25,7 +25,11 @@ const PARAM_DEFS = [
     grupo: '💳 PagBank — recebimento automático',
     itens: [
       { chave: 'pagbank_recebimento_ativo', rot: 'Receber as vendas do PagBank neste posto (EDI e e-mail)', pad: true,
-        desc: 'Desligue para PAUSAR a entrada automática de cartão e Pix no PDV deste posto. As séries das maquininhas, o usuário/token do EDI e o e-mail continuam salvos: para voltar é só ligar de novo, sem digitar nada. Vale em até 5 minutos, sem reiniciar o posto. Pausado, cartão e Pix só pelo F1 (e o Dinheiro, pelo cofre/tecla R).' },
+        desc: 'Desligue para PAUSAR a entrada automática de cartão e Pix no PDV deste posto. As séries das maquininhas, o usuário/token do EDI e o e-mail continuam salvos: para voltar é só ligar de novo, sem digitar nada. Vale em até 5 minutos, sem reiniciar o posto. Pausado, cartão e Pix só pelo F1 (e o Dinheiro, pelo cofre/tecla R). ATENÇÃO: desligado, o F.Caixa fica sem o extrato e não substitui os cartões — para tirar só da pista, use a opção de baixo.' },
+      // 16/10/2026 (Ronan: "desligar o EDI somente da pista, mas no retaguarda continuar com o número de série das
+      // maquininhas cadastrado; quando apertar em substituir busca no extrato só a movimentação daquelas maquininhas")
+      { chave: 'pagbank_recebimento_pdv', rot: 'Mostrar as vendas do PagBank na tela do PDV (pista)', pad: true,
+        desc: 'Desligado: o sistema CONTINUA lendo o extrato só das maquininhas cadastradas e o F.Caixa substitui pelo extrato normalmente, mas as vendas NÃO aparecem na tela do PDV (sem lista e sem casamento na pista; o frentista lança cartão/Pix no F1). Vale em até 5 minutos. Precisa do "Receber as vendas do PagBank" acima LIGADO.' },
     ],
   },
   {

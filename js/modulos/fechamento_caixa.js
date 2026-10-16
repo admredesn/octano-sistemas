@@ -210,6 +210,16 @@ async function fcCarregarDados() {
   // dos lançamentos, guardado em oct_fc_lancamentos. O dado original (fila/
   // caixa/receb, que o NÚCLEO sincroniza) nunca é alterado — o ajuste vive
   // aqui e é aplicado ANTES das somas.
+  // RECEBIMENTO DO PAGBANK PAUSADO (16/10/2026): sem ele nada mais entra em oct_recebimentos e o "lado
+  // maquininha" do turno fica incompleto — ver _fcPausaPagbank (trava do Substituir pelo extrato)
+  window._fcPagbankPausa = null;
+  try {
+    const rPausa = await sb.from('oct_parametros').select('valor,atualizado_em')
+      .eq('empresa_id', eid).eq('chave', 'pagbank_recebimento_ativo').maybeSingle();
+    const vP = rPausa && rPausa.data ? rPausa.data.valor : null;
+    if (vP === false || /^(false|0|n|no|nao|não|off|desligado|pausado)$/i.test(String(vP == null ? '' : vP).trim()))
+      window._fcPagbankPausa = { desde: rPausa.data.atualizado_em };
+  } catch (e) { /* sem parâmetro: segue como sempre */ }
   window._fcConf = {};
   let confRows = [];
   try {
@@ -1027,6 +1037,7 @@ function fcDetalhe(turnoId) {
             };
             return `<div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px">
               <div style="color:#7ea8d8;font-weight:700;font-size:0.82rem;margin-bottom:6px">🏦 Conciliação bancária (cartão/pix)</div>
+              ${_fcPausaPagbank(t) ? `<div style="background:#2a1d0d;border:1px solid #7a4a10;border-radius:6px;padding:6px 8px;color:#f0b45c;font-size:0.74rem;margin-bottom:6px">⚠ Recebimento automático do PagBank DESLIGADO neste posto desde ${fcEsc(_fcPausaQuando(_fcPausaPagbank(t)))}: o lado "maquininha" deste turno está incompleto (diferença aqui não é falta).</div>` : ''}
               <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
                 ${linha('Cartão', sisCartao, maqCartao)}
                 ${linha('Pix', sisPix, maqPix)}
@@ -2725,6 +2736,7 @@ async function fcNodeDetalhe(tipo) {
       ? '<span class="fc-sep"></span><button class="fc-btn mini" style="border-color:#2a4a6a;color:#7ea8d8"'
         + ' title="Troca os lançamentos de cartão/Pix pelo que a maquininha reportou"'
         + ' onclick="fcExtratoSubstituir()">🏦 Substituir pelo extrato</button>'
+        + (_fcPausaPagbank(window._fcTurnoAtual) ? '<span style="color:#f0b45c;font-size:0.74rem;margin-left:6px" title="O recebimento automático do PagBank está desligado neste posto: o extrato deste turno está incompleto">⚠ PagBank desligado desde ' + _fcPausaQuando(_fcPausaPagbank(window._fcTurnoAtual)) + ': extrato incompleto</span>' : '')
         + (_fcTemLoteExtrato() ? '<button class="fc-btn mini" style="border-color:#6a4a2a;color:#f0b45c" onclick="fcExtratoDesfazer()">↩ Desfazer substituição</button>' : '')
       : tipo === 'dinheiro'
       ? '<span class="fc-sep"></span><button class="fc-btn mini" style="border-color:#2a4a6a;color:#7ea8d8"'
@@ -4140,6 +4152,23 @@ async function _fcExtratoAlvos(turnoId, d0) {
   return alvos.filter(a => a.valor > 0);
 }
 
+// Turno atingido pela PAUSA do recebimento do PagBank: termina (ou segue aberto) DEPOIS que o recebimento foi
+// desligado — o extrato dele só tem o que entrou antes. Devolve { desde } ou null.
+function _fcPausaPagbank(turnoOuId) {
+  const p = window._fcPagbankPausa;
+  if (!p || !p.desde) return null;
+  const t = (turnoOuId && typeof turnoOuId === 'object') ? turnoOuId
+    : (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoOuId);
+  const fim = (t && t.fechado_em) || new Date().toISOString();
+  return _fcTsUtc(fim) > _fcTsUtc(p.desde) ? p : null;
+}
+
+function _fcPausaQuando(p) {
+  try {
+    return new Date(p.desde).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return String(p.desde || ''); }
+}
+
 async function fcExtratoSubstituir() {
   if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
   if (_fcTravado()) return;
@@ -4147,6 +4176,18 @@ async function fcExtratoSubstituir() {
   const eid = window._fcEmpresaId;
   const cache = window._fcCache || {};
   const d0 = (cache.porTurno || {})[turnoId] || {};
+
+  // TRAVA (16/10/2026): com o recebimento do PagBank DESLIGADO o extrato do turno está incompleto —
+  // substituir zeraria o cartão/Pix e relançaria só o que entrou antes da pausa (falta falsa)
+  const pausa = _fcPausaPagbank(turnoId);
+  if (pausa) {
+    alert('Substituição bloqueada: o recebimento automático do PagBank está DESLIGADO neste posto desde '
+      + _fcPausaQuando(pausa) + '.' + N2
+      + 'Depois disso nenhuma venda da maquininha chega ao sistema: o extrato deste turno está INCOMPLETO e trocaria' + N1
+      + 'os lançamentos do caixa por uma lista que falta venda (falta de caixa falsa).' + N2
+      + 'Confira o cartão/Pix pelos lançamentos do PDV ou religue em Parâmetros › Recebimentos.');
+    return;
+  }
 
   const ext = (d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || '')));
   if (!ext.length) {
