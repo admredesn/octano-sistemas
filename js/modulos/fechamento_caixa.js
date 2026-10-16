@@ -32,7 +32,8 @@ function _fcGrupoNome(nome, cod) {
         || n.indexOf('sem parar') >= 0 || n.indexOf('abastece') >= 0
         || n.indexOf('wex') >= 0) return 'frota';
     if (n.indexOf('dinheiro') >= 0) return 'dinheiro';
-    if (n.indexOf('pix') >= 0) return 'pix';
+    // PIX CNPJ (16/10/2026): cai direto no banco, não na maquininha — grupo próprio (o extrato do PagBank não o repõe)
+    if (n.indexOf('pix') >= 0) return n.indexOf('cnpj') >= 0 ? 'pix_cnpj' : 'pix';
     if (n.indexOf('créd') >= 0 || n.indexOf('cred') >= 0 || n === 'cartão' || n === 'cartao'
         || n.indexOf('déb') >= 0 || n.indexOf('deb') >= 0) return 'cartao';
     if (n.indexOf('prazo') >= 0) return 'prazo';
@@ -256,7 +257,7 @@ async function fcCarregarDados() {
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
-    rec: { dinheiro: 0, cartao: 0, pix: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
+    rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
     sangria_depositada: 0, sangrias_dep: [],   // sangria que virou depósito em conta (🏦 Gerar depósito)
     fila_total: 0, fila_litros: 0, fila_itens: [],
@@ -541,7 +542,7 @@ async function fcCarregarDados() {
     // em Depósito em Conta. Campo próprio: d.rec é o que o livro financeiro lança por forma, e d.deposito desconta da gaveta.
     const _ft = String(x.forma || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     if (!/dinheiro/.test(_ft)) {
-      const _g = /pix/.test(_ft) ? 'pix' : /frota/.test(_ft) ? 'frota' : /cheque/.test(_ft) ? 'cheque'
+      const _g = /pix/.test(_ft) ? (/cnpj/.test(_ft) ? 'pix_cnpj' : 'pix') : /frota/.test(_ft) ? 'frota' : /cheque/.test(_ft) ? 'cheque'
                : /cart|credito|debito/.test(_ft) ? 'cartao' : 'deposito';
       t.titulos_receb = t.titulos_receb || {};
       t.titulos_receb[_g] = (t.titulos_receb[_g] || 0) + Number(x.valor || 0);
@@ -574,7 +575,7 @@ async function fcCarregarDados() {
       // era cobrada da gaveta E não aparecia no recebido: "falta" dupla no valor da receita.
       // Só a receita em Dinheiro continua na régua da gaveta.
       const gR = (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(a.forma_nome || ''), '') : null) || 'dinheiro';
-      if (['cartao', 'pix', 'cheque', 'frota'].includes(gR)) {
+      if (['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(gR)) {
         t.rec[gR] = (t.rec[gR] || 0) + v;
         t.receita_banco = (t.receita_banco || 0) + v;
       }
@@ -600,7 +601,7 @@ async function fcCarregarDados() {
       const nomeCompleto = String(a.forma_nome || '') + ' ' + String(a.bandeira || '');
       const g = a.secao === 'frota' ? 'frota'
         : ((typeof _fcGrupoNome === 'function' ? _fcGrupoNome(nomeCompleto, '') : null) || a.secao);
-      const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'frota', 'prazo', 'cheque'];
+      const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'pix_cnpj', 'frota', 'prazo', 'cheque'];
       const chave = GRUPOS_REC.includes(g) ? g : (GRUPOS_REC.includes(a.secao) ? a.secao : 'outros');
       if (chave === 'outros') t.outrosCaixa += v;
       else t.rec[chave] = (t.rec[chave] || 0) + v;
@@ -662,7 +663,7 @@ async function fcCarregarDados() {
     // depósito já está em d.deposito.
     const _trTot = Object.values(d.titulos_receb || {}).reduce((sm, v) => sm + Number(v || 0), 0);   // títulos fora do dinheiro
     const recebido = _trTot + Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0) + Number(d.rec.cartao || 0)
-      + Number(d.rec.pix || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
+      + Number(d.rec.pix || 0) + Number(d.rec.pix_cnpj || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
@@ -795,6 +796,7 @@ function fcDetalhe(turnoId) {
     ['Dinheiro (sangria / cofre)', Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0)],
     ['Cartão', Number(rec.cartao || 0) + Number(_trd.cartao || 0)],
     ['Pix', Number(rec.pix || 0) + Number(_trd.pix || 0)],
+    ['Pix CNPJ', Number(rec.pix_cnpj || 0) + Number(_trd.pix_cnpj || 0)],   // direto no banco (16/10/2026)
     ['Cartão Frota', Number(rec.frota || 0) + Number(_trd.frota || 0)],
     ['Nota a prazo', rec.prazo],
     ['Cheque', Number(rec.cheque || 0) + Number(_trd.cheque || 0)],
@@ -958,7 +960,7 @@ function fcDetalhe(turnoId) {
           <ul>
             ${nodo('📁 Principal')}
             <li>😊 Recebimentos<ul>
-              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('🚛 Cartão Frota', 'frota')}${nodo('📄 Nota a Prazo', 'prazo')}
+              ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('🚛 Cartão Frota', 'frota')}${nodo('🏦 Pix CNPJ', 'pix_cnpj')}${nodo('📄 Nota a Prazo', 'prazo')}
               ${nodo('🧾 Cheque', 'cheque')}
               ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
@@ -1364,7 +1366,8 @@ async function fcLancIncluir() {
   // do dinheiro sem entrar no Total Recebimentos (falta fantasma de R$ 2.500 no
   // turno 1110, achada pelo Ronan em 31/08).
   const FORMAS_SECAO = {
-    cartao:       ['Crédito', 'Débito', 'Pix', 'Pix CNPJ'],
+    cartao:       ['Crédito', 'Débito', 'Pix'],
+    pix_cnpj:     ['Pix CNPJ'],   // balão próprio (16/10/2026)
     frota:        ['Crédito', 'Débito'],
     dinheiro:     ['Dinheiro'],
     cheque:       ['Cheque'],
@@ -1375,7 +1378,7 @@ async function fcLancIncluir() {
     // RECEITA em cartão (11/10/2026, Ronan no SEVEN: "não dá a opção de fazer como cartão"):
     // Crédito/Débito entram aqui e a receita que não é dinheiro vai para o banco, não para a
     // gaveta (ver os lançamentos manuais em fcCarregarDados).
-    receita:      ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Cheque'],
+    receita:      ['Dinheiro', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Cheque'],
     titulos:      ['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Cheque'],
   };
   const formas = FORMAS_SECAO[secao]
@@ -1920,13 +1923,15 @@ async function fcDesfazerDeposito() {
 // 💳 Cartões, por transação e com a taxa do EDI — se o F.Caixa lançasse o total do turno também,
 // a conta PagBank contaria em dobro. Pix só vai quando a forma Pix tem conta (Florestal: Sicoob);
 // Pix da maquininha também vem pela aba Cartões, então nesses postos a forma Pix fica sem conta.
-const _FC_LIVRO_GRUPOS = { pix: 'PIX', cheque: 'CHEQUE', frota: 'CARTÃO FROTA' };
+const _FC_LIVRO_GRUPOS = { pix: 'PIX', pix_cnpj: 'PIX CNPJ', cheque: 'CHEQUE', frota: 'CARTÃO FROTA' };
 function _fcGrupoDaForma(f) {
   const c = String((f && f.classificacao) || '');
   if (c === 'cartao_frota') return 'frota';
+  if (c === 'pix' && /cnpj/i.test(String((f && f.nome) || ''))) return 'pix_cnpj';   // Pix CNPJ: conta própria (16/10/2026)
   if (c === 'cartao' || c === 'pix' || c === 'cheque') return c;
   if (c) return null;                                   // dinheiro, nota_prazo, vale, outros
   const g = _fcGrupoForma(f && f.cod_sefaz);
+  if (g === 'pix' && /cnpj/i.test(String((f && f.nome) || ''))) return 'pix_cnpj';
   return ['cartao', 'pix', 'cheque'].includes(g) ? g : null;
 }
 function _fcDiaLocal(iso) {
@@ -2179,6 +2184,7 @@ const FC_DETALHES = {
   cartao:         { titulo: '💳 Cartão + Pix', formas: ['03', '04', '10', '11', '12', '13', '17', '18', '19'], grupos: ['cartao', 'pix'], filtroBandeira: true },
   frota:          { titulo: '🚛 Cartão Frota', formas: [], grupos: ['frota'] },
   pix:            { titulo: '⚡ Pix', formas: ['17', '18', '19'], grupos: ['pix'] },
+  pix_cnpj:       { titulo: '🏦 Pix CNPJ', formas: [], grupos: ['pix_cnpj'] },   // direto no banco (16/10/2026)
   prazo:          { titulo: '📄 Nota a Prazo', formas: ['05', '99', '90'] },
   cheque:         { titulo: '🧾 Cheque', formas: ['02'] },
   ctf:            { titulo: 'CTF', formas: [] },
@@ -4249,7 +4255,7 @@ async function _fcExtratoAlvos(turnoId, d0) {
     if (o.ref_tipo !== 'manual') return;
     const a = o.ajuste || {};
     if (a.excluido || a.extrato_lote) return;
-    if (a.secao === 'cartao' || a.secao === 'pix')
+    if ((a.secao === 'cartao' || a.secao === 'pix') && _fcGrupoNome(String(a.forma_nome || ''), '') !== 'pix_cnpj')   // Pix CNPJ fica
       alvos.push({ tipo: 'manual', id: o.ref_id, valor: Number(a.valor || 0), base: a });
   });
 
