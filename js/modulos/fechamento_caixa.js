@@ -554,7 +554,7 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null });
     // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
     // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
     if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
@@ -578,6 +578,12 @@ async function fcCarregarDados() {
         t.rec[gR] = (t.rec[gR] || 0) + v;
         t.receita_banco = (t.receita_banco || 0) + v;
       }
+    }
+    // SANGRIA LANÇADA À MÃO que virou depósito (🏦 Gerar depósito, 16/10/2026): igual à sangria do PDV —
+    // sai da sangria/cofre e entra como Depósito em Conta (a régua da gaveta fecha igual: sai do contado, entra no sai)
+    else if ((a.secao === 'sangria' || a.secao === 'dinheiro') && a.deposito) {
+      t.deposito += v; t.sangria_depositada += v;
+      t.sangrias_dep.push({ ref: 'manual:' + c.ref_id, valor: v, hora: a.recebido_em || null, deposito: a.deposito });
     }
     else if (a.secao === 'sangria') t.sangria += v;
     // manual no balão 💵 Dinheiro/Sangria = DEPÓSITO no cofre lançado à mão
@@ -1683,10 +1689,12 @@ function _fcSangriasMarcadas(depositadas) {
   const out = [];
   [...window._fcSel].forEach(k => {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i);
-    if (refTipo !== 'caixa' && refTipo !== 'receb') return;
+    if (refTipo !== 'caixa' && refTipo !== 'receb' && refTipo !== 'manual') return;
     const aj = ((window._fcConf || {})[k] || {}).ajuste || {};
     const b = base[k] || {};
-    const ehSangria = /sangria/i.test(String(b.rotulo || '')) || (d0.sangrias_dep || []).some(x => x.ref === k);
+    // manual do balão Dinheiro/Sangria (secao 'dinheiro') ou 'sangria' também é sangria (16/10/2026)
+    const ehSangria = /sangria/i.test(String(b.rotulo || '')) || (d0.sangrias_dep || []).some(x => x.ref === k)
+      || (refTipo === 'manual' && (b.secao === 'dinheiro' || b.secao === 'sangria'));
     if (!ehSangria) return;
     if (depositadas ? !aj.deposito : !!aj.deposito) return;
     out.push({ k, valor: Number(b.valor || 0), rotulo: b.rotulo || 'Sangria' });
@@ -2518,13 +2526,15 @@ async function fcNodeDetalhe(tipo) {
     // + receita lançada em cartão/pix/cheque (11/10/2026): ela soma no campo da forma, então
     // aparece também no balão da forma (e segue no balão Receita, que é a origem dela).
     const _gRec = m => (m.secao === 'receita' ? _fcGrupoNome(m.forma_nome, '') : null);
-    const mans = (d0.manuais || []).filter(m => m.secao === tipo || grupos.includes(m.secao)
-      || (['cartao', 'pix', 'cheque', 'frota'].includes(_gRec(m)) && grupos.includes(_gRec(m))));
+    const _fcManDep = m => !!m.deposito && (m.secao === 'dinheiro' || m.secao === 'sangria');   // sangria à mão depositada
+    const mans = (d0.manuais || []).filter(m => _fcManDep(m) ? tipo === 'deposito'
+      : (m.secao === tipo || grupos.includes(m.secao)
+        || (['cartao', 'pix', 'cheque', 'frota'].includes(_gRec(m)) && grupos.includes(_gRec(m)))));
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
         _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '—'}</td>
-          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}</td>
+          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}</span>` : ''}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
@@ -2670,15 +2680,18 @@ async function fcNodeDetalhe(tipo) {
   // mesclados na lista única acima (19/08)
   if (!manuaisMesclados) {
     const gruposNode = cfg.grupos || [tipo];
+    // sangria lançada à mão que virou depósito (16/10/2026): sai do Dinheiro/Sangria e aparece no Depósito em Conta
+    const _manDepN = m => !!m.deposito && (m.secao === 'dinheiro' || m.secao === 'sangria');
     const mans = (((cache.porTurno || {})[turnoId] || {}).manuais || [])
-      .filter(m => m.secao === tipo || gruposNode.includes(m.secao));
+      .filter(m => _manDepN(m) ? tipo === 'deposito' : (m.secao === tipo || gruposNode.includes(m.secao)));
     if (mans.length) {
       let totM = 0;
       const linM = mans.map(m => {
         totM += Number(m.valor || 0);
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
+        const depN = _manDepN(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}</span>` : '';
         return _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '✍ manual'}</td>
-          <td class="fc-td">${fcEsc(m.descricao) || '—'}</td>
+          <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
       });
