@@ -526,6 +526,16 @@ async function fcCarregarDados() {
     t.titulos_lst.push(x);
     if (x.origem === 'pdv' && /dinheiro/i.test(String(x.forma || '')))
       t.titulos_din_pdv = (t.titulos_din_pdv || 0) + Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0);
+    // TÍTULO PAGO FORA DO DINHEIRO (16/10/2026, decisão do Ronan): entrava só no Vendido e em nenhuma linha do Recebido —
+    // falta falsa no valor do título. Cartão/Pix/cheque/frota entram na linha da forma; "Outro" (boleto, transferência…)
+    // em Depósito em Conta. Campo próprio: d.rec é o que o livro financeiro lança por forma, e d.deposito desconta da gaveta.
+    const _ft = String(x.forma || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (!/dinheiro/.test(_ft)) {
+      const _g = /pix/.test(_ft) ? 'pix' : /frota/.test(_ft) ? 'frota' : /cheque/.test(_ft) ? 'cheque'
+               : /cart|credito|debito/.test(_ft) ? 'cartao' : 'deposito';
+      t.titulos_receb = t.titulos_receb || {};
+      t.titulos_receb[_g] = (t.titulos_receb[_g] || 0) + Number(x.valor || 0);
+    }
   });
   // LANÇAMENTOS MANUAIS (botão ➕ Incluir do balão): entram nas somas do lado
   // dos RECEBIMENTOS (revelam diferença contra as vendas — é essa a função) ou
@@ -634,7 +644,8 @@ async function fcCarregarDados() {
     // (turno 2 do SEVEN: −642,02 com sangrias de 642,00). Vale sangria_gaveta (a automática
     // do cofre TecnoX já é descontada quando o cofre entra no contado) — e o que virou
     // depósito já está em d.deposito.
-    const recebido = Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0) + Number(d.rec.cartao || 0)
+    const _trTot = Object.values(d.titulos_receb || {}).reduce((sm, v) => sm + Number(v || 0), 0);   // títulos fora do dinheiro
+    const recebido = _trTot + Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0) + Number(d.rec.cartao || 0)
       + Number(d.rec.pix || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
       + Number(t.valor_fechamento || 0);
@@ -758,6 +769,7 @@ function fcDetalhe(turnoId) {
   const trocoNet = Number((Number(t.valor_fechamento || 0) - Number(t.valor_abertura || 0)).toFixed(2));
   const I = { info: true };
   // RECEBIMENTOS — formas de pagamento (entram no total) + movimentos (mov.)
+  const _trd = d.titulos_receb || {};   // títulos recebidos fora do dinheiro, pela forma (16/10/2026)
   const recebBase = [
     // DINHEIRO = o DEPOSITADO NO COFRE no turno (decisão Ronan 18/08): é o
     // físico que entrou, sem dedução de despesa (despesa tem linha própria e
@@ -765,17 +777,17 @@ function fcDetalhe(turnoId) {
     // na conferência de gaveta ("Vendas em dinheiro").
     // (10/10/2026) + SANGRIA da gaveta: no posto sem cofre é ela que presta contas do dinheiro.
     ['Dinheiro (sangria / cofre)', Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0)],
-    ['Cartão', rec.cartao],
-    ['Pix', rec.pix],
-    ['Cartão Frota', rec.frota],
+    ['Cartão', Number(rec.cartao || 0) + Number(_trd.cartao || 0)],
+    ['Pix', Number(rec.pix || 0) + Number(_trd.pix || 0)],
+    ['Cartão Frota', Number(rec.frota || 0) + Number(_trd.frota || 0)],
     ['Nota a prazo', rec.prazo],
-    ['Cheque', rec.cheque],
+    ['Cheque', Number(rec.cheque || 0) + Number(_trd.cheque || 0)],
     // MODELO DO RONAN (18/08): o lado esquerdo é a PRESTAÇÃO DE CONTAS — onde
     // o dinheiro foi parar. Despesa paga, depósito em banco e o que ficou na
     // gaveta SOMAM aqui; contra vendas + troco inicial do outro lado, a
     // diferença é a falta/sobra (bate com a conferência de gaveta).
     ['Despesas', d.despesa],
-    ['Deposito em Conta', d.deposito],
+    ['Deposito em Conta', Number(d.deposito || 0) + Number(_trd.deposito || 0)],   // + títulos em "Outro" (boleto, transferência)
     ['Troco Final (gaveta)', Number(t.valor_fechamento || 0)],
     ['Vale Haver', d.vale_haver, I],
     // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
