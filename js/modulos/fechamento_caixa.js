@@ -2571,7 +2571,7 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
           <td class="fc-td">${fcEsc(rotF) || '—'}</td>
-          <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`)] });
+          <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`, `fcCupomResumo('${v.id}')`)] });
     }));
 
     // 2) fila de transmissão (agrupada por marca — recebimento unificado)
@@ -3568,6 +3568,7 @@ function fcCupomVer(ref, id) {
   const x = (window._fcCuponsData || []).find(y => y.ref === ref && String(y.id) === String(id));
   if (!x) return;
   let corpo = '';
+  if (ref === 'venda') { fcCupomResumo(x.obj.id || id, '_fcCuponsRender()'); return; }   // resumo completo (16/10/2026)
   if (ref === 'venda') {
     const v = x.obj;
     const its = (v.itens || []).map(it => `<tr><td class="fc-td">${fcEsc(it.desc || it.cod)}</td>
@@ -3598,6 +3599,82 @@ function fcCupomVer(ref, id) {
   fcModal('🔎 Detalhe da venda', corpo + `
     <div style="padding:10px"><button class="fc-btn" onclick="_fcCuponsRender()">← Voltar para a lista</button></div>`);
 }
+// ============================================================
+// RESUMO DO CUPOM (16/10/2026, pedido do Ronan: "temos que ter a opção de visualizar o cupom, não precisa ser a foto,
+// mas pode ser um resumo dele" — modelo da tela Título > Nota / Itens da Nota do TecnoX). Lê o cupom e a nota a prazo
+// dele direto do banco. Bruto = o que a bomba cobrou (_totalOriginal); líquido = o que o cupom cobrou (tabela de preço,
+// desconto/acréscimo). Fechar volta ao balão; da lista de Cupons Fiscais, volta à lista.
+// ============================================================
+async function fcCupomResumo(vendaId, voltarJs) {
+  const fechaVolta = () => { window._fcModalVolta = !voltarJs; };
+  fcModal('🧾 Cupom', '<p style="padding:18px;color:#888">Carregando o cupom…</p>'); fechaVolta();
+  const { data: v, error } = await sb.from('oct_pdv_vendas').select('*').eq('id', vendaId).maybeSingle();
+  if (error || !v) {
+    fcModal('🧾 Cupom', `<p style="padding:18px;color:#f87171">Não consegui abrir o cupom${error ? ': ' + fcEsc(error.message) : ''}.</p>`); fechaVolta();
+    return;
+  }
+  // nota a prazo do cupom (pela chave da NFC-e; sem ela, pelo número dentro do turno)
+  let np = null;
+  try {
+    const cols = 'numero_nfe,chave_nfe,vencimento,status,valor,valor_original,assinado_por,assinado_em,foto_url,fatura_id,forma_nome,registrado_em';
+    let r = v.nfce_chave ? await sb.from('oct_pdv_notas_prazo').select(cols).eq('chave_nfe', v.nfce_chave).limit(1) : { data: [] };
+    if (!(r.data || []).length && v.numero != null) {
+      let q = sb.from('oct_pdv_notas_prazo').select(cols).eq('empresa_id', v.empresa_id).eq('numero_nfe', String(v.numero));
+      if (v.turno_id) q = q.eq('turno_id', v.turno_id);
+      r = await q.limit(1);
+    }
+    np = (r.data || [])[0] || null;
+  } catch (e) { np = null; }
+  const n3 = x => Number(x || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  const dma = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : '—'; };
+  const doc = s => { const d = String(s || '').replace(/\D/g, '');
+    return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
+      : d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5') : (s || ''); };
+  const campo = (rot, val) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8892a0;min-width:120px">${rot}</span><b style="color:#e2e8f0">${val}</b></div>`;
+  const its = Array.isArray(v.itens) ? v.itens : [];
+  let tBruto = 0, tDesc = 0, tAcr = 0, tLiq = 0;
+  const linhasIt = its.map(it => {
+    const qtd = Number(it.qtd || 0);
+    const liq = Number(it.total != null ? it.total : qtd * Number(it.unit || 0));
+    const unitB = Number(it._unitOriginal || (it.dados && it.dados.preco_litro) || it.unit || 0);
+    const bruto = Number(it._totalOriginal != null ? it._totalOriginal : (it.dados && it.dados.valor_total) || qtd * unitB);
+    const dif = Math.round((liq - bruto) * 100) / 100;
+    const desc = dif < 0 ? -dif : 0, acr = dif > 0 ? dif : 0;
+    tBruto += bruto; tDesc += desc; tAcr += acr; tLiq += liq;
+    return `<tr><td class="fc-td">${fcEsc(it.cod || '—')}</td><td class="fc-td">${fcEsc(it.desc || '—')}</td>
+      <td class="fc-td fc-r">${it.tipo === 'abastecimento' ? n3(qtd) : fcNum(qtd, qtd % 1 ? 3 : 0)}</td>
+      <td class="fc-td fc-r">${n3(unitB)}</td><td class="fc-td fc-r">${fcMoney(bruto)}</td>
+      <td class="fc-td fc-r">${desc ? '<span style="color:#7ee2a0">' + fcMoney(desc) + '</span>' : '0,00'}</td>
+      <td class="fc-td fc-r">${acr ? '<span style="color:#f0b45c">' + fcMoney(acr) + '</span>' : '0,00'}</td>
+      <td class="fc-td fc-r"><b>${fcMoney(liq)}</b></td></tr>`;
+  }).join('');
+  const pags = (Array.isArray(v.pagamentos) ? v.pagamentos : []).map(p => `${fcEsc(p.nome || _fcFormaNome(p.forma))}${p.bandeira ? ' · ' + fcEsc(p.bandeira) : ''} ${fcMoney(p.valor)}`).join(' + ') || '—';
+  const stNfce = String(v.nfce_status || v.status || '').toLowerCase();
+  const nota = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:2px 24px;padding:12px 14px;font-size:0.82rem">
+      ${campo('Cupom (NFC-e)', `nº ${fcEsc(v.numero ?? '—')} <span style="color:${stNfce === 'autorizada' ? '#7ee2a0' : '#f0b45c'};font-weight:500">· ${fcEsc(v.nfce_status || v.status || '—')}</span>`)}
+      ${campo('Data / hora', v.data_venda ? new Date(v.data_venda).toLocaleString('pt-BR') : '—')}
+      ${campo('Cliente', fcEsc(v.cliente_nome || 'Consumidor') + (v.cliente_cpf ? ' <span style="color:#8892a0;font-weight:400">· ' + doc(v.cliente_cpf) + '</span>' : ''))}
+      ${campo('Operador', fcEsc(v.operador || '—') + (v.vendedor && v.vendedor !== v.operador ? ' <span style="color:#8892a0;font-weight:400">· vendedor ' + fcEsc(v.vendedor) + '</span>' : ''))}
+      ${campo('Placa', fcEsc(v.placa || '—'))}${campo('KM', v.odometro ? fcNum(v.odometro, 0) : '—')}
+      ${v.veiculo ? campo('Veículo', fcEsc(v.veiculo)) : ''}
+      ${campo('Pagamento', pags)}
+      ${np ? campo('Nota a prazo', `nº ${fcEsc(np.numero_nfe || '—')} · vence ${dma(np.vencimento)} · <span style="color:#f0b45c">${fcEsc(np.status || '—')}</span>${np.fatura_id ? ' · faturada' : ''}`) : ''}
+      ${np && np.assinado_por ? campo('Assinada por', fcEsc(np.assinado_por) + (np.assinado_em ? ' · ' + new Date(np.assinado_em).toLocaleString('pt-BR') : '')) : ''}
+      ${np && np.foto_url ? campo('Comprovante', `<a href="${fcEsc(np.foto_url)}" target="_blank" rel="noopener" style="color:#7ea8d8">ver foto</a>`) : ''}
+    </div>
+    ${v.nfce_chave ? `<div style="padding:0 14px 10px;font-size:0.72rem;color:#8892a0">Chave: <span style="font-family:Consolas,monospace;color:#cbd5e1">${fcEsc(String(v.nfce_chave).replace(/(\d{4})/g, '$1 ').trim())}</span></div>` : ''}`;
+  const itens = `
+    <div style="color:#f97316;font-weight:700;font-size:0.82rem;padding:8px 14px 4px">Itens da nota</div>
+    <div style="overflow-x:auto;padding:0 8px"><table class="fc-grid"><thead><tr><th>Cód.</th><th>Item</th><th>Qtd</th><th>Val. unitário</th><th>Val. bruto</th><th>Desconto</th><th>Acréscimo</th><th>Val. líquido</th></tr></thead>
+      <tbody>${linhasIt || '<tr><td class="fc-td" colspan="8" style="color:#888">Cupom sem itens gravados.</td></tr>'}
+      <tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tBruto)}</b></td><td class="fc-td fc-r"><b>${fcMoney(tDesc)}</b></td>
+        <td class="fc-td fc-r"><b>${fcMoney(tAcr)}</b></td><td class="fc-td fc-r"><b style="color:#7ee2a0">${fcMoney(tLiq)}</b></td></tr></tbody></table></div>
+    ${Math.abs(tLiq - Number(v.valor_total || 0)) > 0.009 ? `<p style="padding:6px 14px;color:#f0b45c;font-size:0.75rem">Total do cupom: ${fcMoney(v.valor_total)} (diferente da soma dos itens)</p>` : ''}
+    ${tAcr > 0.009 ? `<p style="padding:4px 14px;color:#8892a0;font-size:0.72rem">Acréscimo = preço da tabela do cliente (ou da forma) sobre o valor da bomba.</p>` : ''}
+    <div style="padding:10px 14px"><button class="fc-btn" onclick="${voltarJs ? fcEsc(voltarJs) : 'fcModalFechar()'}">← Voltar</button></div>`;
+  fcModal(`🧾 Cupom nº ${v.numero ?? ''} — ${v.cliente_nome || 'Consumidor'}`, nota + itens); fechaVolta();
+}
 function fcModalItens(vs) {
   // (18/08 — pedido Ronan) SÓ PRODUTOS DE LOJA, lançamento a lançamento, com a
   // MESMA barra de ações dos outros balões (☑ espaço confere, ✎ altera, F9/F10).
@@ -3612,7 +3689,7 @@ function fcModalItens(vs) {
     const qtd = its.reduce((s, it) => s + Number(it.qtd || 0), 0);
     window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? ''), valor: val };
     linhas += _fcRow('venda', v.id, `<td class="fc-td">🧾 ${fcEsc(its.map(it => it.desc || it.cod).join(' + '))} <span style="color:#888;font-size:0.7rem">(cupom ${v.numero ?? ''})</span></td>
-      <td class="fc-td fc-r">${fcNum(qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(val)}</td>`);
+      <td class="fc-td fc-r">${fcNum(qtd, 3)}</td><td class="fc-td fc-r">${fcMoney(val)}</td>`, `fcCupomResumo('${v.id}')`);
     n++; tot += val;
   });
   // 2) produtos vendidos pela FILA (sem bico = produto)
