@@ -390,6 +390,31 @@ async function fpPrecoListar() {
     (fPorTab[v.tabela_id] = fPorTab[v.tabela_id] || []).push(f ? f.nome : '?');
   });
   const rows = tabs || [];
+  // DESCONTO APP (16/10/2026): tabela FIXA do posto (não se exclui), sempre no topo da lista
+  let da = null, daItens = 0, daErro = null;
+  try {
+    const [r1, r2] = await Promise.all([
+      sb.from('oct_app_desconto').select('ativo,formas').eq('empresa_id', eid).maybeSingle(),
+      sb.from('oct_app_desconto_itens').select('produto_id,desconto_litro').eq('empresa_id', eid).gt('desconto_litro', 0),
+    ]);
+    if (r1.error) throw r1.error;
+    da = r1.data || { ativo: false, formas: [] };
+    daItens = (r2.data || []).length;
+  } catch (e) { daErro = (e && e.message) || String(e); }
+  const daFormas = da ? (da.formas || []).map(id => { const f = (formas || []).find(x => x.id === id); return f ? f.nome : null; }).filter(Boolean) : [];
+  const linhaDescApp = `
+          <tr style="border-top:1px solid #1c1f2e;color:#ddd;background:#101a2b">
+            <td style="padding:9px 12px;font-weight:600">📱 DESCONTO APP <span style="color:#7dd3fc;font-size:0.7rem;font-weight:500">🔒 tabela fixa</span>
+              <div style="color:#888;font-size:0.72rem">desconto na bomba para quem escolhe "Desconto agora" no app</div></td>
+            <td style="padding:9px 12px">${daErro ? '<span style="color:#f87171">falta rodar o SQL-APP-DESCONTO-BOMBA.sql</span>' : daItens ? `<span style="color:#7dd3fc">${daItens} combustível(is)</span>` : '<span style="color:#666">—</span>'}</td>
+            <td style="padding:9px 12px;color:#9aa;font-size:0.78rem">clientes do app</td>
+            <td style="padding:9px 12px;color:#9aa;font-size:0.78rem">${daFormas.join(', ') || '<span style="color:#f87171">nenhuma ⚠</span>'}</td>
+            <td style="padding:9px 12px">${da && da.ativo ? '<span style="color:#4caf50">ligada</span>' : '<span style="color:#888">desligada</span>'}</td>
+            <td style="padding:9px 12px;text-align:right;white-space:nowrap">
+              ${daErro ? '' : '<button onclick="fpDescAppForm()" class="nfe-aba" style="font-size:0.76rem">✎ Abrir</button>'}
+              <span title="Tabela fixa: não pode ser excluída. Para parar o desconto, desligue." style="color:#666;font-size:0.74rem;margin-left:6px">não se exclui</span>
+            </td>
+          </tr>`;
   div.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
       <div style="display:flex;gap:6px;align-items:center">
@@ -408,6 +433,7 @@ async function fpPrecoListar() {
           <th style="padding:10px 12px">Situação</th><th></th>
         </tr></thead>
         <tbody>
+        ${linhaDescApp}
         ${rows.length ? rows.map(t => `
           <tr style="border-top:1px solid #1c1f2e;color:#ddd">
             <td style="padding:9px 12px;font-weight:500">${fpEsc(t.nome)}
@@ -424,6 +450,120 @@ async function fpPrecoListar() {
         </tbody>
       </table>
     </div>`;
+}
+
+// ===================== DESCONTO APP (16/10/2026, pedido do Ronan) =====================
+// Tabela FIXA por posto (oct_app_desconto + oct_app_desconto_itens; o banco não deixa excluir).
+// O cliente escolhe "Desconto agora" no app e o NÚCLEO do posto baixa o preço SÓ daquele bico
+// pelo valor daqui (R$ por litro) e devolve no fim. Vale só nas formas marcadas (a prazo fica
+// fora: tem o fluxo próprio do app). Desligar = parar na hora (o app deixa de oferecer).
+async function fpDescAppForm() {
+  const div = document.getElementById('fp-preco-form');
+  const eid = window._fpEmpresaId;
+  div.innerHTML = '<p style="color:#888;padding:10px">Carregando...</p>';
+  const [cab, its, prods, formas] = await Promise.all([
+    sb.from('oct_app_desconto').select('*').eq('empresa_id', eid).maybeSingle(),
+    sb.from('oct_app_desconto_itens').select('produto_id,desconto_litro').eq('empresa_id', eid),
+    sb.from('oct_produtos').select('id,nome,preco_venda_a,tanque_id').eq('empresa_id', eid).eq('ativo', true)
+      .not('tanque_id', 'is', null).order('nome'),
+    sb.from('oct_formas_pagamento').select('id,nome,a_prazo').eq('empresa_id', eid).eq('ativo', true).order('ordem'),
+  ]);
+  const erro = cab.error || its.error || prods.error || formas.error;
+  if (erro) { div.innerHTML = `<p style="color:#f87171;padding:10px">Não consegui abrir: ${fpEsc(erro.message)}</p>`; return; }
+  const t = cab.data || { ativo: false, formas: [] };
+  const desc = {}; (its.data || []).forEach(i => { desc[i.produto_id] = Number(i.desconto_litro || 0); });
+  window._fpDaProdutos = prods.data || [];
+  const fmt = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  const linhas = (prods.data || []).map(p => `
+    <tr style="border-top:1px solid #1c1f2e">
+      <td style="padding:7px 10px;color:#ddd">${fpEsc(p.nome)}</td>
+      <td style="padding:7px 10px;text-align:right;color:#9aa">R$ ${fmt(p.preco_venda_a)}</td>
+      <td style="padding:7px 10px;text-align:right">
+        <input class="fp-da-desc" data-id="${p.id}" data-preco="${Number(p.preco_venda_a || 0)}" type="number" min="0" max="1" step="0.01"
+          value="${desc[p.id] ? desc[p.id] : ''}" placeholder="0,00" oninput="fpDescAppPrevia()"
+          style="width:96px;padding:6px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;text-align:right"></td>
+      <td style="padding:7px 10px;text-align:right;font-weight:600" id="fp-da-prev-${p.id}">—</td>
+    </tr>`).join('');
+  const marcadas = new Set(t.formas || []);
+  const caixasForma = (formas.data || []).map(f => f.a_prazo
+    ? `<label style="color:#666;margin-right:14px" title="A prazo pelo app tem fluxo próprio (selfie e limite): fica fora do desconto na bomba"><input type="checkbox" disabled> ${fpEsc(f.nome)} <span style="font-size:0.7rem">(a prazo: fora)</span></label>`
+    : `<label style="color:#ddd;margin-right:14px"><input type="checkbox" class="fp-da-forma" value="${f.id}" ${marcadas.has(f.id) ? 'checked' : ''}> ${fpEsc(f.nome)}</label>`).join('');
+  div.innerHTML = `
+    <div style="background:#13151f;border:1px solid #2a4a7a;border-radius:10px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="color:#7dd3fc;margin:0">📱 DESCONTO APP <span style="font-size:0.72rem;color:#888;font-weight:500">🔒 tabela fixa deste posto</span></h3>
+        <button onclick="document.getElementById('fp-preco-form').innerHTML=''" class="nfe-aba">Fechar</button>
+      </div>
+      <p style="color:#9aa;font-size:0.8rem;margin:8px 0 12px;max-width:760px">
+        O cliente lê o QR do bico no app e escolhe <b>Desconto agora</b>: o preço <b>daquele bico</b> baixa pelo valor abaixo,
+        ele abastece e o preço volta ao normal no fim (ou em 3 minutos, se ele não começar). Quem escolhe o desconto não acumula cashback nesse abastecimento.</p>
+      <div style="background:#2a1d0d;border:1px solid #7a4a10;border-radius:8px;padding:9px 12px;color:#f0b45c;font-size:0.78rem;margin-bottom:12px">
+        ⚠ Ligue só em posto onde o preço da bomba é trocado pelo Octano (hoje, o SEVEN). Onde o TecnoX controla o preço
+        (Tijuco, Florestal e Antônio Carlos), ele desfaz a troca e o desconto não entra.</div>
+      <label style="color:#ddd;font-weight:600;display:inline-flex;gap:8px;align-items:center;margin-bottom:12px">
+        <input type="checkbox" id="fp-da-ativo" ${t.ativo ? 'checked' : ''}> Desconto do app ligado neste posto</label>
+      <div style="color:#888;font-size:0.78rem;margin-bottom:4px">Formas de pagamento em que o desconto vale (o cliente escolhe no app):</div>
+      <div style="margin-bottom:14px">${caixasForma || '<span style="color:#f87171">nenhuma forma ativa</span>'}</div>
+      <table style="width:100%;max-width:760px;border-collapse:collapse;font-size:0.84rem">
+        <thead><tr style="color:#888;text-align:left">
+          <th style="padding:6px 10px">Combustível</th><th style="padding:6px 10px;text-align:right">Preço do cadastro</th>
+          <th style="padding:6px 10px;text-align:right">Desconto (R$ por litro)</th><th style="padding:6px 10px;text-align:right">Preço no app</th>
+        </tr></thead>
+        <tbody>${linhas || '<tr><td colspan="4" style="padding:14px;color:#888">Nenhum combustível ativo (produto ligado a tanque).</td></tr>'}</tbody>
+      </table>
+      <div style="color:#888;font-size:0.72rem;margin-top:6px">Vazio ou 0 = sem desconto nesse combustível. No máximo R$ 1,00 por litro.</div>
+      <div id="fp-da-msg" style="min-height:18px;margin-top:10px;font-size:0.82rem"></div>
+      <button onclick="fpDescAppSalvar()" class="btn-salvar" style="margin-top:6px">Salvar DESCONTO APP</button>
+    </div>`;
+  fpDescAppPrevia();
+}
+
+function fpDescAppPrevia() {
+  document.querySelectorAll('.fp-da-desc').forEach(inp => {
+    const el = document.getElementById('fp-da-prev-' + inp.dataset.id);
+    if (!el) return;
+    const v = parseFloat(String(inp.value || '').replace(',', '.')) || 0;
+    const preco = Number(inp.dataset.preco || 0);
+    if (!v) { el.textContent = '—'; el.style.color = '#666'; return; }
+    const ok = v > 0 && v <= 1 && preco - v >= 0.5;
+    el.textContent = ok ? 'R$ ' + (preco - v).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : 'inválido';
+    el.style.color = ok ? '#4ade80' : '#f87171';
+  });
+}
+
+async function fpDescAppSalvar() {
+  if (!podeOuAvisa('formas_pagamento.negociacao')) return;
+  const eid = window._fpEmpresaId;
+  const msg = document.getElementById('fp-da-msg');
+  const ativo = !!(document.getElementById('fp-da-ativo') || {}).checked;
+  const formas = Array.from(document.querySelectorAll('.fp-da-forma:checked')).map(c => c.value);
+  const itens = [];
+  for (const inp of document.querySelectorAll('.fp-da-desc')) {
+    const v = parseFloat(String(inp.value || '').replace(',', '.')) || 0;
+    const preco = Number(inp.dataset.preco || 0);
+    if (v < 0 || v > 1 || (v > 0 && preco - v < 0.5)) {
+      msg.style.color = '#f87171'; msg.textContent = 'Desconto inválido: use de R$ 0,01 a R$ 1,00 por litro.'; inp.focus(); return;
+    }
+    itens.push({ empresa_id: eid, produto_id: inp.dataset.id, desconto_litro: Math.round(v * 1000) / 1000, atualizado_em: new Date().toISOString() });
+  }
+  if (ativo && !formas.length) { msg.style.color = '#f87171'; msg.textContent = 'Marque ao menos uma forma de pagamento.'; return; }
+  if (ativo && !itens.some(i => i.desconto_litro > 0)) { msg.style.color = '#f87171'; msg.textContent = 'Informe o desconto de ao menos um combustível.'; return; }
+  msg.style.color = '#888'; msg.textContent = 'Salvando...';
+  const { data: s } = await sb.auth.getSession();
+  const quem = (s && s.session && s.session.user && s.session.user.email) || 'retaguarda';
+  // a linha do posto já existe (o SQL cria uma por posto e o gatilho cria a do posto novo): só UPDATE
+  const r1 = await sb.from('oct_app_desconto').update({ ativo, formas, atualizado_em: new Date().toISOString(), atualizado_por: quem })
+    .eq('empresa_id', eid).select('empresa_id');
+  if (r1.error || !(r1.data || []).length) {
+    msg.style.color = '#f87171'; msg.textContent = 'Não salvei: ' + (r1.error ? r1.error.message : 'sem permissão para alterar') + '.'; return;
+  }
+  if (itens.length) {
+    const r2 = await sb.from('oct_app_desconto_itens').upsert(itens, { onConflict: 'empresa_id,produto_id' });
+    if (r2.error) { msg.style.color = '#f87171'; msg.textContent = 'A tabela foi salva, mas os descontos não: ' + r2.error.message; return; }
+  }
+  msg.style.color = '#4ade80';
+  msg.textContent = ativo ? '✅ Salvo. O app passa a oferecer o desconto nos bicos desses combustíveis.' : '✅ Salvo. Desconto do app DESLIGADO neste posto.';
+  setTimeout(() => fpPrecoListar(), 1200);
 }
 
 // ---- CONSULTA RÁPIDA: que preço o cliente tem? ----
