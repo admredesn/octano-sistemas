@@ -159,11 +159,61 @@ async function fpTaxaExcluir(id) {
 }
 
 // ===================== FORMA DE RECEBIMENTO =====================
+// ---------- ACRÉSCIMO / DESCONTO POR FORMA (16/10/2026) ----------
+// Pedido do Ronan: "na forma de pagamento tem que ter a opção de colocar acréscimo ou desconto no valor cobrado quando
+// selecionar essa forma de pagamento". Fica em oct_parametros (chave forma_ajuste_<id da forma>, valor "tipo|modo|valor"),
+// sem coluna nova. O PDV lê na tela de pagamento (pagamento.js, pdvCarregarAjustesForma): vale para a venda inteira,
+// rateado nos itens; não soma com a tabela de preço do cliente; a forma com ajuste não entra em pagamento dividido.
+function fpAjusteParse(v) {
+  let o = v;
+  if (typeof v === 'string') {
+    const t = v.trim().replace(/^"|"$/g, '');
+    if (t.charAt(0) === '{') { try { o = JSON.parse(t); } catch (e) { return null; } }
+    else { const p = t.split('|'); o = { tipo: p[0], modo: p[1], valor: p[2] }; }
+  }
+  if (!o || typeof o !== 'object') return null;
+  const tipo = String(o.tipo || '').toLowerCase(), modo = String(o.modo || 'percentual').toLowerCase();
+  const valor = Number(String(o.valor == null ? '' : o.valor).replace(',', '.'));
+  if (!['acrescimo', 'desconto'].includes(tipo) || !(valor > 0)) return null;
+  return { tipo, modo: (modo === 'fixo' || modo === 'valor') ? 'fixo' : 'percentual', valor };
+}
+function fpAjusteRotulo(a) {
+  if (!a) return '<span style="color:#667">—</span>';
+  const v = a.modo === 'percentual'
+    ? String(a.valor).replace('.', ',') + '%'
+    : 'R$ ' + Number(a.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  return a.tipo === 'desconto' ? `<span style="color:#4ade80">− ${v}</span>` : `<span style="color:#fbbf24">+ ${v}</span>`;
+}
+async function fpAjustesCarregar(eid) {
+  const out = {};
+  try {
+    const { data } = await sb.from('oct_parametros').select('chave,valor').eq('empresa_id', eid).like('chave', 'forma_ajuste_%');
+    (data || []).forEach(r => { const m = /^forma_ajuste_(.+)$/.exec(r.chave || ''); const a = m ? fpAjusteParse(r.valor) : null; if (a) out[m[1]] = a; });
+  } catch (e) { /* sem tabela de parâmetros: sem ajuste */ }
+  window._fpAjustes = out;
+  return out;
+}
+// grava o ajuste da forma; "Nenhum" grava 'nenhum|percentual|0' (o PDV lê como sem ajuste) em vez de APAGAR a chave:
+// se a política do banco não deixar apagar, o desconto continuaria valendo calado. Devolve {ok, erro}
+async function fpAjusteGravar(eid, formaId, tipo, modo, valor) {
+  const chave = 'forma_ajuste_' + formaId;
+  if (tipo !== 'acrescimo' && tipo !== 'desconto') { tipo = 'nenhum'; valor = 0; }
+  if (!(valor > 0)) { tipo = 'nenhum'; modo = 'percentual'; valor = 0; }
+  const { data: s } = await sb.auth.getSession();
+  const quem = (s && s.session && s.session.user && s.session.user.email) || 'retaguarda';
+  const { error } = await sb.from('oct_parametros').upsert({
+    empresa_id: eid, chave, valor: `${tipo}|${modo}|${valor}`,
+    atualizado_em: new Date().toISOString(), atualizado_por: quem,
+  }, { onConflict: 'empresa_id,chave' });
+  return error ? { ok: false, erro: error.message } : { ok: true };
+}
+
 async function fpReceberListar() {
   const div = document.getElementById('fp-conteudo');
   const eid = window._fpEmpresaId;
   const { data } = await sb.from('oct_formas_pagamento').select('*').eq('empresa_id', eid).order('ordem');
   const rows = data || [];
+  await fpAjustesCarregar(eid);
   // CONTA ONDE O VALOR ENTRA (11/10/2026, pedido do Ronan): cartão, Pix e cheque apontam para uma
   // conta do livro financeiro (Conciliação › 🏦 Contas). Ao confirmar a conferência de um caixa, o
   // F.Caixa lança o recebido de cada forma na conta dela — e a Conciliação já enxerga.
@@ -184,7 +234,7 @@ async function fpReceberListar() {
       <table style="width:100%;border-collapse:collapse;font-size:0.86rem">
         <thead><tr style="color:#888;text-align:left;background:#0f1119">
           <th style="padding:10px 12px">Ordem</th><th style="padding:10px 12px">Nome</th>
-          <th style="padding:10px 12px">Código SEFAZ</th><th style="padding:10px 12px">Conta onde entra</th><th style="padding:10px 12px">A prazo</th>
+          <th style="padding:10px 12px">Código SEFAZ</th><th style="padding:10px 12px">Conta onde entra</th><th style="padding:10px 12px">Acréscimo / desconto</th><th style="padding:10px 12px">A prazo</th>
           <th style="padding:10px 12px">Situação</th><th></th>
         </tr></thead>
         <tbody>
@@ -194,13 +244,14 @@ async function fpReceberListar() {
             <td style="padding:9px 12px;font-weight:500">${fpEsc(f.nome)}</td>
             <td style="padding:9px 12px"><span style="font-family:monospace;color:#7dd3fc">${f.cod_sefaz}</span> ${fpSefazNome(f.cod_sefaz)}</td>
             <td style="padding:9px 12px">${f.conta_id && contaNome(f.conta_id) ? '🏦 ' + fpEsc(contaNome(f.conta_id)) : '<span style="color:#667">—</span>'}</td>
+            <td style="padding:9px 12px">${fpAjusteRotulo((window._fpAjustes || {})[f.id])}</td>
             <td style="padding:9px 12px">${f.a_prazo ? '<span style="color:#fbbf24">sim</span>' : '—'}</td>
             <td style="padding:9px 12px">${f.ativo ? '<span style="color:#4caf50">ativo</span>' : '<span style="color:#888">inativo</span>'}</td>
             <td style="padding:9px 12px;text-align:right;white-space:nowrap">
               <button onclick='fpReceberForm(${JSON.stringify(f).replace(/'/g, "&#39;")})' class="nfe-aba" style="font-size:0.76rem">Editar</button>
               <button onclick="fpReceberExcluir('${f.id}')" class="nfe-aba" style="font-size:0.76rem;color:#f87171">Excluir</button>
             </td>
-          </tr>`).join('') : '<tr><td colspan="7" style="padding:22px;text-align:center;color:#666">Nenhuma forma cadastrada.</td></tr>'}
+          </tr>`).join('') : '<tr><td colspan="8" style="padding:22px;text-align:center;color:#666">Nenhuma forma cadastrada.</td></tr>'}
         </tbody>
       </table>
     </div>`;
@@ -239,6 +290,26 @@ function fpReceberForm(f) {
           ${(window._fpContas || []).length ? '' : '<p style="color:#f0b45c;font-size:0.72rem;margin:4px 0 0">Este posto ainda não tem contas — cadastre em Conciliação › 🏦 Contas.</p>'}
         </div>
       </div>
+      ${(() => {
+        const a = (window._fpAjustes || {})[f.id] || { tipo: 'nenhum', modo: 'percentual', valor: '' };
+        const sel = (v, x) => v === x ? 'selected' : '';
+        return `<div style="margin-top:12px">
+        <label style="color:#888;font-size:0.78rem">Acréscimo ou desconto no valor cobrado quando o PDV escolher esta forma
+          <span style="color:#667">(vale para a venda inteira; não soma com a tabela de preço do cliente; esta forma deixa de entrar em pagamento dividido)</span></label>
+        <div style="display:flex;gap:8px;margin-top:4px;align-items:center;flex-wrap:wrap">
+          <select id="fpr-aj-tipo" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+            <option value="nenhum" ${sel(a.tipo, 'nenhum')}>Nenhum</option>
+            <option value="acrescimo" ${sel(a.tipo, 'acrescimo')}>Acréscimo</option>
+            <option value="desconto" ${sel(a.tipo, 'desconto')}>Desconto</option>
+          </select>
+          <input id="fpr-aj-valor" type="number" step="0.01" min="0" value="${a.valor === '' ? '' : a.valor}" placeholder="0,00"
+            style="width:120px;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+          <select id="fpr-aj-modo" style="padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+            <option value="percentual" ${sel(a.modo, 'percentual')}>% do valor da venda</option>
+            <option value="fixo" ${sel(a.modo, 'fixo')}>R$ por venda</option>
+          </select>
+        </div></div>`;
+      })()}
       <div style="margin-top:12px;display:flex;gap:18px;align-items:center">
         <label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpr-prazo" ${f.a_prazo ? 'checked' : ''}> Forma a prazo (fiado)</label>
         <label style="color:#ddd;font-size:0.84rem"><input type="checkbox" id="fpr-ativo" ${f.ativo !== false ? 'checked' : ''}> Ativo</label>
@@ -266,10 +337,23 @@ async function fpReceberSalvar(id) {
     classificacao: document.getElementById('fpr-classif').value || null,
     conta_id: Number((document.getElementById('fpr-conta') || {}).value) || null,
   };
-  const q = id ? sb.from('oct_formas_pagamento').update(reg).eq('id', id)
-               : sb.from('oct_formas_pagamento').insert(reg);
-  const { error } = await q;
+  // ACRÉSCIMO / DESCONTO da forma (16/10/2026): confere antes de gravar qualquer coisa
+  const ajTipo = (document.getElementById('fpr-aj-tipo') || {}).value || 'nenhum';
+  const ajModo = (document.getElementById('fpr-aj-modo') || {}).value || 'percentual';
+  const ajValor = Number(String((document.getElementById('fpr-aj-valor') || {}).value || '').replace(',', '.')) || 0;
+  if (ajTipo !== 'nenhum') {
+    if (!(ajValor > 0)) { msg.style.color = '#f87171'; msg.textContent = 'Informe o valor do acréscimo/desconto (ou escolha "Nenhum").'; return; }
+    if (ajModo === 'percentual' && ajValor >= 100) { msg.style.color = '#f87171'; msg.textContent = 'Percentual deve ser menor que 100%.'; return; }
+  }
+  const q = id ? sb.from('oct_formas_pagamento').update(reg).eq('id', id).select('id')
+               : sb.from('oct_formas_pagamento').insert(reg).select('id');
+  const { data: gravada, error } = await q;
   if (error) { msg.style.color = '#f87171'; msg.textContent = 'Erro: ' + error.message; return; }
+  const formaId = id || ((gravada || [])[0] || {}).id;
+  if (formaId) {
+    const ra = await fpAjusteGravar(eid, formaId, ajTipo, ajModo, ajValor);
+    if (!ra.ok) { msg.style.color = '#f87171'; msg.textContent = 'A forma foi salva, mas o acréscimo/desconto NÃO: ' + ra.erro; return; }
+  }
   document.getElementById('fp-receb-form').innerHTML = '';
   fpReceberListar();
 }
@@ -279,6 +363,7 @@ async function fpReceberExcluir(id) {
   if (!confirm('Excluir esta forma de recebimento?')) return;
   const { error } = await sb.from('oct_formas_pagamento').delete().eq('id', id);
   if (error) { alert('Erro: ' + error.message); return; }
+  try { await fpAjusteGravar(window._fpEmpresaId, id, 'nenhum', 'percentual', 0); } catch (e) { /* sem ajuste: nada a apagar */ }
   fpReceberListar();
 }
 

@@ -190,7 +190,7 @@ async function fcCarregarDados() {
       .then(r => r, () => ({ data: [] })),
     // TÍTULOS RECEBIDOS — baixa de nota a prazo antiga; no TecnoX entra no lado
     // Vendas/Saídas. Tem turno_id.
-    sb.from('oct_recebimentos_titulo').select('turno_id,cliente_nome,valor,forma,juros,desconto,data_recebimento')
+    sb.from('oct_recebimentos_titulo').select('id,turno_id,cliente_nome,valor,forma,juros,desconto,data_recebimento,fatura_id,nota_prazo_id,recebimento_id,boleto_id,autor,origem')
       .eq('empresa_id', eid).in('turno_id', ids)
       .then(r => r, () => ({ data: [] })),
     // NOTAS A PRAZO EMITIDAS no turno. Nos postos que ainda operam no TecnoX
@@ -2861,7 +2861,8 @@ function fcNodeMov(tipo) {
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
       <td class="fc-td">${fcEsc(x.forma) || '—'}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
-      <td class="fc-td fc-r">${fcMoney(x.valor)}</td></tr>`);
+      <td class="fc-td fc-r">${fcMoney(x.valor)}</td>
+      <td class="fc-td fc-r">${x.id ? `<button class="fc-btn" title="Excluir este recebimento (o título/fatura volta para em aberto)" onclick="fcTitExcluirAbrir('${fcEsc(String(x.id))}')" style="padding:2px 8px;color:#f87171">🗑</button>` : ''}</td></tr>`);
     const tot = ts.reduce((s, x) => s + Number(x.valor || 0), 0);
     const btnBuscar = `<div style="padding:8px 10px">
         <button class="fc-btn azul" onclick="fcTitBuscar()">🔎 Buscar notas a prazo em aberto</button>
@@ -2869,8 +2870,9 @@ function fcNodeMov(tipo) {
     return fcModal('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
          ${btnBuscar}
-         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
+         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th><th></th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
+         <p style="padding:6px 10px;color:#777;font-size:0.74rem">🗑 exclui um recebimento lançado por engano: a nota/fatura volta para em aberto (motivo obrigatório).</p>`
       : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
   }
 
@@ -3169,6 +3171,158 @@ async function fcTitBaixar() {
     return;
   }
   _fcToast('\u2714 ' + ids.length + ' nota(s) baixada(s) \u2014 ' + fcMoney(liquido));
+  await fcRecarregar('titulos');
+}
+
+// ---------- EXCLUIR RECEBIMENTO DE TÍTULO (16/10/2026) ----------
+// Pedido do Ronan: "quando tem um recebimento indevido, tem que dar opção de excluir e ele voltar para as
+// faturas/títulos em aberto". Desfaz UMA linha de oct_recebimentos_titulo:
+//  - nota a prazo quitada volta 'aberto' com o valor desta baixa; baixa parcial devolve o valor ao saldo;
+//  - fatura liquidada volta 'aberta' (o saldo é o líquido menos o que ainda ficou recebido nela);
+//  - dinheiro recebido no PDV: o lançamento "Recebimento de título/fatura — CLIENTE" do caixa do turno é
+//    reduzido (ou sai), senão a gaveta esperaria um dinheiro que não entrou;
+//  - pagamento de maquininha/Pix vinculado volta a ficar sem par.
+// Dinheiro de verdade não se desfaz pela tela — TRAVAS: caixa já conferido (reabra antes), boleto pago no
+// banco, recebimento conciliado com o extrato, nota que já entrou numa fatura depois do recebimento.
+// A exclusão vem PRIMEIRO; se a volta do título/fatura falhar, o recebimento é reinserido.
+function _fcTitLiq(r) { return Math.round((Number(r.valor || 0) + Number(r.juros || 0) - Number(r.desconto || 0)) * 100) / 100; }
+async function _fcTitExcDados(id) {
+  const r = await sb.from('oct_recebimentos_titulo').select('*').eq('id', id).maybeSingle();
+  if (r.error || !r.data) return { erro: 'Recebimento não encontrado (pode já ter sido excluído). Atualize a tela.' };
+  const rec = r.data;
+  let nota = null, fat = null, caixa = null, conciliado = false;
+  if (rec.nota_prazo_id) {
+    const q = await sb.from('oct_pdv_notas_prazo').select('*').eq('id', rec.nota_prazo_id).maybeSingle();
+    nota = q.data || null;
+  }
+  if (rec.fatura_id) {
+    const q = await sb.from('oct_faturas').select('*').eq('id', rec.fatura_id).maybeSingle();
+    fat = q.data || null;
+  }
+  try {
+    const q = await sb.from('oct_fin_lancamentos').select('origem_id')
+      .eq('origem', 'receb_titulo').eq('conciliado', true).eq('origem_id', String(rec.id));
+    conciliado = (q.data || []).length > 0;
+  } catch (e) { conciliado = false; }
+  // DINHEIRO recebido no PDV entra também como receita no caixa do turno (receber_titulo.js)
+  if (rec.turno_id && /dinheiro/i.test(String(rec.forma || ''))) {
+    try {
+      const q = await sb.from('oct_pdv_caixa').select('id,tipo,forma,valor,descricao').eq('turno_id', rec.turno_id);
+      const nome = String(rec.cliente_nome || '').trim().toUpperCase();
+      const quanto = _fcTitLiq(rec);
+      const cands = (q.data || []).filter(c => /receita/i.test(String(c.tipo || '')) &&
+        /^recebimento de (t[ií]tulo|fatura)/i.test(String(c.descricao || '')) &&
+        (!nome || String(c.descricao || '').toUpperCase().includes(nome)));
+      caixa = cands.find(c => Math.abs(Number(c.valor || 0) - quanto) < 0.005)
+           || cands.filter(c => Number(c.valor || 0) >= quanto - 0.005).sort((a, b) => Number(a.valor) - Number(b.valor))[0] || null;
+    } catch (e) { caixa = null; }
+  }
+  return { rec, nota, fat, caixa, conciliado };
+}
+function _fcTitExcTravas(d) {
+  const t = [];
+  if (_fcTravado(false)) t.push('O caixa deste turno já foi <b>conferido</b>. Reabra o caixa (🔓) antes de mexer nos recebimentos.');
+  if (d.rec.boleto_id) t.push('Este recebimento veio do <b>boleto pago no banco</b> — o dinheiro entrou no banco e isso não se desfaz pelo Octano.');
+  if (d.conciliado) t.push('Recebimento já <b>conciliado com o extrato</b> no Livro financeiro. Desfaça a conciliação antes.');
+  if (d.rec.nota_prazo_id) {
+    if (!d.nota) t.push('A nota a prazo deste recebimento não foi encontrada.');
+    else if (d.nota.status === 'faturado' || d.nota.fatura_id) t.push(`A nota ${fcEsc(d.nota.numero_nfe || '')} já entrou numa <b>fatura</b> depois deste recebimento. Exclua a fatura (Faturar) antes.`);
+    else if (!['pago', 'aberto'].includes(String(d.nota.status || ''))) t.push(`A nota está como "${fcEsc(d.nota.status)}" — não sei voltar daqui.`);
+  }
+  if (d.rec.fatura_id) {
+    if (!d.fat) t.push('A fatura deste recebimento não foi encontrada.');
+    else if (!['aberta', 'liquidada'].includes(String(d.fat.status || ''))) t.push(`A fatura ${fcEsc(d.fat.numero || '')} está "${fcEsc(d.fat.status)}" — exclua pelo Faturar.`);
+  }
+  return t;
+}
+async function fcTitExcluirAbrir(id) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  fcModal('🗑 Excluir recebimento', '<p style="padding:20px;color:#888">Conferindo o recebimento...</p>');
+  const d = await _fcTitExcDados(id);
+  if (d.erro) { fcModal('🗑 Excluir recebimento', `<p style="padding:20px;color:#f87171">${fcEsc(d.erro)}</p>`); return; }
+  window._fcTitExc = d;
+  const r = d.rec, travas = _fcTitExcTravas(d);
+  const oque = [];
+  oque.push(`Recebimento de <b>${fcMoney(_fcTitLiq(r))}</b> (${fcEsc(r.forma || '—')}${r.origem ? ', ' + fcEsc(r.origem) : ''}) de <b>${fcEsc(r.cliente_nome || '—')}</b> em ${_fcData(r.data_recebimento)} será <b>excluído</b>.`);
+  if (d.nota) oque.push(d.nota.status === 'pago'
+    ? `A nota <b>${fcEsc(d.nota.numero_nfe || '')}</b> volta para <b>Títulos em aberto</b> com ${fcMoney(r.valor)}.`
+    : `A nota <b>${fcEsc(d.nota.numero_nfe || '')}</b> continua em aberto e o saldo volta de ${fcMoney(d.nota.valor)} para ${fcMoney(Number(d.nota.valor || 0) + Number(r.valor || 0))}.`);
+  if (d.fat) oque.push(d.fat.status === 'liquidada'
+    ? `A fatura <b>${fcEsc(d.fat.numero || '')}</b> volta para <b>Faturas em aberto</b>.`
+    : `A fatura <b>${fcEsc(d.fat.numero || '')}</b> continua em aberto, sem este recebimento.`);
+  if (d.caixa) oque.push(`O lançamento do caixa "${fcEsc(d.caixa.descricao || '')}" (${fcMoney(d.caixa.valor)}) ${Number(d.caixa.valor) - _fcTitLiq(r) > 0.005 ? 'passa a ' + fcMoney(Number(d.caixa.valor) - _fcTitLiq(r)) : '<b>sai</b>'}.`);
+  else if (/dinheiro/i.test(String(r.forma || '')) && r.origem === 'pdv') oque.push('<span style="color:#f0b45c">Não achei o lançamento de dinheiro deste recebimento no caixa do turno — confira o esperado da gaveta.</span>');
+  if (r.recebimento_id) oque.push('<span style="color:#f0b45c">Estava ligado a um pagamento de maquininha/Pix: ele volta a aparecer sem par na conferência do caixa.</span>');
+  const caixaHtml = (cor, fundo, borda, html) => `<div style="margin:10px 12px 0;background:${fundo};border:1px solid ${borda};border-radius:8px;padding:10px 12px;font-size:0.8rem;color:${cor};line-height:1.5">${html}</div>`;
+  fcModal('🗑 Excluir recebimento', travas.length
+    ? `<div style="padding:8px 0 14px">${travas.map(t => caixaHtml('#fecaca', '#2a1215', '#7f1d1d', '⛔ ' + t)).join('')}</div>`
+    : `<div style="padding:4px 0 14px">${caixaHtml('#cdd6e0', '#13151f', '#2a2d3e', oque.join('<br>'))}
+        <div style="padding:12px 12px 0">
+          <label style="color:#9aa;font-size:0.76rem">Motivo <span style="color:#667">(obrigatório — fica no histórico da nota/fatura)</span></label>
+          <input id="fctx-motivo" placeholder="ex.: cliente não pagou / recebido no cliente errado" style="width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+          <div id="fctx-msg" style="color:#f87171;font-size:0.8rem;min-height:18px;margin-top:6px"></div>
+          <div style="display:flex;gap:8px">
+            <button class="fc-btn" style="flex:1" onclick="fcNode('titulos')">Voltar</button>
+            <button id="fctx-ok" class="fc-btn" style="flex:2;background:#991b1b;border-color:#991b1b;color:#fff;font-weight:700" onclick="fcTitExcluirOk('${fcEsc(String(id))}')">🗑 Excluir — volta para em aberto</button>
+          </div>
+        </div></div>`);
+  document.getElementById('fctx-motivo')?.focus();
+}
+async function fcTitExcluirOk(id) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  const msg = document.getElementById('fctx-msg'), btn = document.getElementById('fctx-ok');
+  const motivo = (document.getElementById('fctx-motivo')?.value || '').trim();
+  const erro = t => { if (msg) { msg.style.color = '#f87171'; msg.textContent = t; } if (btn) btn.disabled = false; };
+  if (!motivo) return erro('Escreva o motivo — fica registrado.');
+  if (btn) btn.disabled = true;
+  if (msg) { msg.style.color = '#9aa'; msg.textContent = 'Excluindo...'; }
+  // confere de novo: entre abrir a janela e confirmar, alguém pode ter faturado/conciliado
+  const d = await _fcTitExcDados(id);
+  if (d.erro) return erro(d.erro);
+  if (_fcTitExcTravas(d).length) return erro('Apareceu uma trava agora. Feche e abra de novo para ver.');
+  const r = d.rec;
+  let quem = 'retaguarda';
+  try { const s = await sb.auth.getSession(); quem = (s.data && s.data.session && s.data.session.user && s.data.session.user.email) || quem; } catch (e) { /* segue */ }
+  const quando = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  const linha = `[${quando}] Recebimento de R$ ${_fcTitLiq(r).toFixed(2).replace('.', ',')} (${r.forma || '—'}, ${r.data_recebimento || ''}) excluído por ${quem}: ${motivo}.`;
+  // 1) o recebimento sai (confere que saiu: sem permissão o PostgREST não dá erro, só não apaga)
+  const d1 = await sb.from('oct_recebimentos_titulo').delete().eq('id', r.id).select('id');
+  if (d1.error || !(d1.data || []).length) return erro('Não consegui excluir o recebimento' + (d1.error ? ': ' + d1.error.message : ' (sem permissão para apagar)') + '. Nada foi alterado.');
+  const devolve = async (txt) => {           // falhou a volta: o recebimento volta para onde estava
+    await sb.from('oct_recebimentos_titulo').insert(r);
+    return erro(txt + ' O recebimento foi mantido; nada foi alterado.');
+  };
+  // 2) a nota / a fatura voltam para em aberto
+  if (d.nota) {
+    const upd = d.nota.status === 'pago'
+      ? { status: 'aberto', pago_em: null, valor: Math.round(Number(r.valor || 0) * 100) / 100 }
+      : { valor: Math.round((Number(d.nota.valor || 0) + Number(r.valor || 0)) * 100) / 100 };
+    upd.observacao = (d.nota.observacao ? d.nota.observacao + ' | ' : '') + linha;
+    const u = await sb.from('oct_pdv_notas_prazo').update(upd).eq('id', d.nota.id).eq('status', d.nota.status).select('id');
+    if (u.error || !(u.data || []).length) return devolve('Não consegui devolver a nota' + (u.error ? ': ' + u.error.message : ' (ela mudou)') + '.');
+  }
+  if (d.fat) {
+    const upd = { observacoes: (d.fat.observacoes ? d.fat.observacoes + '\n' : '') + linha };
+    if (d.fat.status === 'liquidada') Object.assign(upd, { status: 'aberta', liquidado_em: null, forma_liquidacao: null });
+    const u = await sb.from('oct_faturas').update(upd).eq('id', d.fat.id).eq('status', d.fat.status).select('id');
+    if (u.error || !(u.data || []).length) return devolve('Não consegui reabrir a fatura' + (u.error ? ': ' + u.error.message : ' (ela mudou)') + '.');
+  }
+  // 3) dinheiro do PDV: o lançamento do caixa diminui (ou sai) — falha aqui só avisa
+  const avisos = [];
+  if (d.caixa) {
+    const novo = Math.round((Number(d.caixa.valor || 0) - _fcTitLiq(r)) * 100) / 100;
+    const c = novo > 0.005
+      ? await sb.from('oct_pdv_caixa').update({ valor: novo }).eq('id', d.caixa.id).select('id')
+      : await sb.from('oct_pdv_caixa').delete().eq('id', d.caixa.id).select('id');
+    if (c.error || !(c.data || []).length) avisos.push('o lançamento de dinheiro do caixa NÃO foi ajustado (' + (c.error ? c.error.message : 'sem permissão') + ') — confira o esperado da gaveta');
+  }
+  // 4) pagamento de maquininha/Pix volta a ficar sem par
+  if (r.recebimento_id) {
+    try { await sb.from('oct_recebimentos').update({ conciliado: false }).eq('id', r.recebimento_id); } catch (e) { /* o painel do caixa mostra assim mesmo */ }
+  }
+  fcModalFechar();
+  _fcToast('✔ Recebimento excluído — ' + (d.fat ? 'a fatura ' + (d.fat.numero || '') : 'a nota ' + ((d.nota || {}).numero_nfe || '')) + ' voltou para em aberto');
+  if (avisos.length) alert('Recebimento excluído, mas: ' + avisos.join('; ') + '.');
   await fcRecarregar('titulos');
 }
 
