@@ -2121,6 +2121,58 @@ function _fatLiquido(f) {
   return +(Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0)).toFixed(2);
 }
 
+// DESCONTO POR ABASTECIMENTO (17/10/2026, Ronan: "colocar o desconto em reais ... tem que mostrar o desconto por
+// abastecimento"; duas opções: POR LITRO e VALOR TOTAL). A regra fica em oct_faturas.desconto_regra:
+// {modo:"litro", por_produto:{"OLEO DIESEL S-10": 0.30, ...}} = R$/L de cada produto; {modo:"total"} (ou sem regra) =
+// o desconto repartido pelo VALOR de cada abastecimento (maior resto: fecha no centavo). O PDF da fatura (gateway,
+// octano-sicoob/fatura_pdf.js descontoPorLinha) faz a MESMA conta, linha a linha: mudar uma = mudar a outra.
+function _fatProdChave(n) {
+  return String(n || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+function _fatDescontoPorLinha(linhas, fat) {
+  const zero = linhas.map(() => 0);
+  const desc = Math.round(Number((fat && fat.desconto) || 0) * 100);
+  if (!(desc > 0) || !linhas.length) return zero;
+  const regra = fat.desconto_regra || null;
+  if (regra && regra.modo === "litro" && regra.por_produto) {
+    const tab = {};
+    Object.keys(regra.por_produto).forEach(k => { tab[_fatProdChave(k)] = Number(regra.por_produto[k] || 0); });
+    const v = linhas.map(l => Math.round(Number(l.qtd || 0) * (tab[_fatProdChave(l.produto)] || 0) * 100));
+    if (v.reduce((s, x) => s + x, 0) === desc) return v.map(x => x / 100);
+  }
+  const tot = linhas.map(l => Math.max(0, Math.round(Number(l.total || 0) * 100)));
+  const base = tot.reduce((s, x) => s + x, 0);
+  if (!(base > 0)) return zero;
+  const bruto = tot.map(t => t * desc / base);
+  const out = bruto.map(b => Math.floor(b));
+  let resto = desc - out.reduce((s, x) => s + x, 0);
+  const ordem = bruto.map((b, i) => [b - Math.floor(b), i]).sort((a, b) => (b[0] - a[0]) || (a[1] - b[1]));
+  for (let k = 0; resto > 0 && k < ordem.length; k++, resto--) out[ordem[k][1]] += 1;
+  return out.map(x => x / 100);
+}
+// as linhas da fatura como o PDF monta (títulos -> cupom -> itens; parcela usa os títulos da original)
+async function _fatLinhasDaFatura(f) {
+  const fid = f.parcela_de || f.id;
+  const { data: tits } = await sb.from("oct_pdv_notas_prazo").select("numero_nfe,valor,registrado_em")
+    .eq("fatura_id", fid).order("registrado_em");
+  const nums = (tits || []).map(t => t.numero_nfe).filter(Boolean);
+  const porNum = {};
+  for (let i = 0; i < nums.length; i += 200) {
+    const { data: vs } = await sb.from("oct_pdv_vendas").select("numero,itens")
+      .eq("empresa_id", f.empresa_id).in("numero", nums.slice(i, i + 200));
+    (vs || []).forEach(v => { porNum[String(v.numero)] = v; });
+  }
+  const linhas = [];
+  (tits || []).forEach(t => {
+    const v = porNum[String(t.numero_nfe)];
+    const itens = (v && Array.isArray(v.itens)) ? v.itens : [];
+    if (!itens.length) { linhas.push({ produto: "ABASTECIMENTO", qtd: 0, total: Number(t.valor || 0) }); return; }
+    itens.forEach(it => linhas.push({ produto: it.desc || it.produto || "", qtd: Number(it.qtd || 0),
+      total: Number(it.total != null ? it.total : (it.qtd || 0) * (it.unit || 0)) }));
+  });
+  return linhas;
+}
+
 async function _fatUsuario() {
   if (window._fatUser) return window._fatUser;
   try {
@@ -2141,7 +2193,23 @@ async function fatEditarFatura(faturaId) {
     bol = (r.data || [])[0] || null;
   } catch (e) { /* tabela pode nao existir */ }
   const temBoleto = bol && ["registrado", "liquidado"].includes(bol.status);
-  window._fatEdit = { f, recebido, temBoleto };
+  // linhas da fatura (as mesmas do PDF) para o desconto POR LITRO, produto a produto
+  let linhas = [];
+  try { linhas = await _fatLinhasDaFatura(f); } catch (e) { linhas = []; }
+  const pm = {};
+  linhas.forEach(l => {
+    if (!(l.qtd > 0)) return;
+    const k = _fatProdChave(l.produto);
+    pm[k] = pm[k] || { k, nome: l.produto, qtd: 0, total: 0 };
+    pm[k].qtd += l.qtd; pm[k].total += l.total;
+  });
+  const prods = Object.values(pm).sort((a, b) => b.total - a.total);
+  const regra = f.desconto_regra || null;
+  const taxa = {};
+  if (regra && regra.por_produto) Object.keys(regra.por_produto).forEach(k => { taxa[_fatProdChave(k)] = Number(regra.por_produto[k] || 0); });
+  const podeLitro = prods.length > 0 && !f.parcela_de;
+  const modo = podeLitro && regra && regra.modo === "litro" ? "litro" : "total";
+  window._fatEdit = { f, recebido, temBoleto, linhas, prods, modo };
 
   const campo = (id, rot, val, cor) => `
     <div><label style="color:#9aa;font-size:0.74rem">${rot}</label>
@@ -2162,6 +2230,25 @@ async function fatEditarFatura(faturaId) {
         ${campo("fed-desc", "Desconto (R$)", Number(f.desconto || 0).toFixed(2), "#4ade80")}
         ${campo("fed-acr", "Acréscimo (R$)", Number(f.acrescimo || 0).toFixed(2), "#f0b45c")}
       </div>
+      <div style="margin-top:12px;background:#0f1119;border:1px solid #2a2d3e;border-radius:8px;padding:10px">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem">
+          <label style="cursor:pointer"><input type="radio" name="fed-modo" value="total" ${modo === "total" ? "checked" : ""} onchange="_fatEditModo()"> Desconto em <b>valor total</b> (R$)</label>
+          <label style="cursor:${podeLitro ? "pointer" : "not-allowed"};opacity:${podeLitro ? 1 : 0.5}"><input type="radio" name="fed-modo" value="litro" ${modo === "litro" ? "checked" : ""} ${podeLitro ? "" : "disabled"} onchange="_fatEditModo()"> Desconto <b>por litro</b> (R$/L de cada produto)</label>
+        </div>
+        <div id="fed-litro" style="display:${modo === "litro" ? "block" : "none"};margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
+            <tr style="color:#9aa;text-align:right"><th style="text-align:left;padding:3px 4px">Produto</th><th style="padding:3px 4px">Litros</th><th style="padding:3px 4px">Preço médio</th><th style="padding:3px 4px">Desconto R$/L</th><th style="padding:3px 4px">Desconto</th></tr>
+            ${prods.map((p, i) => `<tr style="text-align:right;border-top:1px solid #1f2230">
+              <td style="text-align:left;padding:4px">${_fatEsc(p.nome)}</td>
+              <td style="padding:4px">${p.qtd.toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
+              <td style="padding:4px;color:#9aa">${(p.qtd ? p.total / p.qtd : 0).toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
+              <td style="padding:4px"><input class="fed-rl" data-k="${_fatEsc(p.k)}" type="number" step="0.001" min="0" value="${taxa[p.k] ? taxa[p.k] : ""}" placeholder="0,000" oninput="_fatEditCalc()"
+                style="width:90px;padding:5px;border-radius:5px;border:1px solid #2a2d3e;background:#0b0d14;color:#4ade80;text-align:right;font-weight:700"></td>
+              <td id="fed-rl-d-${i}" style="padding:4px;color:#4ade80">—</td></tr>`).join("")}
+          </table>
+        </div>
+        <p style="color:#778;font-size:0.72rem;margin:8px 0 0">Na fatura (PDF), cada abastecimento mostra a sua parte do desconto e o valor líquido. ${podeLitro ? "Em valor total, a parte de cada abastecimento é proporcional ao valor dele." : (f.parcela_de ? "Parcela: o desconto por litro se lança na fatura original." : "")}</p>
+      </div>
       <div style="margin-top:12px;background:#13151f;border-radius:8px;padding:11px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:#9aa;font-size:0.82rem">Valor líquido — é o que se cobra</span>
         <b id="fed-liq" style="color:#f59e0b;font-size:1.25rem">R$ ${_fatMoney(_fatLiquido(f))}</b></div>
@@ -2180,11 +2267,50 @@ async function fatEditarFatura(faturaId) {
         <button class="fat-btn azul" style="flex:2" onclick="fatEditarFaturaOk('${faturaId}')">Salvar</button>
       </div>
     </div>`);
+  _fatEditModo();
+}
+
+// troca total x por litro: no por litro o total é a soma das linhas (o campo Desconto fica só de leitura)
+function _fatEditModo() {
+  const st = window._fatEdit; if (!st) return;
+  const el = document.querySelector('input[name="fed-modo"]:checked');
+  st.modo = el ? el.value : "total";
+  const box = document.getElementById("fed-litro");
+  if (box) box.style.display = st.modo === "litro" ? "block" : "none";
+  const d = document.getElementById("fed-desc");
+  if (d) { d.readOnly = st.modo === "litro"; d.style.opacity = st.modo === "litro" ? 0.75 : 1; }
   _fatEditCalc();
+}
+
+// R$/L digitado por produto -> {chave: taxa}
+function _fatEditTaxas() {
+  const t = {};
+  document.querySelectorAll(".fed-rl").forEach(i => { const v = Number(String(i.value || "").replace(",", ".")); if (v > 0) t[i.dataset.k] = v; });
+  return t;
 }
 
 function _fatEditCalc() {
   const st = window._fatEdit; if (!st) return;
+  let erroLitro = "";
+  if (st.modo === "litro") {
+    // MESMA conta do PDF: centavo arredondado POR LINHA (qtd × R$/L), depois somado
+    const taxa = _fatEditTaxas();
+    const porProd = {};
+    let cents = 0;
+    (st.linhas || []).forEach(l => {
+      const k = _fatProdChave(l.produto);
+      const c = Math.round(Number(l.qtd || 0) * (taxa[k] || 0) * 100);
+      cents += c; porProd[k] = (porProd[k] || 0) + c;
+    });
+    (st.prods || []).forEach((p, i) => {
+      const td = document.getElementById("fed-rl-d-" + i);
+      if (td) td.textContent = porProd[p.k] ? "- R$ " + _fatMoney(porProd[p.k] / 100) : "—";
+      const media = p.qtd ? p.total / p.qtd : 0;
+      if ((taxa[p.k] || 0) >= media && media > 0) erroLitro = `O desconto por litro de ${p.nome} é maior que o preço médio (${media.toFixed(3)}).`;
+    });
+    const dEl = document.getElementById("fed-desc");
+    if (dEl) dEl.value = (cents / 100).toFixed(2);
+  }
   const d = Number(document.getElementById("fed-desc")?.value || 0);
   const a = Number(document.getElementById("fed-acr")?.value || 0);
   const liq = +(Number(st.f.valor || 0) - d + a).toFixed(2);
@@ -2192,7 +2318,8 @@ function _fatEditCalc() {
   if (el) { el.textContent = "R$ " + _fatMoney(liq); el.style.color = liq < 0 ? "#f87171" : "#f59e0b"; }
   const msg = document.getElementById("fed-msg");
   if (!msg) return;
-  if (liq < 0) msg.textContent = "O desconto é maior que a fatura — o líquido ficaria negativo.";
+  if (erroLitro) msg.textContent = erroLitro;
+  else if (liq < 0) msg.textContent = "O desconto é maior que a fatura — o líquido ficaria negativo.";
   else if (st.recebido > liq + 0.005) msg.textContent = `Atenção: já foram recebidos ${_fatBRL(st.recebido)}, mais que o líquido. Sobraria crédito para o cliente.`;
   else msg.textContent = "";
 }
@@ -2207,11 +2334,24 @@ async function fatEditarFaturaOk(faturaId) {
   const obs = (document.getElementById("fed-obs").value || "").trim() || null;
   const liq = +(Number(st.f.valor || 0) - desc + acr).toFixed(2);
   if (liq < 0) { msg.textContent = "O desconto é maior que a fatura."; return; }
+  // regra do desconto por abastecimento (o PDF reparte linha a linha com ela)
+  let regra = null;
+  if (st.modo === "litro") {
+    const taxa = _fatEditTaxas();
+    if (!Object.keys(taxa).length) { msg.textContent = "Digite o desconto por litro de pelo menos um produto (ou escolha valor total)."; return; }
+    const ruim = (st.prods || []).find(p => (taxa[p.k] || 0) >= (p.qtd ? p.total / p.qtd : 0) && p.qtd > 0);
+    if (ruim) { msg.textContent = `O desconto por litro de ${ruim.nome} é maior que o preço médio.`; return; }
+    const por = {};
+    (st.prods || []).forEach(p => { if (taxa[p.k] > 0) por[p.nome] = taxa[p.k]; });
+    regra = { modo: "litro", por_produto: por };
+  } else if (desc > 0) {
+    regra = { modo: "total" };
+  }
   if (desc > 0 && !obs && !confirm("Salvar o desconto sem escrever o motivo?")) return;
 
   msg.style.color = "#9aa"; msg.textContent = "Salvando...";
   const patch = {
-    vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs,
+    vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs, desconto_regra: regra,
     alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
     // o PDF guardado virou mentira: joga fora e ja' pede outro -- pior que nao
     // ter a fatura e' ter a fatura errada, e pior ainda e' nao ter nenhuma
@@ -2219,6 +2359,13 @@ async function fatEditarFaturaOk(faturaId) {
     fatura_pdf_pedido_em: new Date().toISOString(),
   };
   let { error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId);
+  if (error && /desconto_regra/i.test(error.message || "")) {
+    // sem o SQL novo (SQL-FATURA-DESCONTO-REGRA.sql): valor total funciona sem a regra (o PDF reparte pelo valor);
+    // por litro precisa da coluna
+    if (st.modo === "litro") { msg.style.color = "#f87171"; msg.textContent = "O desconto por litro precisa do SQL repo/sql/SQL-FATURA-DESCONTO-REGRA.sql (rodar no Supabase)."; return; }
+    delete patch.desconto_regra;
+    ({ error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId));
+  }
   if (error && /desconto|acrescimo|observacao|alterado_|column/i.test(error.message || "")) {
     // sem o SQL de desconto ainda da' para corrigir a data, que ja' funcionava
     const r2 = await sb.from("oct_faturas").update({ vencimento: venc }).eq("id", faturaId);
@@ -3514,7 +3661,7 @@ async function fatParcelarFatura(id) {
       <div style="display:flex;gap:8px;margin-top:6px">
         <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
         <button id="fpa-ok" class="fat-btn" style="flex:2;background:#6d28d9;border-color:#6d28d9;color:#fff;font-weight:700"
-          onclick="fatParcelarOk('${id}')">🔀 Parcelar</button></div>`}
+          onclick="fatParcelarFaturaOk('${id}')">🔀 Parcelar</button></div>`}
     </div>`);
   if (!travas.length) _fatParcMontar();
 }
@@ -3559,7 +3706,7 @@ function _fatParcSoma() {
     : `<span style="color:#f87171">Soma das parcelas: ${_fatBRL(soma)} — ${dif > 0 ? "faltam" : "sobram"} ${_fatBRL(Math.abs(dif))}</span>`;
 }
 
-async function fatParcelarOk(id) {
+async function fatParcelarFaturaOk(id) {
   if (!podeOuAvisa('faturar.parcelar')) return;
   const st = window._fatParc; if (!st || st.id !== id) return;
   const msg = document.getElementById("fpa-msg"), btn = document.getElementById("fpa-ok");
