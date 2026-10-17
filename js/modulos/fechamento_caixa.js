@@ -1923,7 +1923,10 @@ async function fcDesfazerDeposito() {
 // 💳 Cartões, por transação e com a taxa do EDI — se o F.Caixa lançasse o total do turno também,
 // a conta PagBank contaria em dobro. Pix só vai quando a forma Pix tem conta (Florestal: Sicoob);
 // Pix da maquininha também vem pela aba Cartões, então nesses postos a forma Pix fica sem conta.
-const _FC_LIVRO_GRUPOS = { pix: 'PIX', pix_cnpj: 'PIX CNPJ', cheque: 'CHEQUE', frota: 'CARTÃO FROTA' };
+// CARTÃO FROTA também saiu daqui (17/10/2026): a aba 💳 Cartões passou a conferir a frota por venda e mandar para a
+// conta da operadora (com a taxa do contrato) — o total do turno aqui contaria em dobro. Nenhum turno tinha lançado
+// frota (nenhuma forma CARTÃO FROTA tinha conta), então não há linha antiga a apagar.
+const _FC_LIVRO_GRUPOS = { pix: 'PIX', pix_cnpj: 'PIX CNPJ', cheque: 'CHEQUE' };
 function _fcGrupoDaForma(f) {
   const c = String((f && f.classificacao) || '');
   if (c === 'cartao_frota') return 'frota';
