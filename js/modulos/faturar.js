@@ -596,6 +596,30 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       sb.from("oct_pdv_vendas").select("numero,nfce_chave,itens,valor_total").eq("empresa_id", eid).in("nfce_chave", chaves),
     ]);
     const emp = empR.data, cli = cliR.data, vendas = vendasR.data || [];
+    // CUPOM DO TECNOX (17/10/2026, fatura 101 da Bread Life: NF-e de R$ 5.021,02 numa fatura de R$ 12.526,53): a cópia
+    // da venda do TecnoX (oct_pdv_vendas.status 'tecnox') vem SEM nfce_chave — o título tem a chave, a venda não. Pela
+    // chave só os cupons do Octano entravam (e os do TecnoX iam referenciados sem itens). Agora: o que não achou pela
+    // chave procura pelo NÚMERO do cupom (= nNF da chave do título), só entre vendas sem chave.
+    const achadas = new Set(vendas.map(v => String(v.nfce_chave)));
+    const faltam = titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || "")) && !achadas.has(String(t.chave_nfe)));
+    if (faltam.length) {
+      const nums = Array.from(new Set(faltam.map(t => String(Number(String(t.chave_nfe).slice(25, 34))))));
+      const { data: vn } = await sb.from("oct_pdv_vendas").select("numero,nfce_chave,itens,valor_total")
+        .eq("empresa_id", eid).in("numero", nums).is("nfce_chave", null);
+      const porNum = {};
+      (vn || []).forEach(v => { porNum[String(v.numero)] = v; });
+      faltam.forEach(t => { const v = porNum[String(Number(String(t.chave_nfe).slice(25, 34)))]; if (v) { vendas.push(v); delete porNum[String(v.numero)]; } });
+    }
+    const semItens = titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || ""))).filter(t =>
+      !vendas.some(v => String(v.nfce_chave) === String(t.chave_nfe) || (!v.nfce_chave && String(v.numero) === String(Number(String(t.chave_nfe).slice(25, 34))))));
+    if (semItens.length) throw new Error(`Não achei os itens de ${semItens.length} cupom(ns): ${semItens.map(t => t.numero_nfe || String(t.chave_nfe).slice(25, 34)).join(", ")}. A NF-e não foi emitida (sairia com valor menor que a fatura).`);
+    // NCM: o item do cupom do TecnoX não traz o bloco fiscal — vem do cadastro de produtos pelo código
+    const cods = Array.from(new Set(vendas.flatMap(v => (Array.isArray(v.itens) ? v.itens : []).filter(it => !(it.fiscal && it.fiscal.ncm)).map(it => String(it.cod || "")).filter(Boolean))));
+    const prodPorCod = {};
+    if (cods.length) {
+      const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,cest,unidade,origem").eq("empresa_id", eid).in("codigo", cods);
+      (ps || []).forEach(p => { if (p.ncm) prodPorCod[String(p.codigo)] = p; });
+    }
     if (!emp) throw new Error("Empresa não encontrada.");
     if (!emp.cert_path) throw new Error("Certificado não configurado (tela Empresa).");
     const docDest = (cli.documento || "").replace(/\D/g, "");
@@ -605,14 +629,18 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
 
     // itens: 1 linha por item dos cupons, CFOP 5929 + CST 90 (imposto já recolhido)
     const itens = [];
+    const semNcm = [];
     vendas.forEach(v => (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
-      const f = it.fiscal || {};
+      const pc = prodPorCod[String(it.cod || "")] || {};
+      const f = Object.assign({}, it.fiscal || {});
+      ["ncm", "cest", "unidade", "origem"].forEach(c => { if (!f[c] && pc[c]) f[c] = pc[c]; });   // o cadastro só completa o que falta
+      if (!f.ncm) { semNcm.push(`${it.desc || "item"} (cupom ${v.numero})`); return; }
       const q = Number(it.qtd || 0), unit = Number(it.unit || 0);
       const total = Number(it.total != null ? it.total : q * unit);
       itens.push({
         nItem: itens.length + 1, cProd: it.cod || ("ITEM" + (itens.length + 1)), xProd: it.desc || f.nome || "ITEM",
         cEAN: "SEM GTIN", cEANTrib: "SEM GTIN",
-        ncm: f.ncm || "27111910", cest: f.cest || null, cfop: "5929",
+        ncm: f.ncm, cest: f.cest || null, cfop: "5929",
         uCom: f.unidade || (q && it.tipo === "abastecimento" ? "L" : "UN"), uTrib: f.unidade || "UN",
         qCom: q || 1, vUnCom: unit, vProd: total,
         origem: f.origem || "0",
@@ -624,6 +652,13 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       });
     }));
     if (!itens.length) throw new Error("Os cupons selecionados não têm itens em oct_pdv_vendas.");
+    // antes o NCM vazio virava 2711.19.10 (GLP) calado: agora para e diz qual produto
+    if (semNcm.length) throw new Error(`Item sem NCM no cadastro de produtos: ${semNcm.slice(0, 5).join("; ")}${semNcm.length > 5 ? "…" : ""}. Complete o NCM e gere de novo.`);
+    // a NF-e tem de fechar com os cupons (títulos) que ela consolida
+    const somaItens = +itens.reduce((s, i) => s + Number(i.vProd || 0), 0).toFixed(2);
+    const somaTit = +titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || ""))).reduce((s, t) => s + Number(t.valor_original != null && Number(t.valor_original) > 0 ? t.valor_original : t.valor || 0), 0).toFixed(2);
+    if (Math.abs(somaItens - somaTit) > 0.05)
+      throw new Error(`Os itens dos cupons somam R$ ${_fatMoney(somaItens)} e os títulos R$ ${_fatMoney(somaTit)}. A NF-e não foi emitida — confira os cupons.`);
 
     const empresa = {
       cnpj: (emp.cnpj || "").replace(/\D/g, ""), nome: emp.nome, ie: (emp.ie || "").replace(/\D/g, ""),
