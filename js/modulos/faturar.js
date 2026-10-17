@@ -389,7 +389,7 @@ function _fatRenderTitulos(manterRolagem) {
         <span style="color:#5b6474;font-size:11px;margin-left:10px">↑↓ navega · espaço marca · shift+↑↓ marca em sequência</span></span>
       <span style="display:flex;gap:8px">
         <button class="fat-btn azul" onclick="fatGerarFatura()">💠 Gerar Fatura</button>
-        <button class="fat-btn" style="background:#0e7490" onclick="fatGerarNfConsolidada()" title="Consolida os cupons selecionados numa NF-e (modelo 55, CFOP 5929) — HOMOLOGAÇÃO">🧾 Gerar NF (consolidada)</button>
+        <button class="fat-btn" style="background:#0e7490" onclick="fatGerarNfConsolidada()" title="Consolida os cupons selecionados numa NF-e (modelo 55, CFOP 5929) — no ambiente da NF-e do posto">🧾 Gerar NF (consolidada)</button>
       </span>
     </div>`;
 
@@ -561,10 +561,33 @@ function fatCobrarCopiar() {
 // ============================================================
 // GERAR NF CONSOLIDADA (modelo 55, CFOP 5929) — unifica os cupons dos títulos
 // selecionados numa única NF-e que REFERENCIA as NFC-e (NFref), sem recolher
-// imposto de novo (CST 90). SEMPRE em HOMOLOGAÇÃO até o contador validar.
+// imposto de novo (CST 90). Ambiente POR POSTO (_fatNfeConfig): homologação até
+// o posto ser liberado (nfe_producao); a NFC-e do PDV tem a chave dela, separada.
 // Só funciona para cupons DO OCTANO (chave real + itens em oct_pdv_vendas).
 // ============================================================
 const _FAT_SEFAZ = (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://octano-sefaz-production-66d4.up.railway.app";
+// NF-e EM PRODUÇÃO SÓ A NF-e (17/10/2026, Ronan: "colocar só a emissão da nf em produção e deixar a nfce em
+// homologação"). Em oct_parametros, por posto:
+//   nfe_producao       true = a NF-e do Faturar vale (a NFC-e segue a chave nfce_producao, à parte)
+//   nfe_serie          série da NF-e (Florestal = 0, a mesma do TecnoX); sem ele, 1
+//   nfe_ultimo_numero  último número emitido FORA do Octano nessa série (o TecnoX); em produção o próximo
+//                      nunca fica abaixo dele. Se a SEFAZ disser que o número já existe (539), pula para o seguinte.
+// Sem leitura dos parâmetros = homologação (nada sai valendo por engano).
+async function _fatNfeConfig(eid) {
+  const cfg = { ambiente: "homologacao", serie: 1, ultimo: 0 };
+  try {
+    const { data, error } = await sb.from("oct_parametros").select("chave,valor").eq("empresa_id", eid)
+      .in("chave", ["nfe_producao", "nfe_serie", "nfe_ultimo_numero"]);
+    if (error) return cfg;
+    const p = {};
+    (data || []).forEach(r => { p[r.chave] = r.valor; });
+    if (p.nfe_producao === true || /^(true|1|s|sim|on)$/i.test(String(p.nfe_producao == null ? "" : p.nfe_producao).trim())) cfg.ambiente = "producao";
+    const s = String(p.nfe_serie == null ? "" : p.nfe_serie).trim();
+    if (/^\d{1,3}$/.test(s)) cfg.serie = Number(s);          // série 0 é válida (Number(0 || 1) daria 1)
+    cfg.ultimo = Number(p.nfe_ultimo_numero) || 0;
+  } catch (e) { /* sem parâmetros: homologação */ }
+  return cfg;
+}
 async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
   if (!podeOuAvisa('faturar.emitir_nfe')) return;
   // no lote quem manda no que aparece na tela e' a barra de progresso
@@ -585,7 +608,10 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
   const chaves = Array.from(new Set(titulos.map(t => t.chave_nfe).filter(c => /^\d{44}$/.test(String(c || "")))));
   if (!chaves.length) return recusa("Nenhum cupom do Octano (chave de 44 dígitos). Cupom do TecnoX ainda não pode ser consolidado.");
 
-  if (!silencioso) _fatModal(`<div style="padding:26px;text-align:center;color:#9aa"><div style="font-size:1.6rem">📡</div><p style="margin-top:8px">Montando a NF-e consolidada em <b style="color:#f59e0b">HOMOLOGAÇÃO</b>...</p><div id="fnf-msg" style="margin-top:10px;font-size:0.85rem"></div></div>`);
+  const cfgNfe = await _fatNfeConfig(window._fatEid);
+  const prod = cfgNfe.ambiente === "producao";
+  const ambTxt = prod ? "PRODUÇÃO" : "HOMOLOGAÇÃO";
+  if (!silencioso) _fatModal(`<div style="padding:26px;text-align:center;color:#9aa"><div style="font-size:1.6rem">📡</div><p style="margin-top:8px">Montando a NF-e consolidada em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${ambTxt}</b>...</p><div id="fnf-msg" style="margin-top:10px;font-size:0.85rem"></div></div>`);
   const msg = () => document.getElementById("fnf-msg");
   try {
     const eid = window._fatEid;
@@ -636,10 +662,23 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const fids = Array.from(new Set(titulos.map(t => t.fatura_id).filter(Boolean)));
     if (fids.length === 1 && titulos.every(t => t.fatura_id === fids[0])) {
       const [{ data: fx }, { data: tx }] = await Promise.all([
-        sb.from("oct_faturas").select("id,numero,vencimento,valor,desconto,desconto_regra,boleto_id,parcela_de").eq("id", fids[0]).maybeSingle(),
+        sb.from("oct_faturas").select("id,numero,vencimento,valor,desconto,desconto_regra,boleto_id,parcela_de,nfe_chave,nfe_numero").eq("id", fids[0]).maybeSingle(),
         sb.from("oct_pdv_notas_prazo").select("id").eq("fatura_id", fids[0]),
       ]);
       if (fx && !fx.parcela_de && (tx || []).length === titulos.length) fatura = fx;
+    }
+    // em produção a nota vale: a fatura que já tem NF-e (do Octano ou anexada do TecnoX) não ganha outra
+    if (prod && fatura && fatura.nfe_chave)
+      throw new Error(`A fatura ${fatura.numero ?? ""} já tem a NF-e nº ${fatura.nfe_numero || String(fatura.nfe_chave).slice(25, 34)}. Uma fatura não leva duas NF-e valendo.`);
+    // CUPOM DE HOMOLOGAÇÃO NÃO ENTRA NA REFERÊNCIA DA NF-e DE PRODUÇÃO (17/10/2026, fatura 101 da Bread Life: 9 dos
+    // 22 cupons eram NFC-e do Octano em homologação, sem valor fiscal). Decisão do Ronan: a NF-e 5929 sai INTEIRA,
+    // com o valor da fatura; só não aponta (NFref / "REFERENTE AOS CUPONS") cupom que a SEFAZ de produção não conhece.
+    const semValor = new Set();
+    if (prod) {
+      const { data: hs, error: eh } = await sb.from("oct_nfce").select("chave_nfe").eq("empresa_id", eid)
+        .in("chave_nfe", chaves).eq("ambiente", "homologacao");
+      if (eh) throw new Error("Não consegui conferir o ambiente dos cupons (" + (eh.message || eh) + "). A NF-e não foi emitida.");
+      (hs || []).forEach(h => semValor.add(String(h.chave_nfe)));
     }
     // linhas dos cupons NA ORDEM DO PDF da fatura (títulos por data): o desconto por linha tem de ser o mesmo do PDF
     const ordTit = titulos.slice().sort((a, b) => String(a.registrado_em || "").localeCompare(String(b.registrado_em || "")));
@@ -648,7 +687,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const linhas = [], semNcm = [], numsCupom = [];
     ordTit.filter(t => /^\d{44}$/.test(String(t.chave_nfe || ""))).forEach(t => {
       const v = vendaDo(t); if (!v) return;
-      numsCupom.push(String(v.numero));
+      if (!semValor.has(String(t.chave_nfe))) numsCupom.push(String(v.numero));
       (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
         const pc = prodPorCod[String(it.cod || "")] || {};
         const f = Object.assign({}, it.fiscal || {});
@@ -698,7 +737,10 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
         // CST 61 (monofásico) leva cClassTrib de combustível no IBS/CBS, e a SEFAZ exige o grupo <comb> (rejeição
         // 1106, 17/10/2026): cProdANP/descANP/UFCons/pBio/origComb do cadastro. Sem encerrante (é faturamento).
         ind_combustivel: g.cst === "61" ? "S" : "N", ind_monofasico: "N",
-        gmono_ret: g.cst === "61",   // 1229: a NF-e 55 cobra a monofasia retida anteriormente, leiaute ad valorem (IBS/CBS)
+        // 1229: a NF-e 55 de HOMOLOGAÇÃO cobra a monofasia retida anteriormente no leiaute novo (IBS/CBS). Em PRODUÇÃO
+        // vai como a NF-e 779 do TecnoX (16/10, autorizada só com os totais); se a SEFAZ passar a cobrar, o servidor
+        // (MONO_LEIAUTE producao:auto) refaz a nota no leiaute novo na hora.
+        gmono_ret: g.cst === "61" && !prod,
         cod_anp: g.cst === "61" ? (f.cod_anp || null) : null, desc_anp: g.cst === "61" ? (f.desc_anp || null) : null,
         perc_bio: g.cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: emp.uf || "MG",
       });
@@ -726,16 +768,21 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       cep: (cli.cep || "").replace(/\D/g, ""),
       ie: contribIE ? cliIE : "", ind_ie: contribIE ? "1" : "9",
     };
-    // número da NF-e 55 (série própria de faturamento)
-    const { data: ult } = await sb.from("oct_nfce").select("numero").eq("empresa_id", eid).eq("modelo", "55").order("numero", { ascending: false }).limit(1);
-    const numero = ((ult && ult[0] && Number(ult[0].numero)) || 0) + 1;
+    // número da NF-e 55: por AMBIENTE e SÉRIE (a numeração de homologação não empurra a de produção); em produção
+    // nunca abaixo do último do TecnoX (nfe_ultimo_numero). A data limita a busca: sem ela o oct_nfce (83 mil
+    // cupons) estourava o tempo e a leitura voltava vazia — a NF-e saía de novo com o nº 1 (539).
+    const desde = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+    const { data: ult } = await sb.from("oct_nfce").select("numero").eq("empresa_id", eid).eq("modelo", "55")
+      .eq("ambiente", cfgNfe.ambiente).eq("serie", cfgNfe.serie).gte("data_emissao", desde)
+      .order("numero", { ascending: false }).limit(1);
+    const numero = Math.max((ult && ult[0] && Number(ult[0].numero)) || 0, prod ? cfgNfe.ultimo : 0) + 1;
 
     const hojeIso = _fatHojeIso();
     const venc = fatura && fatura.vencimento ? String(fatura.vencimento).slice(0, 10) : null;
     const nota = {
-      numero, serie: Number(emp.nfe_serie || 1), modelo: "55",
+      numero, serie: cfgNfe.serie, modelo: "55",
       natureza_op: "LANC DOC FISCAL REGISTRADO EM ECF", mod_frete: "9",
-      emitente: empresa, destinatario, itens, refs: chaves,
+      emitente: empresa, destinatario, itens, refs: chaves.filter(c => !semValor.has(String(c))),
       dh_sai_ent: true, inf_ibpt: true,
       t_pag: fatura && fatura.boleto_id ? "15" : "05",
       inf_complementar: "NOTA FISCAL REFERENTE AOS CUPONS: " + numsCupom.join(", ") + (fatura ? ` | FATURA ${fatura.numero}` : ""),
@@ -743,6 +790,16 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
                        dups: venc && venc >= hojeIso ? [{ nDup: "001", dVenc: venc, vDup: vLiq }] : [] } : null,
     };
     if (msg()) msg().textContent = `Consolidando ${chaves.length} cupom(ns), ${itens.length} item(ns)...`;
+    // produção: confirma antes de sair a nota que vale (no lote, o confirm do lote já disse PRODUÇÃO)
+    if (prod && !silencioso) {
+      const vNfConf = +(vOrig - vDescTot).toFixed(2);
+      const avisoRef = semValor.size ? `\n\n${semValor.size} cupom(ns) de homologação ficam fora da referência (a nota leva o valor inteiro).` : "";
+      if (!confirm(`Emitir a NF-e nº ${numero} série ${cfgNfe.serie} em PRODUÇÃO (vale fiscalmente)?\n\n` +
+                   `${destinatario.nome}\nR$ ${_fatMoney(vNfConf)} · ${itens.length} item(ns) · ${nota.refs.length} cupom(ns) referenciado(s)` + avisoRef)) {
+        if (msg()) msg().innerHTML = `Cancelado — nenhuma NF-e foi emitida.<br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
+        return { ok: false, erro: "cancelado" };
+      }
+    }
 
     // carrega o certificado (mesmo padrão do nfce.js)
     const { data: cb } = await sb.storage.from("octano-certs").download(emp.cert_path);
@@ -750,12 +807,12 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
 
     // NÚMERO JÁ USADO (17/10/2026, 539 na 2ª NF-e da Bread Life: saiu de novo a nº 1 — a leitura de oct_nfce pelo
     // usuário logado pode não enxergar a nota anterior): a SEFAZ devolve a chave da nota que já tem o número; o
-    // próximo é o nNF dela + 1. Até 5 tentativas.
+    // próximo é o nNF dela + 1. Até 5 tentativas (produção: 20 — o TecnoX pode ter emitido acima do último conhecido).
     let r = null;
-    for (let tent = 0; tent < 5; tent++) {
+    for (let tent = 0; tent < (prod ? 20 : 5); tent++) {
       const resp = await fetch(`${_FAT_SEFAZ}/emitir`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cert_base64: b64, cert_senha: senha, ambiente: "homologacao", nota }),
+        body: JSON.stringify({ cert_base64: b64, cert_senha: senha, ambiente: cfgNfe.ambiente, nota }),
       });
       r = await resp.json();
       const cst = String(r.cstat_nfe || r.cstat_lote || "");
@@ -768,19 +825,31 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const numeroUsado = nota.numero;
     if (r.ok) {
       window._fatUltimoDanfe = r.nfe_proc || null;  // p/ imprimir a DANFE agora
-      // persiste a NF-e autorizada em oct_nfce (histórico + reimpressão)
+      // persiste a NF-e autorizada em oct_nfce (histórico + reimpressão + numeração da próxima)
+      const valorNota = +itens.reduce((s, i) => s + Number(i.vProd || 0) - Number(i.vDesc || 0), 0).toFixed(2);   // vNF (com o desconto)
+      const avisos = [];
       try {
-        const valorNota = itens.reduce((s, i) => s + Number(i.vProd || 0) - Number(i.vDesc || 0), 0);   // vNF (com o desconto)
-        await sb.from("oct_nfce").insert({
-          empresa_id: eid, numero: numeroUsado, serie: Number(emp.nfe_serie || 1), modelo: "55",
-          status: "autorizada", ambiente: "homologacao", valor_total: valorNota,
+        const { error: ei } = await sb.from("oct_nfce").insert({
+          empresa_id: eid, numero: numeroUsado, serie: cfgNfe.serie, modelo: "55",
+          status: "autorizada", ambiente: cfgNfe.ambiente, valor_total: valorNota,
           cpf_consumidor: docDest, chave_nfe: r.chave, protocolo: r.protocolo,
           xml_autorizado: r.nfe_proc || null, data_emissao: new Date().toISOString(),
         });
-      } catch (e) { /* não bloqueia a impressão */ }
+        if (ei) avisos.push("não gravou no histórico de notas (" + (ei.message || ei) + ")");
+      } catch (e) { avisos.push("não gravou no histórico de notas"); }
+      // produção: a NF-e vira a NF-e DA FATURA (XML + DANFE arquivados, como o 📎 Anexar) — vai no envio ao cliente
+      // e o lote/“Gerar NF” não emitem outra para a mesma fatura
+      if (prod && fatura && r.nfe_proc) {
+        const e2 = await _fatAnexarNfeEmitida(fatura, r, numeroUsado, cfgNfe.serie, valorNota);
+        if (e2) avisos.push(e2);
+      }
       const btnDanfe = r.nfe_proc ? `<button class="fat-btn" onclick="fatImprimirDanfe()" style="background:#2a5a8a;margin-right:8px">📄 Imprimir DANFE</button>` : "";
-      if (silencioso) return { ok: true, chave: r.chave, numero: numeroUsado };
-      if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br>${btnDanfe}<button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
+      if (silencioso) return { ok: true, chave: r.chave, numero: numeroUsado, avisos };
+      if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada nº ${numeroUsado} (série ${cfgNfe.serie}) autorizada em ${ambTxt}</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span>` +
+        (avisos.length ? `<p style="font-size:0.78rem;color:#f0b45c;margin-top:8px">⚠ ${_fatEsc(avisos.join(" · "))}</p>` : "") +
+        `<br>${btnDanfe}<button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>` +
+        (prod ? "" : `<p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`);
+      if (prod && fatura) _fatRecarregar();
     } else {
       // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
       const cstat = r.cstat_nfe || r.cstat_lote || "";
@@ -795,6 +864,33 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     if (silencioso) return { ok: false, erro: String(e.message || e) };
     if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
   }
+}
+
+// NF-e de PRODUÇÃO emitida pelo Octano -> arquivada na fatura (mesmos campos do 📎 Anexar NF-e, origem "octano").
+// Devolve o aviso (texto) se algo não foi gravado; a nota já está autorizada, então não desfaz nada.
+async function _fatAnexarNfeEmitida(fatura, r, numero, serie, valor) {
+  const hoje = _fatHojeIso();   // data do Brasil (toISOString vira o dia às 21h)
+  const xmlPath = _fatDocPath(window._fatEid, hoje, `nfe-${r.chave}.xml`);
+  let pdfPath = null;
+  try {
+    const up1 = await sb.storage.from(_FAT_BUCKET).upload(xmlPath, new Blob([r.nfe_proc], { type: "application/xml" }),
+      { upsert: true, contentType: "application/xml" });
+    if (up1.error) throw up1.error;
+  } catch (e) { return "XML não arquivado na fatura (" + (e.message || e) + ") — anexe pelo 📎 NF-e"; }
+  try {
+    const resp = await fetch(`${_FAT_SEFAZ}/danfe`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ xml: r.nfe_proc }) });
+    if (resp.ok) {
+      const p = _fatDocPath(window._fatEid, hoje, `nfe-${r.chave}.pdf`);
+      const up2 = await sb.storage.from(_FAT_BUCKET).upload(p, await resp.blob(), { upsert: true, contentType: "application/pdf" });
+      if (!up2.error) pdfPath = p;
+    }
+  } catch (e) { /* sem DANFE arquivada: o XML basta; a DANFE sai pelo botão */ }
+  const { error } = await sb.from("oct_faturas").update({
+    nfe_chave: r.chave, nfe_numero: String(numero), nfe_serie: String(serie), nfe_emissao: hoje, nfe_valor: valor,
+    nfe_origem: "octano", nfe_xml_path: xmlPath, nfe_pdf_path: pdfPath,
+  }).eq("id", fatura.id);
+  if (error) return "NF-e não gravada na fatura (" + (error.message || error) + ") — anexe o XML pelo 📎 NF-e";
+  return pdfPath ? null : "DANFE não arquivada na fatura (só o XML)";
 }
 
 // ---------- IMPRIMIR DANFE (reaproveita o /danfe do sefaz) ----------
@@ -2897,7 +2993,9 @@ async function fatLoteNf() {
   if (!podeOuAvisa('faturar.emitir_nfe')) return;
   const alvo = _fatSelecionadas();
   if (!alvo.length) return;
-  if (!confirm(`Emitir NF-e de ${alvo.length} fatura(s), em HOMOLOGAÇÃO?\n\n` +
+  const cfgNfe = await _fatNfeConfig(window._fatEid);
+  const prod = cfgNfe.ambiente === "producao";
+  if (!confirm(`Emitir NF-e de ${alvo.length} fatura(s), em ${prod ? "PRODUÇÃO (valem fiscalmente), série " + cfgNfe.serie : "HOMOLOGAÇÃO"}?\n\n` +
                `Faturas que já têm NF-e anexada serão puladas.`)) return;
   _fatProgAbrir("🧾 Emitindo NF-e", alvo.length);
   for (const f of alvo) {
