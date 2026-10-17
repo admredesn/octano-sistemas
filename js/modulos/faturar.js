@@ -628,7 +628,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const cods = Array.from(new Set(vendas.flatMap(v => (Array.isArray(v.itens) ? v.itens : []).map(it => String(it.cod || "")).filter(Boolean))));
     const prodPorCod = {};
     if (cods.length) {
-      const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,cest,unidade,origem,cst_icms,aliq_icms_ad_rem").eq("empresa_id", eid).in("codigo", cods);
+      const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,cest,unidade,origem,cst_icms,aliq_icms_ad_rem,cod_anp,desc_anp,perc_bio").eq("empresa_id", eid).in("codigo", cods);
       (ps || []).forEach(p => { prodPorCod[String(p.codigo)] = p; });
     }
     // a fatura inteira? (todos os títulos dela) -> desconto por item + bloco FATURA
@@ -652,7 +652,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
         const pc = prodPorCod[String(it.cod || "")] || {};
         const f = Object.assign({}, it.fiscal || {});
-        ["ncm", "cest", "unidade", "origem", "cst_icms", "aliq_icms_ad_rem"].forEach(c => { if ((f[c] == null || f[c] === "") && pc[c] != null && pc[c] !== "") f[c] = pc[c]; });   // o cadastro só completa o que falta
+        ["ncm", "cest", "unidade", "origem", "cst_icms", "aliq_icms_ad_rem", "cod_anp", "desc_anp", "perc_bio"].forEach(c => { if ((f[c] == null || f[c] === "") && pc[c] != null && pc[c] !== "") f[c] = pc[c]; });   // o cadastro só completa o que falta
         if (!f.ncm) { semNcm.push(`${it.desc || "item"} (cupom ${v.numero})`); return; }
         const q = Number(it.qtd || 0) || 1;
         const total = Number(it.total != null ? it.total : q * Number(it.unit || 0));
@@ -695,11 +695,15 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
         origem: String(f.origem || "0"),
         cst_icms: g.cst, aliq_icms: 0, aliq_icms_ad_rem: g.cst === "61" ? Number(f.aliq_icms_ad_rem || 0) : 0,
         cst_pis: "49", cst_cofins: "49", aliq_pis: 0, aliq_cofins: 0,
-        // NF-e consolidada (CFOP 5929) referencia NFC-e já emitidas: são linhas de
-        // faturamento, NÃO dispensa de combustível — sem grupo <comb>/encerrante/cProdANP.
-        ind_combustivel: "N", ind_monofasico: "N", cod_anp: null,
+        // CST 61 (monofásico) leva cClassTrib de combustível no IBS/CBS, e a SEFAZ exige o grupo <comb> (rejeição
+        // 1106, 17/10/2026): cProdANP/descANP/UFCons/pBio/origComb do cadastro. Sem encerrante (é faturamento).
+        ind_combustivel: g.cst === "61" ? "S" : "N", ind_monofasico: "N",
+        cod_anp: g.cst === "61" ? (f.cod_anp || null) : null, desc_anp: g.cst === "61" ? (f.desc_anp || null) : null,
+        perc_bio: g.cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: emp.uf || "MG",
       });
     });
+    const semAnp = itens.filter(i => i.cst_icms === "61" && !i.cod_anp).map(i => i.xProd);
+    if (semAnp.length) throw new Error(`Combustível sem código ANP no cadastro de produtos: ${semAnp.join(", ")}. Complete o código ANP e gere de novo.`);
     const vOrig = +itens.reduce((s, i) => s + i.vProd, 0).toFixed(2);
     const vDescTot = +itens.reduce((s, i) => s + i.vDesc, 0).toFixed(2);
     const vLiq = +(vOrig - vDescTot).toFixed(2);
