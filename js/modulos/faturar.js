@@ -2129,15 +2129,22 @@ function _fatLiquido(f) {
 function _fatProdChave(n) {
   return String(n || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 }
+// desconto de UMA linha, em centavos: "litro" = qtd × R$/L de desconto; "preco" = PREÇO NEGOCIADO por litro (17/10/2026:
+// na 1ª fatura o Ronan digitou o preço no campo de desconto) -> o que passou de qtd × preço (a linha fecha em qtd × preço)
+function _fatDescLinhaCents(l, t, modo) {
+  if (!(t > 0)) return 0;
+  if (modo === "preco") return Math.max(0, Math.round(Number(l.total || 0) * 100) - Math.round(Number(l.qtd || 0) * t * 100));
+  return Math.round(Number(l.qtd || 0) * t * 100);
+}
 function _fatDescontoPorLinha(linhas, fat) {
   const zero = linhas.map(() => 0);
   const desc = Math.round(Number((fat && fat.desconto) || 0) * 100);
   if (!(desc > 0) || !linhas.length) return zero;
   const regra = fat.desconto_regra || null;
-  if (regra && regra.modo === "litro" && regra.por_produto) {
+  if (regra && (regra.modo === "litro" || regra.modo === "preco") && regra.por_produto) {
     const tab = {};
     Object.keys(regra.por_produto).forEach(k => { tab[_fatProdChave(k)] = Number(regra.por_produto[k] || 0); });
-    const v = linhas.map(l => Math.round(Number(l.qtd || 0) * (tab[_fatProdChave(l.produto)] || 0) * 100));
+    const v = linhas.map(l => _fatDescLinhaCents(l, tab[_fatProdChave(l.produto)] || 0, regra.modo));
     if (v.reduce((s, x) => s + x, 0) === desc) return v.map(x => x / 100);
   }
   const tot = linhas.map(l => Math.max(0, Math.round(Number(l.total || 0) * 100)));
@@ -2208,8 +2215,8 @@ async function fatEditarFatura(faturaId) {
   const taxa = {};
   if (regra && regra.por_produto) Object.keys(regra.por_produto).forEach(k => { taxa[_fatProdChave(k)] = Number(regra.por_produto[k] || 0); });
   const podeLitro = prods.length > 0 && !f.parcela_de;
-  const modo = podeLitro && regra && regra.modo === "litro" ? "litro" : "total";
-  window._fatEdit = { f, recebido, temBoleto, linhas, prods, modo };
+  const modo = podeLitro && regra && (regra.modo === "litro" || regra.modo === "preco") ? regra.modo : "total";
+  window._fatEdit = { f, recebido, temBoleto, linhas, prods, modo, modoTab: modo };
 
   const campo = (id, rot, val, cor) => `
     <div><label style="color:#9aa;font-size:0.74rem">${rot}</label>
@@ -2234,10 +2241,11 @@ async function fatEditarFatura(faturaId) {
         <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem">
           <label style="cursor:pointer"><input type="radio" name="fed-modo" value="total" ${modo === "total" ? "checked" : ""} onchange="_fatEditModo()"> Desconto em <b>valor total</b> (R$)</label>
           <label style="cursor:${podeLitro ? "pointer" : "not-allowed"};opacity:${podeLitro ? 1 : 0.5}"><input type="radio" name="fed-modo" value="litro" ${modo === "litro" ? "checked" : ""} ${podeLitro ? "" : "disabled"} onchange="_fatEditModo()"> Desconto <b>por litro</b> (R$/L de cada produto)</label>
+          <label style="cursor:${podeLitro ? "pointer" : "not-allowed"};opacity:${podeLitro ? 1 : 0.5}"><input type="radio" name="fed-modo" value="preco" ${modo === "preco" ? "checked" : ""} ${podeLitro ? "" : "disabled"} onchange="_fatEditModo()"> <b>Preço por litro</b> negociado (R$/L final)</label>
         </div>
         <div id="fed-litro" style="display:${modo === "litro" ? "block" : "none"};margin-top:8px">
           <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
-            <tr style="color:#9aa;text-align:right"><th style="text-align:left;padding:3px 4px">Produto</th><th style="padding:3px 4px">Litros</th><th style="padding:3px 4px">Preço médio</th><th style="padding:3px 4px">Desconto R$/L</th><th style="padding:3px 4px">Desconto</th></tr>
+            <tr style="color:#9aa;text-align:right"><th style="text-align:left;padding:3px 4px">Produto</th><th style="padding:3px 4px">Litros</th><th style="padding:3px 4px">Preço médio</th><th id="fed-rl-cab" style="padding:3px 4px">${modo === "preco" ? "Preço negociado R$/L" : "Desconto R$/L"}</th><th style="padding:3px 4px">Desconto</th></tr>
             ${prods.map((p, i) => `<tr style="text-align:right;border-top:1px solid #1f2230">
               <td style="text-align:left;padding:4px">${_fatEsc(p.nome)}</td>
               <td style="padding:4px">${p.qtd.toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
@@ -2275,10 +2283,17 @@ function _fatEditModo() {
   const st = window._fatEdit; if (!st) return;
   const el = document.querySelector('input[name="fed-modo"]:checked');
   st.modo = el ? el.value : "total";
+  const tab = st.modo === "litro" || st.modo === "preco";
   const box = document.getElementById("fed-litro");
-  if (box) box.style.display = st.modo === "litro" ? "block" : "none";
+  if (box) box.style.display = tab ? "block" : "none";
+  // trocar desconto/L <-> preço/L: o número digitado muda de sentido, então a tabela começa limpa
+  if (tab && st.modoTab && st.modoTab !== "total" && st.modoTab !== st.modo) document.querySelectorAll(".fed-rl").forEach(i => { i.value = ""; });
+  if (tab) st.modoTab = st.modo;
+  const cab = document.getElementById("fed-rl-cab");
+  if (cab) cab.textContent = st.modo === "preco" ? "Preço negociado R$/L" : "Desconto R$/L";
+  document.querySelectorAll(".fed-rl").forEach(i => { i.placeholder = st.modo === "preco" ? "preço" : "0,000"; i.style.color = st.modo === "preco" ? "#93c5fd" : "#4ade80"; });
   const d = document.getElementById("fed-desc");
-  if (d) { d.readOnly = st.modo === "litro"; d.style.opacity = st.modo === "litro" ? 0.75 : 1; }
+  if (d) { d.readOnly = tab; d.style.opacity = tab ? 0.75 : 1; }
   _fatEditCalc();
 }
 
@@ -2292,21 +2307,21 @@ function _fatEditTaxas() {
 function _fatEditCalc() {
   const st = window._fatEdit; if (!st) return;
   let erroLitro = "";
-  if (st.modo === "litro") {
-    // MESMA conta do PDF: centavo arredondado POR LINHA (qtd × R$/L), depois somado
+  if (st.modo === "litro" || st.modo === "preco") {
+    // MESMA conta do PDF: centavo POR LINHA (_fatDescLinhaCents), depois somado
     const taxa = _fatEditTaxas();
     const porProd = {};
     let cents = 0;
     (st.linhas || []).forEach(l => {
       const k = _fatProdChave(l.produto);
-      const c = Math.round(Number(l.qtd || 0) * (taxa[k] || 0) * 100);
+      const c = _fatDescLinhaCents(l, taxa[k] || 0, st.modo);
       cents += c; porProd[k] = (porProd[k] || 0) + c;
     });
     (st.prods || []).forEach((p, i) => {
       const td = document.getElementById("fed-rl-d-" + i);
       if (td) td.textContent = porProd[p.k] ? "- R$ " + _fatMoney(porProd[p.k] / 100) : "—";
       const media = p.qtd ? p.total / p.qtd : 0;
-      if ((taxa[p.k] || 0) >= media && media > 0) erroLitro = `O desconto por litro de ${p.nome} é maior que o preço médio (${media.toFixed(3)}).`;
+      if (st.modo === "litro" && (taxa[p.k] || 0) >= media && media > 0) erroLitro = `O desconto por litro de ${p.nome} é maior que o preço médio (${media.toFixed(3)}).`;
     });
     const dEl = document.getElementById("fed-desc");
     if (dEl) dEl.value = (cents / 100).toFixed(2);
@@ -2336,14 +2351,28 @@ async function fatEditarFaturaOk(faturaId) {
   if (liq < 0) { msg.textContent = "O desconto é maior que a fatura."; return; }
   // regra do desconto por abastecimento (o PDF reparte linha a linha com ela)
   let regra = null;
-  if (st.modo === "litro") {
+  if (st.modo === "litro" || st.modo === "preco") {
     const taxa = _fatEditTaxas();
-    if (!Object.keys(taxa).length) { msg.textContent = "Digite o desconto por litro de pelo menos um produto (ou escolha valor total)."; return; }
-    const ruim = (st.prods || []).find(p => (taxa[p.k] || 0) >= (p.qtd ? p.total / p.qtd : 0) && p.qtd > 0);
-    if (ruim) { msg.textContent = `O desconto por litro de ${ruim.nome} é maior que o preço médio.`; return; }
+    const oque = st.modo === "preco" ? "o preço negociado por litro" : "o desconto por litro";
+    if (!Object.keys(taxa).length) { msg.textContent = `Digite ${oque} de pelo menos um produto (ou escolha valor total).`; return; }
+    const media = p => (p.qtd ? p.total / p.qtd : 0);
+    if (st.modo === "litro") {
+      const ruim = (st.prods || []).find(p => (taxa[p.k] || 0) >= media(p) && p.qtd > 0);
+      if (ruim) { msg.textContent = `O desconto por litro de ${ruim.nome} é maior que o preço médio.`; return; }
+      // 17/10/2026: na 1ª fatura o preço negociado foi digitado como DESCONTO (6,17/L na gasolina)
+      const alto = (st.prods || []).find(p => (taxa[p.k] || 0) > media(p) * 0.5);
+      if (alto && !confirm(`Desconto de R$ ${taxa[alto.k].toFixed(3).replace(".", ",")} POR LITRO em ${alto.nome} (preço médio ${media(alto).toFixed(3).replace(".", ",")})?
+
+Se ${taxa[alto.k].toFixed(2).replace(".", ",")} é o PREÇO negociado, cancele e use "Preço por litro".`)) return;
+    } else {
+      const baixo = (st.prods || []).find(p => taxa[p.k] > 0 && taxa[p.k] < media(p) * 0.5);
+      if (baixo && !confirm(`Preço negociado de R$ ${taxa[baixo.k].toFixed(3).replace(".", ",")} por litro em ${baixo.nome} (o preço médio cobrado foi ${media(baixo).toFixed(3).replace(".", ",")})?
+
+Se ${taxa[baixo.k].toFixed(2).replace(".", ",")} é o DESCONTO por litro, cancele e use "Desconto por litro".`)) return;
+    }
     const por = {};
     (st.prods || []).forEach(p => { if (taxa[p.k] > 0) por[p.nome] = taxa[p.k]; });
-    regra = { modo: "litro", por_produto: por };
+    regra = { modo: st.modo, por_produto: por };
   } else if (desc > 0) {
     regra = { modo: "total" };
   }
@@ -2362,7 +2391,7 @@ async function fatEditarFaturaOk(faturaId) {
   if (error && /desconto_regra/i.test(error.message || "")) {
     // sem o SQL novo (SQL-FATURA-DESCONTO-REGRA.sql): valor total funciona sem a regra (o PDF reparte pelo valor);
     // por litro precisa da coluna
-    if (st.modo === "litro") { msg.style.color = "#f87171"; msg.textContent = "O desconto por litro precisa do SQL repo/sql/SQL-FATURA-DESCONTO-REGRA.sql (rodar no Supabase)."; return; }
+    if (st.modo === "litro" || st.modo === "preco") { msg.style.color = "#f87171"; msg.textContent = "O desconto por litro precisa do SQL repo/sql/SQL-FATURA-DESCONTO-REGRA.sql (rodar no Supabase)."; return; }
     delete patch.desconto_regra;
     ({ error } = await sb.from("oct_faturas").update(patch).eq("id", faturaId));
   }
