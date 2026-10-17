@@ -2077,6 +2077,38 @@ function _fcRotForma(formaNome, forma, bandeira) {
   return (f + (bCap && !redundante ? ' ' + bCap : '')).trim();
 }
 
+// CARTÃO FROTA (17/10/2026, Ronan: "não fala qual tipo de cartão é (ticketlog, prime, vale card...) e na pista o
+// operador tem que selecionar qual é esse cartão"): o PDV grava a operadora em pagamento.frota.operadora. Na frota o
+// rótulo é a OPERADORA — o "Crédito" do código 03 não diz nada. Nome canônico (mesma lista do PDV), "" = não informada.
+function _fcOperadoraFrota(s) {
+  const t = String(s || '').trim();
+  const n = t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  if (!n || n === 'frota' || /^cart.{0,2}frota$/.test(n)) return '';   // "CARTÃO FROTA" (com ou sem o til) = genérica
+  if (/ticket|edenred/.test(n)) return 'TicketLog';
+  if (/fit|prime/.test(n)) return 'FitCard / Prime';
+  if (/valecard/.test(n)) return 'ValeCard';
+  if (/^agil/.test(n)) return 'Agilli';
+  if (/semparar/.test(n)) return 'Sem Parar';
+  if (/good/.test(n)) return 'GoodCard';
+  return t;
+}
+function _fcRotFrota(operadora) { return _fcOperadoraFrota(operadora) || 'Frota (operadora não informada)'; }
+// rótulo de um pagamento do cupom (com o ajuste ✎ por cima): frota = a operadora; o resto, forma + bandeira
+function _fcRotPag(p, ajV) {
+  const nome = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
+  if (_fcGrupoNome(nome, p.forma) === 'frota') return _fcRotFrota((ajV && ajV.bandeira) || (p.frota && p.frota.operadora) || p.bandeira);
+  return _fcRotForma(nome, p.forma, p.bandeira || '');
+}
+// "nome e sobrenome" do vendedor (17/10/2026): MATEUS HENRIQUE TAVARES TEIXEIRA LEMOS → MATEUS LEMOS;
+// ESTEVAO DE OLIVEIRA FONSECA → ESTEVAO FONSECA; JOSE DA SILVA JUNIOR → JOSE SILVA JUNIOR
+function _fcNomeCurto(nome) {
+  const p = String(nome || '').trim().split(/\s+/).filter(Boolean);
+  if (p.length <= 2) return p.join(' ');
+  const sufixo = /^(junior|júnior|junio|filho|neto|sobrinho)$/i.test(p[p.length - 1]) ? p.pop() : '';
+  const resto = p.slice(1).filter(x => !/^(de|da|do|das|dos|e)$/i.test(x));
+  return [p[0], resto.length ? resto[resto.length - 1] : '', sufixo].filter(Boolean).join(' ');
+}
+
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
 function fcLancEditar(refTipo, refId) {
   const k = refTipo + ':' + refId;
@@ -2546,7 +2578,10 @@ async function fcNodeDetalhe(tipo) {
       // Σ de totais divide a mesma forma em duas linhas (visto 19/08)
       const nomeBase = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
       if (!fBand({ forma_nome: nomeBase, forma: p.forma, bandeira: p.bandeira || '' })) return;
-      const rotF = _fcRotForma(nomeBase, p.forma, p.bandeira || '');
+      const rotF = _fcRotPag(p, ajV);
+      const fr = gAj === 'frota' && p.frota && typeof p.frota === 'object' ? p.frota : null;
+      const frotaAut = fr && fr.autorizacao && String(fr.autorizacao).trim() !== '0' ? String(fr.autorizacao).trim() : '';
+      const frotaTxt = fr && (frotaAut || fr.placa) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🚛 ${[frotaAut ? 'aut. ' + fcEsc(frotaAut) : '', fr.placa ? 'placa ' + fcEsc(fr.placa) : '', fr.km ? fcEsc(fr.km) + ' km' : ''].filter(Boolean).join(' · ')}</span>` : '';
       // ITENS do cupom na descrição (19/08 — pedido Ronan): "C" indica cupom e
       // o operador vê O QUE foi vendido, não só o número
       const its = v.itens || [];
@@ -2563,16 +2598,18 @@ async function fcNodeDetalhe(tipo) {
       const descItens = its.map(it => amigavel(it.desc || it.cod)).filter(Boolean).join(' + ');
       const litrosCupom = its.filter(it => it.tipo === 'abastecimento')
         .reduce((s, it) => s + Number(it.qtd || 0), 0);
-      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor, forma_nome: rotF };
+      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor,
+        forma_nome: gAj === 'frota' ? 'Cartão Frota' : rotF,
+        bandeira: gAj === 'frota' ? _fcOperadoraFrota((ajV && ajV.bandeira) || (p.frota && p.frota.operadora) || p.bandeira) : undefined };
       // CHEQUE (10/10/2026 — Florestal): o PDV grava os dados do cheque no pagamento
       const chq = p.cheque && typeof p.cheque === 'object' ? p.cheque : null;
       const chqTxt = chq ? ` <span style="color:#7ea8d8;font-size:0.72rem">🧾 cheque nº ${fcEsc(chq.numero || '?')}${chq.banco ? ' · bco ' + fcEsc(chq.banco) : ''}${chq.emitente ? ' · ' + fcEsc(chq.emitente) : ''}${chq.bom_para ? ' · bom p/ ' + fcEsc(String(chq.bom_para).slice(0, 10).split('-').reverse().join('/')) : ''}</span>` : '';
       entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
         _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
-          <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span>${chqTxt}</td>
+          <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span>${chqTxt}${frotaTxt}</td>
           <td class="fc-td">—</td>
           <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
-          <td class="fc-td">${fcEsc(v.cliente_nome || v.vendedor || v.operador) || '—'}</td>
+          <td class="fc-td">${fcEsc(v.cliente_nome || _fcNomeCurto(v.vendedor || v.operador)) || '—'}</td>
           <td class="fc-td">${fcEsc(rotF) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`, `fcCupomResumo('${v.id}')`)] });
     }));
@@ -2592,7 +2629,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
-        <td class="fc-td">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td">${fcEsc(_fcNomeCurto(f.vendedor)) || '—'}</td>
         <td class="fc-td">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
         <td class="fc-td fc-r">${fcMoney(vfDe(f))}</td>`);
     };
@@ -2602,7 +2639,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
-        <td class="fc-td" style="font-size:0.78rem">${fcEsc((f.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td" style="font-size:0.78rem">${fcEsc(_fcNomeCurto(f.vendedor)) || '—'}</td>
         <td class="fc-td" style="font-size:0.78rem">${fcEsc(_fcRotForma(f.forma_nome, f.forma, f.bandeira)) || '—'}</td>
         <td class="fc-td fc-r" style="font-size:0.78rem">${fcMoney(vfDe(f))}</td>
         <td class="fc-td" style="width:84px"></td></tr>`;
@@ -2620,7 +2657,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
         <td class="fc-td">—</td>
         <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
-        <td class="fc-td">${fcEsc((f0.vendedor || '').split(' ').slice(0, 2).join(' ')) || '—'}</td>
+        <td class="fc-td">${fcEsc(_fcNomeCurto(f0.vendedor)) || '—'}</td>
         <td class="fc-td">${fcEsc(_fcRotForma(f0.forma_nome, f0.forma, f0.bandeira)) || '—'}</td>
         <td class="fc-td fc-r"><b>${fcMoney(vG)}</b></td>`);
       hdr = hdr.replace(`fcLancExcluirRef('fila','${f0.id}')`,
@@ -2639,6 +2676,8 @@ async function fcNodeDetalhe(tipo) {
     const mans = (d0.manuais || []).filter(m => _fcManDep(m) ? tipo === 'deposito'
       : (m.secao === tipo || grupos.includes(m.secao)
         || (['cartao', 'pix', 'cheque', 'frota'].includes(_gRec(m)) && grupos.includes(_gRec(m)))));
+    // frota lançada à mão: forma Crédito/Débito com a OPERADORA na bandeira → o rótulo é a operadora (igual ao cupom)
+    const _rotMan = m => (m.secao === 'frota' || _gRec(m) === 'frota') ? _fcRotFrota(m.bandeira) : _fcRotForma(m.forma_nome, '', m.bandeira);
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
@@ -2646,7 +2685,7 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
-          <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
+          <td class="fc-td">${fcEsc(_rotMan(m)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`)] });
     });
     manuaisMesclados = true;
@@ -2697,17 +2736,17 @@ async function fcNodeDetalhe(tipo) {
           : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
         const pertence = gAj ? gruposNode0.includes(gAj)
           : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
-        if (pertence) soma1(_fcRotForma((ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma), p.forma, p.bandeira || ''), Number(p.valor || 0));
+        if (pertence) soma1(_fcRotPag(p, ajV), Number(p.valor || 0));
       }));
-      mans.forEach(m => soma1(_fcRotForma(m.forma_nome, '', m.bandeira) || 'Manual', Number(m.valor || 0)));
+      mans.forEach(m => soma1(_rotMan(m) || 'Manual', Number(m.valor || 0)));
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
         const nGeral = chavesT.reduce((s, k) => s + totais[k].n, 0);
         // Σ como PAINEL LATERAL fixo (19/08 — modelo TecnoX "Totais por Forma pagto")
         // ATALHO (19/08): clicar numa forma FILTRA a lista por ela; TODOS limpa.
-        window.__fcLadoTotais = `<div style="font-weight:700;color:#f97316;font-size:0.8rem;margin-bottom:6px;text-align:center">Totais por Forma pagto</div>
-          <table class="fc-grid" style="width:100%"><thead><tr><th>Forma</th><th style="text-align:right">Valor</th></tr></thead><tbody>
+        window.__fcLadoTotais = `<div style="font-weight:700;color:#f97316;font-size:0.8rem;margin-bottom:6px;text-align:center">${tipo === 'frota' ? 'Totais por operadora' : 'Totais por Forma pagto'}</div>
+          <table class="fc-grid" style="width:100%"><thead><tr><th>${tipo === 'frota' ? 'Operadora' : 'Forma'}</th><th style="text-align:right">Valor</th></tr></thead><tbody>
           ${chavesT.map(k => `<tr onclick="window._fcNodeForma='';window._fcNodeBand='${fcEsc(k)}';fcNodeDetalhe('${tipo}')"
               style="cursor:pointer${selBand === k ? ';background:#26324a' : ''}" title="Filtrar a lista por ${fcEsc(k)}">
             <td class="fc-td" style="font-size:0.78rem">${selBand === k ? '▶ ' : ''}${fcEsc(k)} <span style="color:#667;font-size:0.68rem">(${totais[k].n})</span></td>
