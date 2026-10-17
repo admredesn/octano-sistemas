@@ -810,8 +810,31 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
   if(!sugerida && temLub) sugerida=acha(/lubrific|acess/);
   if(!sugerida) sugerida=acha(/cmv|mercador|revenda/); // fallback generico de custo de revenda
   nfeXmlDados.contaSugeridaId=sugerida?sugerida.id:'';
+  nfeXmlDados.dataEntrada=await nfeDataEntrada(nfeXmlDados);
 
   renderPreviewNfe();
+}
+
+// Dia em que a mercadoria ENTROU (17/10/2026) -> oct_nfe_entrada.entrada e a linha do LMC. Era o dia do
+// LANCAMENTO, e ainda em UTC (depois das 21h caia no dia seguinte): as notas lancadas em 14-15/10 foram para
+// o LMC desses dias (TIJ 378565 descarregada 03/10 -> LMC 15/10) = sobra num dia e falta igual no outro.
+// Ordem: descarga da sonda que o robo ja' casou com esta nota (oct_nfe_descarga) > saida/emissao da nota
+// (dhSaiEnt/dhEmi, regra do entrada_auto) > hoje no fuso do navegador. A tela mostra de onde veio e deixa trocar.
+async function nfeDataEntrada(d){
+  const diaLocal=ms=>new Date(ms).toLocaleDateString('sv-SE');      // AAAA-MM-DD no fuso do navegador
+  if(d.chNFe&&(d.itens||[]).some(it=>it.precisaTanque)){
+    try{
+      const{data:ds}=await sb.from('oct_nfe_descarga').select('descarga_ini').eq('empresa_id',_empresaId)
+        .ilike('nf_chaves','%'+d.chNFe+'%').order('descarga_ini').limit(1);
+      const ini=ds&&ds[0]&&Date.parse(ds[0].descarga_ini);
+      if(ini)return{data:diaLocal(ini),origem:'descarga da sonda em '+new Date(ini).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})};
+    }catch(e){/* sem acesso a tabela: segue pela nota */}
+  }
+  const x=d.xmlString||'';
+  const sai=x.match(/<dhSaiEnt>(\d{4}-\d{2}-\d{2})/), emi=x.match(/<dhEmi>(\d{4}-\d{2}-\d{2})/);
+  if(sai)return{data:sai[1],origem:'data de saída da nota'};
+  if(emi)return{data:emi[1],origem:'data de emissão da nota'};
+  return{data:diaLocal(Date.now()),origem:'hoje'};
 }
 
 // ─── PREVIEW COM EDIÇÃO DE ITENS ────────────────────────────
@@ -876,6 +899,14 @@ function renderPreviewNfe(){
           ${d.contaSugeridaId?`<span style="font-size:0.74rem;color:#4caf50">✓ sugestão automática</span>`:`<span style="font-size:0.74rem;color:#fbbf24">sem sugestão — selecione se desejar</span>`}
         </div>
         <div style="font-size:0.72rem;color:#888;margin-top:6px">Usada na geração do SPED. Você pode alterar ou deixar sem conta.</div>
+      </div>
+
+      <div style="background:#0f1117;border:1px solid #2a2d3e;border-radius:8px;padding:14px;margin-bottom:16px">
+        <div class="nfe-label" style="margin-bottom:10px">📅 Data de entrada${d.itens.some(it=>it.precisaTanque)?' (dia do combustível no tanque — vai para o LMC)':''}</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <input id="nfe-data-entrada" type="date" value="${d.dataEntrada?.data||''}" style="padding:8px 10px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.85rem" />
+          <span style="font-size:0.74rem;color:${d.dataEntrada?.origem?.startsWith('descarga')?'#4caf50':'#fbbf24'}">${d.dataEntrada?.origem?'pela '+d.dataEntrada.origem:''}</span>
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#0f1117;border-radius:8px;margin-bottom:16px;font-size:0.82rem">
@@ -1018,9 +1049,11 @@ async function confirmarNfe(){
     }
   }
 
+  // dia da entrada (descarga/nota, ver nfeDataEntrada); a mesma data vai para o LMC do combustivel
+  const dataEntrada=document.getElementById('nfe-data-entrada')?.value||d.dataEntrada?.data||new Date().toLocaleDateString('sv-SE');
   const{data:nfe,error:nfeErr}=await sb.from('oct_nfe_entrada').insert({
     empresa_id:_empresaId,numero:d.numero,serie:d.serie,chave_nfe:d.chNFe||null,emissao:d.dhEmi,
-    entrada:new Date().toISOString().split('T')[0],fornecedor_id:fornecedorId,natureza:d.natOp,
+    entrada:dataEntrada,fornecedor_id:fornecedorId,natureza:d.natOp,
     cfop:d.cfopCapa||d.itens[0]?.cfop||null,
     valor_total:d.vNF,valor_icms:d.vICMS,valor_pis:d.vPIS,valor_cofins:d.vCOFINS,
     valor_frete:d.vFrete,valor_desconto:d.vDesc,status:'importada',
@@ -1118,7 +1151,10 @@ async function confirmarNfe(){
         const qtdTanque = qtdFinal;
         const novoEstoque=Math.min(Number(tanque.estoque_atual)+Number(qtdTanque),Number(tanque.capacidade));
         await sb.from('oct_tanques').update({estoque_atual:novoEstoque}).eq('id',it.tanqueId);
-        await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:new Date().toISOString().split('T')[0],saldo_anterior:tanque.estoque_atual,entrada:qtdTanque,saldo_final:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
+        // saldo_anterior/saldo_final descrevem o tanque AGORA: num dia passado ficam 0 (o LMC le 0 como "nao sei"
+        // e nao usa como saldo de abertura) em vez de levar o nivel de hoje para a data da descarga
+        const passado=dataEntrada<new Date().toLocaleDateString('sv-SE');
+        await sb.from('oct_lmc').insert({empresa_id:_empresaId,tanque_id:it.tanqueId,data:dataEntrada,saldo_anterior:passado?0:tanque.estoque_atual,entrada:qtdTanque,saldo_final:passado?0:novoEstoque,observacoes:`NF-e ${d.numero}/${d.serie} — ${d.emitNome}`});
       }
     }else if(produtoId){
       // DEMAIS PRODUTOS: soma a quantidade no estoque do proprio produto
