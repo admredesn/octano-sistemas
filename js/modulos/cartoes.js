@@ -20,8 +20,9 @@
 // para as contas certas"): o pagamento "CARTÃO FROTA" (código 03) caía como Crédito e tentava casar com o EDI do
 // PagBank. Agora é a forma 'frota', com a OPERADORA (pagamento.frota.operadora) no lugar da bandeira; não casa com
 // o EDI (a operadora não manda retorno) — vale a taxa do contrato (Taxas negociadas, forma "Cartão frota",
-// adquirente = operadora) e vai para a conta da operadora (a da taxa, senão a da forma CARTÃO FROTA em Formas de
-// Pagamento). O F.Caixa deixou de lançar o total da frota no livro (contaria em dobro, como o cartão).
+// adquirente = operadora) e vai para a conta da operadora (a da taxa; senão a conta que leva o nome dela, ex.:
+// "CARTÃO TICKETLOG - Sicoob UFV"; senão a da forma CARTÃO FROTA em Formas de Pagamento). O F.Caixa deixou de
+// lançar o total da frota no livro (contaria em dobro, como o cartão).
 // ============================================================
 // Filtros: _CTZ.* é o que está APLICADO na tabela; _CTZ.p é o que está nos campos (só vira filtro ao 🔍 Pesquisar / Enter).
 const _CTZ = { p: null, de: null, ate: null, forma: '', bandeira: '', status: '', conf: '', caixa: 'conf', busca: '',
@@ -92,6 +93,7 @@ function _ctzAdqChave(s) {
   if (/ticket|edenred/.test(n)) return 'ticketlog';
   if (/fit|prime/.test(n)) return 'fitcard';
   if (/valecard/.test(n)) return 'valecard';
+  if (/^agil/.test(n)) return 'agilli';
   if (/semparar/.test(n)) return 'semparar';
   if (/good/.test(n)) return 'goodcard';
   if (/^(frota|cartaofrota|outra|outro|outras)$/.test(n)) return 'frota';
@@ -331,9 +333,23 @@ function ctzLinhasLivro(it, contaId, autor, agora) {
   if (taxa > 0) out.push(Object.assign({}, comum, { natureza: 'D', valor: taxa, tipo: frota ? 'taxa_frota' : 'taxa_cartao', descricao: 'TAXA ' + quem, detalhe, origem: 'cartoes_taxa', origem_id: it.id }));
   return out.filter(l => l.valor > 0);
 }
+// as operadoras que o NOME de uma conta cita: "CARTÃO AGILLE/VALECARD - Inter" → {agilli, valecard}; "Sicoob" → {}
+function _ctzOperadorasDoNome(nome) {
+  const n = String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  const s = new Set();
+  if (/ticket|edenred/.test(n)) s.add('ticketlog');
+  if (/fitcard|prime/.test(n)) s.add('fitcard');
+  if (/valecard/.test(n)) s.add('valecard');
+  if (/agil/.test(n)) s.add('agilli');
+  if (/semparar/.test(n)) s.add('semparar');
+  if (/goodcard/.test(n)) s.add('goodcard');
+  return s;
+}
 // a conta do livro de cada recebimento: a da taxa negociada (se for do posto) manda; senão cartão/Pix → PagBank e
-// frota → a forma de frota do posto (Formas de Pagamento › "Conta onde o valor entra"; a da operadora, se houver uma forma
-// com o nome dela, senão a CARTÃO FROTA genérica). null = sem conta (não envia).
+// frota → a da operadora: forma de frota com o nome dela (Formas de Pagamento › "Conta onde o valor entra"), senão a
+// CONTA que leva o nome dela (17/10/2026, Ronan: "cada cartão cai em um banco diferente" — contas "CARTÃO TICKETLOG -
+// Sicoob UFV", "CARTÃO FITCARD - Sicoob BH", "CARTÃO AGILLE/VALECARD - Inter"), senão a da forma CARTÃO FROTA genérica.
+// null = sem conta (não envia).
 function ctzContaDoItem(it, contas, formasFrota) {
   const ativa = id => (contas || []).find(c => Number(c.id) === Number(id)) || null;
   const daRegra = it && it.regra && it.regra.conta_id ? ativa(it.regra.conta_id) : null;
@@ -342,10 +358,13 @@ function ctzContaDoItem(it, contas, formasFrota) {
   const fs = (formasFrota || []).filter(f => f && f.ativo !== false && f.conta_id && ativa(f.conta_id))
     .sort((a, b) => Number(a.ordem || 0) - Number(b.ordem || 0));
   const chave = _ctzAdqChave(it.bandeira);
-  const daOperadora = chave && chave !== 'frota' ? fs.find(f => _ctzAdqChave(f.nome) === chave) : null;
+  const conhecida = chave && chave !== 'frota';
+  const daOperadora = conhecida ? fs.find(f => _ctzAdqChave(f.nome) === chave) : null;
+  if (daOperadora) return ativa(daOperadora.conta_id);
+  const pelaConta = conhecida ? (contas || []).find(c => _ctzOperadorasDoNome(c.nome).has(chave)) : null;
+  if (pelaConta) return pelaConta;
   const generica = fs.find(f => _ctzAdqChave(f.nome) === 'frota');   // nunca a conta de OUTRA operadora
-  const f = daOperadora || generica;
-  return f ? ativa(f.conta_id) : null;
+  return generica ? ativa(generica.conta_id) : null;
 }
 
 // ---------- tela ----------
@@ -478,7 +497,7 @@ function _ctzRender() {
         ? `<span title="cartão frota: a operadora não manda retorno — confira no relatório/extrato dela">${t.autorizacao ? 'aut. ' + _ctzEsc(t.autorizacao) : 'sem retorno'}</span>${t.placa ? '<br>' + _ctzEsc(t.placa) : ''}`
         : t.transacao ? _ctzEsc(t.nsu || '✓') : '<span title="sem a venda correspondente no extrato EDI">—</span>'}${a.aviso ? `<br><span style="color:${a.aviso.cor};white-space:nowrap" title="${_ctzEsc(a.aviso.title)}">${_ctzEsc(a.aviso.txt)}</span>` : ''}</td>
       <td class="ctz-td" style="color:${st.cor};white-space:nowrap"${a.status === 'contrato' ? ' title="A operadora da frota não manda retorno: vale a taxa cadastrada em Taxas negociadas (forma Cartão frota). Confira no relatório da operadora."' : ''}>${st.rot}${a.prazoDiverge ? ' <span title="prazo diferente do combinado" style="color:#fbbf24">⏱</span>' : ''}${t.forma === 'frota'
-        ? `<br><span style="font-size:0.68rem;color:${t.conta ? '#8892a0' : '#f87171'}" title="${t.conta ? 'conta onde a operadora deposita (vai assim para a Conciliação)' : 'sem conta: cadastre em Formas de Pagamento › CARTÃO FROTA › Conta onde o valor entra (ou na taxa da operadora)'}">${t.conta ? '→ ' + _ctzEsc(t.conta.nome) : '⚠ sem conta'}</span>` : ''}</td>
+        ? `<br><span style="font-size:0.68rem;color:${t.conta ? '#8892a0' : '#f87171'}" title="${t.conta ? 'conta onde a operadora deposita (vai assim para a Conciliação)' : 'sem conta: crie em Conciliação › 🏦 Contas uma conta com o nome da operadora (ex.: CARTÃO TICKETLOG - banco), ou escolha a conta na forma CARTÃO FROTA ou na taxa da operadora'}">${t.conta ? '→ ' + _ctzEsc(t.conta.nome) : '⚠ sem conta'}</span>` : ''}</td>
       <td class="ctz-td" style="text-align:center">${t.conferido ? `<span style="color:#7ee2a0" title="por ${_ctzEsc(t.conferido_por || '')} em ${t.conferido_em ? new Date(t.conferido_em).toLocaleString('pt-BR') : ''}">✓</span>` : '<span class="ctz-mut">·</span>'}${t.livro_em ? ' <span style="color:#7ea8d8" title="já na Conciliação (livro da conta PagBank)">📒</span>' : ''}</td>
     </tr>`;
   }).join('');
@@ -563,7 +582,7 @@ function _ctzRender() {
       </table>
     </div>
     ${foraHtml}
-    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa. Na coluna EDI/NSU: ⏱ = a maquininha registrou a venda com minutos de diferença do cupom; ⚠ maquininha: Pix = o caixa tem outra forma (confira o recebimento); ≈ = centavos de diferença entre cupom e maquininha. 🚛 Frota: a bandeira é a operadora; ela não manda retorno, então vale a taxa do contrato (Taxas negociadas, forma "Cartão frota", adquirente = operadora) e o valor vai para a conta da operadora (a da taxa, senão a da forma CARTÃO FROTA em Formas de Pagamento).</p>
+    <p style="color:#667;font-size:0.7rem;margin:8px 0 0">🧾 = pagamento do cupom · ⏳ = ainda na fila, sem cupom. Bruto = o que o caixa registrou na venda. Taxa cobrada = a que a maquininha informou (retorno EDI; sem ele, a taxa recebida pelo caixa ao casar a venda). Esperada = bruto × % negociado (+ tarifa fixa), tolerância de R$ 0,01. Previsão com * = calculada pelo prazo combinado (a adquirente ainda não informou). Linha vermelha: taxa maior; amarela: menor; laranja: a maquininha não informou taxa. Na coluna EDI/NSU: ⏱ = a maquininha registrou a venda com minutos de diferença do cupom; ⚠ maquininha: Pix = o caixa tem outra forma (confira o recebimento); ≈ = centavos de diferença entre cupom e maquininha. 🚛 Frota: a bandeira é a operadora; ela não manda retorno, então vale a taxa do contrato (Taxas negociadas, forma "Cartão frota", adquirente = operadora) e o valor vai para a conta da operadora (a da taxa; senão a conta que leva o nome dela, ex.: "CARTÃO TICKETLOG - Sicoob UFV"; senão a da forma CARTÃO FROTA).</p>
   </div>`;
 }
 // os campos só mudam o RASCUNHO (_CTZ.p); a tabela muda ao pesquisar
@@ -638,14 +657,14 @@ async function ctzEnviarLivro() {
   const pulou = base.length - prontos.length;
   if (!alvo.length) {
     alert(semConta.length
-      ? `Nada a enviar: ${semConta.length} recebimento(s) sem conta de destino.\n${semConta.some(t => t.forma === 'frota') ? 'Frota: cadastre a conta em Formas de Pagamento › CARTÃO FROTA › "Conta onde o valor entra" (ou na taxa negociada da operadora).\n' : ''}${semConta.some(t => t.forma !== 'frota') ? 'Cartão/Pix: cadastre a conta PagBank (maquininha) em Conciliação › 🏦 Contas.' : ''}`
+      ? `Nada a enviar: ${semConta.length} recebimento(s) sem conta de destino.\n${semConta.some(t => t.forma === 'frota') ? 'Frota: crie em Conciliação › 🏦 Contas uma conta com o nome da operadora (ex.: CARTÃO TICKETLOG - banco), ou escolha a conta na forma CARTÃO FROTA ou na taxa da operadora.\n' : ''}${semConta.some(t => t.forma !== 'frota') ? 'Cartão/Pix: cadastre a conta PagBank (maquininha) em Conciliação › 🏦 Contas.' : ''}`
       : 'Nada a enviar: só vão os recebimentos CONFERIDOS, de caixa confirmado, que ainda não estão na Conciliação.');
     return;
   }
   const porConta = {};
   alvo.forEach(t => { const k = t.conta.id; const g = porConta[k] = porConta[k] || { nome: t.conta.nome, n: 0, bruto: 0, taxa: 0 }; g.n++; g.bruto += Number(t.valor_bruto || 0); g.taxa += Number(t.taxa_livro || 0); });
   const resumo = Object.values(porConta).map(g => `• ${g.nome}: ${g.n} — bruto R$ ${_ctzNum(g.bruto)}, taxas R$ ${_ctzNum(g.taxa)}`).join('\n');
-  if (!confirm(`Enviar ${alvo.length} recebimento(s) para a Conciliação?\n${resumo}\nBruto como crédito e taxa como débito, na data prevista de pagamento.${semConta.length ? `\n⚠ ${semConta.length} ficam de fora por não ter conta de destino (frota: Formas de Pagamento › CARTÃO FROTA).` : ''}${pulou ? `\n${pulou} ficam de fora (não conferidos, caixa não confirmado ou já enviados).` : ''}`)) return;
+  if (!confirm(`Enviar ${alvo.length} recebimento(s) para a Conciliação?\n${resumo}\nBruto como crédito e taxa como débito, na data prevista de pagamento.${semConta.length ? `\n⚠ ${semConta.length} ficam de fora por não ter conta de destino (frota: falta uma conta com o nome da operadora).` : ''}${pulou ? `\n${pulou} ficam de fora (não conferidos, caixa não confirmado ou já enviados).` : ''}`)) return;
   const por = await _ctzAutor(); const em = new Date().toISOString();
   try {
     for (let i = 0; i < alvo.length; i += 100) {
