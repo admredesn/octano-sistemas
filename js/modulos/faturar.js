@@ -743,25 +743,38 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const { data: cb } = await sb.storage.from("octano-certs").download(emp.cert_path);
     const b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(await cb.arrayBuffer())));
 
-    const resp = await fetch(`${_FAT_SEFAZ}/emitir`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cert_base64: b64, cert_senha: senha, ambiente: "homologacao", nota }),
-    });
-    const r = await resp.json();
+    // NÚMERO JÁ USADO (17/10/2026, 539 na 2ª NF-e da Bread Life: saiu de novo a nº 1 — a leitura de oct_nfce pelo
+    // usuário logado pode não enxergar a nota anterior): a SEFAZ devolve a chave da nota que já tem o número; o
+    // próximo é o nNF dela + 1. Até 5 tentativas.
+    let r = null;
+    for (let tent = 0; tent < 5; tent++) {
+      const resp = await fetch(`${_FAT_SEFAZ}/emitir`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cert_base64: b64, cert_senha: senha, ambiente: "homologacao", nota }),
+      });
+      r = await resp.json();
+      const cst = String(r.cstat_nfe || r.cstat_lote || "");
+      const mDup = /chNFe:\s*(\d{44})/.exec(String(r.xmotivo || r.motivo || r.erro || ""));
+      if (r.ok || cst !== "539" || !mDup) break;
+      const usado = Number(mDup[1].slice(25, 34));
+      nota.numero = Math.max(Number(nota.numero), usado) + 1;
+      if (msg()) msg().textContent = `O número ${usado} já foi usado — tentando a NF-e nº ${nota.numero}...`;
+    }
+    const numeroUsado = nota.numero;
     if (r.ok) {
       window._fatUltimoDanfe = r.nfe_proc || null;  // p/ imprimir a DANFE agora
       // persiste a NF-e autorizada em oct_nfce (histórico + reimpressão)
       try {
         const valorNota = itens.reduce((s, i) => s + Number(i.vProd || 0) - Number(i.vDesc || 0), 0);   // vNF (com o desconto)
         await sb.from("oct_nfce").insert({
-          empresa_id: eid, numero, serie: Number(emp.nfe_serie || 1), modelo: "55",
+          empresa_id: eid, numero: numeroUsado, serie: Number(emp.nfe_serie || 1), modelo: "55",
           status: "autorizada", ambiente: "homologacao", valor_total: valorNota,
           cpf_consumidor: docDest, chave_nfe: r.chave, protocolo: r.protocolo,
           xml_autorizado: r.nfe_proc || null, data_emissao: new Date().toISOString(),
         });
       } catch (e) { /* não bloqueia a impressão */ }
       const btnDanfe = r.nfe_proc ? `<button class="fat-btn" onclick="fatImprimirDanfe()" style="background:#2a5a8a;margin-right:8px">📄 Imprimir DANFE</button>` : "";
-      if (silencioso) return { ok: true, chave: r.chave, numero };
+      if (silencioso) return { ok: true, chave: r.chave, numero: numeroUsado };
       if (msg()) msg().innerHTML = `<span style="color:#7ee2a0">✅ NF-e consolidada autorizada em HOMOLOGAÇÃO</span><br><span style="font-size:0.72rem;color:#667;word-break:break-all">chave ${r.chave || "—"}<br>protocolo ${r.protocolo || "—"}</span><br><br>${btnDanfe}<button class="fat-btn" onclick="_fatFechaModal()">Fechar</button><p style="font-size:0.74rem;color:#9aa;margin-top:10px">Envie esta NF-e ao contador para validar CFOP/CST/NFref antes de liberar em produção.</p>`;
     } else {
       // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
