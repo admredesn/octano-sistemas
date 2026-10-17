@@ -698,6 +698,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
         // CST 61 (monofásico) leva cClassTrib de combustível no IBS/CBS, e a SEFAZ exige o grupo <comb> (rejeição
         // 1106, 17/10/2026): cProdANP/descANP/UFCons/pBio/origComb do cadastro. Sem encerrante (é faturamento).
         ind_combustivel: g.cst === "61" ? "S" : "N", ind_monofasico: "N",
+        gmono_ret: g.cst === "61",   // 1229: a NF-e 55 cobra o grupo da monofasia retida anteriormente (IBS/CBS)
         cod_anp: g.cst === "61" ? (f.cod_anp || null) : null, desc_anp: g.cst === "61" ? (f.desc_anp || null) : null,
         perc_bio: g.cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: emp.uf || "MG",
       });
