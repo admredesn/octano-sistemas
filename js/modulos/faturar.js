@@ -698,7 +698,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
         // CST 61 (monofásico) leva cClassTrib de combustível no IBS/CBS, e a SEFAZ exige o grupo <comb> (rejeição
         // 1106, 17/10/2026): cProdANP/descANP/UFCons/pBio/origComb do cadastro. Sem encerrante (é faturamento).
         ind_combustivel: g.cst === "61" ? "S" : "N", ind_monofasico: "N",
-        gmono_ret: g.cst === "61",   // 1229: a NF-e 55 cobra o grupo da monofasia retida anteriormente (IBS/CBS)
+        gmono_ret: g.cst === "61",   // 1229: a NF-e 55 cobra a monofasia retida anteriormente, leiaute ad valorem (IBS/CBS)
         cod_anp: g.cst === "61" ? (f.cod_anp || null) : null, desc_anp: g.cst === "61" ? (f.desc_anp || null) : null,
         perc_bio: g.cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: emp.uf || "MG",
       });
@@ -785,7 +785,9 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       // SEFAZ devolve cstat_nfe/cstat_lote + xmotivo; aviso_xsd quando falha no schema.
       const cstat = r.cstat_nfe || r.cstat_lote || "";
       const xsd = r.aviso_xsd ? (Array.isArray(r.aviso_xsd) ? r.aviso_xsd.join(" · ") : r.aviso_xsd) : "";
-      const motivo = xsd || r.xmotivo || r.erro || r.motivo || JSON.stringify(r).slice(0, 300);
+      // o motivo da SEFAZ vem primeiro; o aviso do XSD local é só complemento (17/10/2026: o XSD local é anterior à
+      // NT 2025.002 v1.50 e acusava o grupo monofásico novo no lugar da rejeição real)
+      const motivo = (r.xmotivo || r.erro || r.motivo || xsd || JSON.stringify(r).slice(0, 300)) + (xsd && (r.xmotivo || r.erro) && !cstat ? " · XSD local: " + xsd : "");
       if (silencioso) return { ok: false, erro: (cstat ? cstat + ": " : "") + motivo };
       if (msg()) msg().innerHTML = `<span style="color:#f87171;word-break:break-word;display:block">❌ Rejeitada${cstat ? " (" + _fatEsc(cstat) + ")" : ""}:<br>${_fatEsc(motivo)}</span><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
     }
