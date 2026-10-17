@@ -123,6 +123,10 @@ const PARAM_DEFS = [
         desc: 'Consulta o limite antes de fechar. Sem internet, a venda passa e fica registrada.' },
       { chave: 'frota_exige_autorizacao', rot: 'Cartão frota exige nº de autorização', pad: true,
         desc: 'Ligado: o PDV só fecha a venda no cartão frota com o nº de autorização do comprovante (é ele que casa com a operadora e permite a nota de frota). Desligado: o campo fica opcional.' },
+      // 17/10/2026 (Ronan: "onde eu cadastro os cartões frota? igual aparece nessa lista") — o PDV lia uma lista fixa
+      { chave: 'frota_operadoras', tipo: 'texto', rot: 'Operadoras de cartão frota (lista do PDV)', pad: '',
+        dica: 'TicketLog; FitCard / Prime; ValeCard; Agilli; Sem Parar',
+        desc: 'O que o frentista escolhe no PDV ao passar Cartão Frota, nesta ordem. Separe por ponto e vírgula. "Outra" entra sempre no fim. Em branco = TicketLog, FitCard / Prime, ValeCard e Sem Parar. Para a aba 💳 Cartões mandar cada uma para a conta dela, crie a conta com o nome da operadora (ex.: CARTÃO TICKETLOG - banco). O PDV acompanha em até 5 min (ou F5).' },
       { chave: 'lista_negra_placa', rot: 'Bloquear placa em lista negra', pad: true,
         desc: 'Avisa e impede a venda a prazo para placas bloqueadas.' },
     ],
