@@ -519,7 +519,7 @@ async function fpDescAppForm() {
       </div>
       <p style="color:#9aa;font-size:0.8rem;margin:8px 0 12px;max-width:760px">
         O cliente lê o QR do bico no app e escolhe <b>Desconto agora</b>: o preço <b>daquele bico</b> baixa pelo valor abaixo,
-        ele abastece e o preço volta ao normal no fim (ou em 3 minutos, se ele não começar). Quem escolhe o desconto não acumula cashback nesse abastecimento.</p>
+        ele abastece e o preço volta ao normal no fim (ou em 60 segundos, se ele não começar). Quem escolhe o desconto não acumula cashback nesse abastecimento.</p>
       <div style="background:#2a1d0d;border:1px solid #7a4a10;border-radius:8px;padding:9px 12px;color:#f0b45c;font-size:0.78rem;margin-bottom:12px">
         ⚠ Ligue só em posto onde o preço da bomba é trocado pelo Octano (hoje, o SEVEN). Onde o TecnoX controla o preço
         (Tijuco, Florestal e Antônio Carlos), ele desfaz a troca e o desconto não entra.</div>
