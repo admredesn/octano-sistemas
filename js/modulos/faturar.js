@@ -1780,16 +1780,22 @@ async function fatLiquidarTitulo(id) {
     <div style="padding:18px">
       <div style="color:#9aa;font-size:0.82rem;margin-bottom:12px">Saldo do título: <b style="color:#f59e0b">R$ ${_fatMoney(saldo)}</b> · NFC-e ${_fatEsc(t.numero_nfe) || "—"} · emissão ${_fatData(t.registrado_em)}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div><label style="color:#9aa;font-size:0.74rem">Valor a receber (R$)</label>
-          <input id="flt-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.1rem"></div>
+        <div><label style="color:#9aa;font-size:0.74rem">Valor recebido (R$)</label>
+          <input id="flt-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}" oninput="_fatDifCalc('flt-', ${saldo})" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.1rem"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Forma</label>
           <select id="flt-forma" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
             <option>Dinheiro</option><option>Pix</option><option>Cartão</option><option>Cheque</option><option>Boleto</option><option>Transferência</option></select></div>
         <div><label style="color:#9aa;font-size:0.74rem">Juros/multa (R$)</label>
-          <input id="flt-juros" type="number" step="0.01" min="0" value="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+          <input id="flt-juros" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('flt-', ${saldo})" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Desconto (R$)</label>
-          <input id="flt-desc" type="number" step="0.01" min="0" value="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
+          <input id="flt-desc" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('flt-', ${saldo})" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"></div>
       </div>
+      <label id="flt-parcial-box" style="display:none;gap:8px;align-items:center;margin-top:8px;font-size:0.8rem;color:#cbd5e1;cursor:pointer">
+        <input type="checkbox" id="flt-parcial" onchange="_fatDifCalc('flt-', ${saldo})"> Pagamento parcial — o restante continua em aberto (sem desconto)</label>
+      <div id="flt-resumo" style="font-size:0.8rem;margin-top:6px"></div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Conta onde o dinheiro caiu <b style="color:#f87171">*</b> — já entra na conciliação bancária</label>
+      <select id="flt-conta" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
+        <option value="">— escolha a conta —</option></select>
       <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
       <input id="flt-autor" placeholder="nome" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
       <div id="flt-vinc" style="margin-top:12px"></div>
@@ -1802,6 +1808,61 @@ async function fatLiquidarTitulo(id) {
   window._fltReceb = null;
   window._fltTituloId = id;
   fatCarregarRecebPendentes(t);
+  _fatCarregarContas("flt-conta");
+}
+
+// CONTA ONDE O DINHEIRO CAIU (19/10/2026, Ronan: "quando vou receber um título ele tem que pedir em qual conta foi
+// pago — assim já vai direto para a conciliação bancária"). A baixa (oct_recebimentos_titulo.conta_id) vira crédito
+// nessa conta do livro pelo oct_fin_sincronizar (SQL-RECEBIMENTO-CONTA.sql). Antes a conta saía da forma (Pix→Sicoob)
+// e o Pix que caiu no PagBank ia para a conta errada. Agora a tela pergunta; o recebimento da maquininha escolhido na
+// lista já sugere a conta dele (PagBank / cofre → Caixa / Sicoob).
+window._fatContas = null;
+async function _fatCarregarContas(selId) {
+  try {
+    if (!window._fatContas || window._fatContas.eid !== window._fatEid) {
+      const { data } = await sb.from("oct_fin_contas").select("id,nome,tipo").eq("empresa_id", window._fatEid).eq("ativo", true).order("ordem");
+      window._fatContas = { eid: window._fatEid, lista: data || [] };
+    }
+    const sel = document.getElementById(selId);
+    if (sel) sel.innerHTML = '<option value="">— escolha a conta —</option>'
+      + window._fatContas.lista.map(c => `<option value="${c.id}" data-tipo="${_fatEsc(c.tipo || "")}">${_fatEsc(c.nome)}</option>`).join("");
+  } catch (e) { /* sem contas cadastradas: a confirmação avisa */ }
+}
+// VALOR DIFERENTE DO SALDO (19/10/2026, Ronan: "quando eu digitar um valor diferente da fatura ele já tem que gerar
+// um desconto ou acréscimo se for o caso com a diferença"). O campo é o que ENTROU (o que vai para a conta/conciliação):
+//   menor que o saldo -> Desconto = a diferença e o título/fatura QUITA (ou, marcando "Pagamento parcial", o resto fica
+//                        em aberto, sem desconto);
+//   maior que o saldo -> Juros/multa (acréscimo) = a diferença e quita.
+// Gravado: valor = o que abate do saldo (recebido + desconto − acréscimo); o livro credita valor + juros − desconto =
+// o recebido (oct_fin_sincronizar). Juros e desconto continuam editáveis.
+function _fatNum(id) { const el = document.getElementById(id); return el ? (parseFloat(String(el.value || "0").replace(",", ".")) || 0) : 0; }
+function _fatDifCalc(pref, saldo) {
+  const v = _fatNum(pref + "valor"), dif = +(v - Number(saldo || 0)).toFixed(2);
+  const elJ = document.getElementById(pref + "juros"), elD = document.getElementById(pref + "desc");
+  const par = document.getElementById(pref + "parcial"), box = document.getElementById(pref + "parcial-box");
+  if (box) box.style.display = dif < -0.004 ? "flex" : "none";
+  const parcial = !!(par && par.checked && dif < -0.004);
+  if (elJ) elJ.value = dif > 0.004 ? dif.toFixed(2) : "0";
+  if (elD) elD.value = (dif < -0.004 && !parcial) ? (-dif).toFixed(2) : "0";
+  _fatDifResumo(pref, saldo);
+}
+function _fatDifResumo(pref, saldo) {
+  const el = document.getElementById(pref + "resumo"); if (!el) return;
+  const v = _fatNum(pref + "valor"), j = _fatNum(pref + "juros"), d = _fatNum(pref + "desc");
+  const abate = +(v + d - j).toFixed(2), resta = +(Number(saldo || 0) - abate).toFixed(2);
+  const partes = [];
+  if (d > 0.004) partes.push(`desconto de <b>R$ ${_fatMoney(d)}</b>`);
+  if (j > 0.004) partes.push(`acréscimo de <b>R$ ${_fatMoney(j)}</b>`);
+  el.innerHTML = !(v > 0) ? ""
+    : resta < -0.004 ? `<span style="color:#f87171">Recebido + desconto − acréscimo passa do saldo em R$ ${_fatMoney(-resta)}. Ajuste os valores.</span>`
+    : resta <= 0.004 ? `<span style="color:#7ee2a0">✓ Quita${partes.length ? " com " + partes.join(" e ") : ""}.</span>`
+    : `<span style="color:#f59e0b">Pagamento parcial${partes.length ? " (" + partes.join(" e ") + ")" : ""}: fica em aberto <b>R$ ${_fatMoney(resta)}</b>.</span>`;
+}
+function _fatContaDoReceb(r) {
+  const o = String((r && r.origem) || "").toLowerCase();
+  const tipo = /pagbank/.test(o) ? "pagbank" : /cofre|brinks/.test(o) ? "caixa" : /sicoob/.test(o) ? "sicoob" : "";
+  const c = tipo && window._fatContas ? window._fatContas.lista.find(x => x.tipo === tipo) : null;
+  return c ? String(c.id) : "";
 }
 
 // ---- LOCALIZAR RECEBIMENTO PENDENTE (maquininha/Pix/cofre) p/ o título ----
@@ -1861,20 +1922,23 @@ function fatEscolherReceb(id) {
   if (r) {
     if (elV) { elV.value = Number(r.valor || 0).toFixed(2); elV.readOnly = true; }
     if (elF) { elF.value = _fatFormaReceb(r); elF.disabled = true; }
-    if (st) {
-      const t = (window._fatTitulos || []).find(x => x.id === window._fltTituloId);
-      const saldo = t ? Number(t.valor || 0) : 0;
-      const dif = +(Number(r.valor || 0) - saldo).toFixed(2);
-      st.innerHTML = Math.abs(dif) < 0.01
-        ? '<span style="color:#7ee2a0">✓ Bate com o saldo do título.</span>'
-        : dif < 0
-          ? `<span style="color:#f59e0b">Recebimento menor: baixa parcial de R$ ${_fatMoney(r.valor)}, saldo fica R$ ${_fatMoney(-dif)}.</span>`
-          : `<span style="color:#f87171">Recebimento maior que o saldo (sobra R$ ${_fatMoney(dif)}): vincule pelo PDV a várias notas, ou baixe manual.</span>`;
+    const elC = document.getElementById("flt-conta"), sug = _fatContaDoReceb(r);
+    if (elC && sug) elC.value = sug;
+    const tR = (window._fatTitulos || []).find(x => x.id === window._fltTituloId);
+    const saldoR = tR ? Number(tR.valor || 0) : 0;
+    const difR = +(Number(r.valor || 0) - saldoR).toFixed(2);
+    if (difR > 0.004) {   // maior que o saldo: a sobra é de outra nota — não vira acréscimo
+      if (st) st.innerHTML = `<span style="color:#f87171">Recebimento maior que o saldo (sobra R$ ${_fatMoney(difR)}): vincule pelo PDV a várias notas, ou baixe manual.</span>`;
+    } else {
+      if (st) st.innerHTML = "";
+      _fatDifCalc("flt-", saldoR);
     }
   } else {
     if (elV) elV.readOnly = false;
     if (elF) elF.disabled = false;
     if (st) st.innerHTML = "";
+    const tN = (window._fatTitulos || []).find(x => x.id === window._fltTituloId);
+    _fatDifCalc("flt-", tN ? Number(tN.valor || 0) : 0);
   }
 }
 
@@ -1883,27 +1947,32 @@ async function fatLiquidarTituloOk(id) {
   const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
   const msg = document.getElementById("flt-msg");
   const receb = window._fltReceb || null;                 // recebimento pendente vinculado (opcional)
-  const valor = receb ? Number(receb.valor || 0) : parseFloat((document.getElementById("flt-valor").value || "0").replace(",", "."));
-  const juros = parseFloat((document.getElementById("flt-juros").value || "0").replace(",", ".")) || 0;
-  const desconto = parseFloat((document.getElementById("flt-desc").value || "0").replace(",", ".")) || 0;
+  // o campo é o que ENTROU; o que abate do saldo = recebido + desconto − acréscimo (19/10/2026)
+  const recebido = receb ? Number(receb.valor || 0) : _fatNum("flt-valor");
+  const juros = _fatNum("flt-juros");
+  const desconto = _fatNum("flt-desc");
+  const valor = +(recebido + desconto - juros).toFixed(2);
   const forma = receb ? _fatFormaReceb(receb) : document.getElementById("flt-forma").value;
   const autor = (document.getElementById("flt-autor").value || "").trim();
-  if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  const contaEl = document.getElementById("flt-conta");
+  const contaId = contaEl && contaEl.value ? Number(contaEl.value) : null;
+  if (!(recebido > 0) || !(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!contaId) { msg.textContent = "Escolha a conta onde o dinheiro caiu (vai para a conciliação bancária)."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu."; return; }
   const saldo = Number(t.valor || 0);
-  if (valor > saldo + 0.005) {
-    msg.textContent = receb
-      ? "Recebimento maior que o saldo: vincule pelo PDV a várias notas, ou baixe manual."
-      : "Valor maior que o saldo do título."; return;
+  if (receb && Number(receb.valor || 0) > saldo + 0.005) {
+    msg.textContent = "Recebimento maior que o saldo: vincule pelo PDV a várias notas, ou baixe manual."; return;
   }
+  if (valor > saldo + 0.005) { msg.textContent = "Recebido + desconto − acréscimo passa do saldo do título. Ajuste os valores."; return; }
   msg.style.color = "#9aa"; msg.textContent = "Registrando...";
   try {
     // 1) baixa vinculada ao título (com recebimento_id quando veio do painel)
     await sb.from("oct_recebimentos_titulo").insert({
       empresa_id: window._fatEid, nota_prazo_id: id, cliente_id: t.cliente_id || null,
       cliente_nome: t.cliente_nome, valor: Number(valor.toFixed(2)), juros, desconto, forma,
-      data_recebimento: new Date().toISOString().slice(0, 10), autor, origem: "faturar",
+      data_recebimento: _fatHojeIso(), autor, origem: "faturar",   // data do Brasil (toISOString vira o dia às 21h)
       recebimento_id: receb ? receb.id : null,
+      conta_id: contaId,   // onde caiu: vira crédito nessa conta na conciliação (oct_fin_sincronizar)
     });
     // 2) atualiza o título (reduz saldo; quita se zerou)
     const novoSaldo = Number((saldo - valor).toFixed(2));
@@ -3482,13 +3551,13 @@ async function fatLiquidar(id) {
         <div><label style="color:#9aa;font-size:0.74rem">Saldo devedor</label>
           <div style="padding:9px;background:#13151f;border-radius:6px;color:#f59e0b;font-weight:700">${_fatBRL(saldo)}</div></div>
         <div><label style="color:#9aa;font-size:0.74rem">Valor recebido</label>
-          <input id="fr-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}"
+          <input id="fr-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}" oninput="_fatDifCalc('fr-', ${saldo})"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#4ade80;font-weight:700"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Juros/multa (R$)</label>
-          <input id="fr-juros" type="number" step="0.01" min="0" value="0"
+          <input id="fr-juros" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('fr-', ${saldo})"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Desconto (R$)</label>
-          <input id="fr-desc" type="number" step="0.01" min="0" value="0"
+          <input id="fr-desc" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('fr-', ${saldo})"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Forma</label>
           <select id="fr-forma" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
@@ -3500,9 +3569,12 @@ async function fatLiquidar(id) {
           <input id="fr-data" type="date" value="${hoje}"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
       </div>
-      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Conta (onde o dinheiro caiu) — já entra na conciliação</label>
+      <label id="fr-parcial-box" style="display:none;gap:8px;align-items:center;margin-top:8px;font-size:0.8rem;color:#cbd5e1;cursor:pointer">
+        <input type="checkbox" id="fr-parcial" onchange="_fatDifCalc('fr-', ${saldo})"> Pagamento parcial — o restante continua em aberto (sem desconto)</label>
+      <div id="fr-resumo" style="font-size:0.8rem;margin-top:6px"></div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Conta onde o dinheiro caiu <b style="color:#f87171">*</b> — já entra na conciliação bancária</label>
       <select id="fr-conta" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
-        <option value="">Padrão pela forma (dinheiro→Caixa, cartão→PagBank, Pix→Sicoob)</option>
+        <option value="">— escolha a conta —</option>
       </select>
       <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Quem recebeu</label>
       <input id="fr-autor" placeholder="seu nome (fica registrado)"
@@ -3518,18 +3590,8 @@ async function fatLiquidar(id) {
   (box || document.body).appendChild(div);
   document.getElementById("fr-valor").focus();
   document.getElementById("fr-valor").select();
-  // carrega as contas do posto para escolher onde o dinheiro caiu (conciliação)
-  (async () => {
-    try {
-      const { data } = await sb.from("oct_fin_contas")
-        .select("id,nome,tipo").eq("empresa_id", window._fatEid).eq("ativo", true).order("ordem");
-      const selC = document.getElementById("fr-conta");
-      if (selC && (data || []).length) {
-        selC.innerHTML = '<option value="">Padrão pela forma (dinheiro→Caixa, cartão→PagBank, Pix→Sicoob)</option>'
-          + data.map(c => `<option value="${c.id}">${_fatEsc(c.nome)}</option>`).join("");
-      }
-    } catch (e) { /* sem contas cadastradas: fica só o padrão pela forma */ }
-  })();
+  // carrega as contas do posto para escolher onde o dinheiro caiu (conciliação) — obrigatório desde 19/10/2026
+  _fatCarregarContas("fr-conta");
 }
 
 function _fatBRL(v) { return "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -3544,16 +3606,24 @@ async function _fatRecebidoDa(faturaId) {
 async function fatConfirmarRecebimento(faturaId) {
   if (!podeOuAvisa('faturar.receber_fatura')) return;
   const msg = document.getElementById("fr-msg");
-  const valor = Number(document.getElementById("fr-valor").value || 0);
-  const juros = Number(document.getElementById("fr-juros").value || 0);
-  const desconto = Number(document.getElementById("fr-desc").value || 0);
+  // o campo é o que ENTROU; o que abate do saldo = recebido + desconto − acréscimo (19/10/2026)
+  const recebidoCx = _fatNum("fr-valor");
+  const juros = _fatNum("fr-juros");
+  const desconto = _fatNum("fr-desc");
+  const valor = +(recebidoCx + desconto - juros).toFixed(2);
   const forma = document.getElementById("fr-forma").value;
   const dataRec = document.getElementById("fr-data").value;
   const autor = (document.getElementById("fr-autor").value || "").trim();
   const contaSel = document.getElementById("fr-conta");
   const contaId = contaSel && contaSel.value ? Number(contaSel.value) : null;
-  if (!(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!(recebidoCx > 0) || !(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!contaId) { msg.textContent = "Escolha a conta onde o dinheiro caiu (vai para a conciliação bancária)."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu (fica registrado)."; return; }
+  {
+    const { data: fx } = await sb.from("oct_faturas").select("*").eq("id", faturaId).single();
+    const saldoF = +(_fatLiquido(fx) - await _fatRecebidoDa(faturaId)).toFixed(2);
+    if (valor > saldoF + 0.005) { msg.textContent = "Recebido + desconto − acréscimo passa do saldo da fatura. Ajuste os valores."; return; }
+  }
   msg.style.color = "#9aa"; msg.textContent = "Registrando...";
 
   const { error } = await sb.from("oct_recebimentos_titulo").insert({
