@@ -1454,7 +1454,7 @@ async function fcLancIncluir() {
       if (String(v.status || '').toLowerCase() === 'cancelada') return;
       const aX = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       if (aX && aX.excluido) return;
-      (Array.isArray(v.itens) ? v.itens : []).filter(it => it.tipo === 'abastecimento').forEach(it => {
+      (Array.isArray(v.itens) ? v.itens : []).filter(it => !_fcItemLoja(it)).forEach(it => {
         const val = Math.round((Number(it.qtd || 0) * Number(it.unit || 0)) * 100) / 100;
         // data_venda é UTC real → converte p/ naive local, mesma régua da pista
         if (val > 0) usados.push({ v: val, h: _naive(_fcTsUtc(v.data_venda)) });
@@ -2622,7 +2622,7 @@ async function fcNodeDetalhe(tipo) {
         return s;
       };
       const descItens = its.map(it => amigavel(it.desc || it.cod)).filter(Boolean).join(' + ');
-      const litrosCupom = its.filter(it => it.tipo === 'abastecimento')
+      const litrosCupom = its.filter(it => !_fcItemLoja(it))
         .reduce((s, it) => s + Number(it.qtd || 0), 0);
       window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor,
         forma_nome: gAj === 'frota' ? 'Cartão Frota' : rotF,
@@ -3743,6 +3743,15 @@ async function fcCupomResumo(vendaId, voltarJs) {
     <div style="padding:10px 14px"><button class="fc-btn" onclick="${voltarJs ? fcEsc(voltarJs) : 'fcModalFechar()'}">← Voltar</button></div>`;
   fcModal(`🧾 Cupom nº ${v.numero ?? ''} — ${v.cliente_nome || 'Consumidor'}`, nota + itens); fechaVolta();
 }
+// PRODUTO DE LOJA NO CUPOM (19/10/2026, Florestal caixa 1206: "Venda produtos" 486,18 e o balão Itens Vendidos vazio):
+// o produto marcado na lista de pendentes vai no cupom como linha 'abastecimento' com id 'prod-…' (dados.tipo 'produto').
+// É loja — a mesma régua da view (loja_cupom) que soma a Venda produtos.
+function _fcItemLoja(it) {
+  if (!it) return false;
+  if (it.tipo !== 'abastecimento' || it._loja) return true;
+  const d = it.dados || {};
+  return d.tipo === 'produto' || String(it.abastecimento_id || d.id || '').startsWith('prod-');
+}
 function fcModalItens(vs) {
   // (18/08 — pedido Ronan) SÓ PRODUTOS DE LOJA, lançamento a lançamento, com a
   // MESMA barra de ações dos outros balões (☑ espaço confere, ✎ altera, F9/F10).
@@ -3751,7 +3760,7 @@ function fcModalItens(vs) {
   let linhas = ''; let n = 0, tot = 0;
   // 1) produtos em CUPONS transmitidos
   vs.forEach(v => {
-    const its = (v.itens || []).filter(it => it.tipo !== 'abastecimento');
+    const its = (v.itens || []).filter(_fcItemLoja);
     if (!its.length) return;
     const val = its.reduce((s, it) => s + Number(it.total ?? (Number(it.qtd || 0) * Number(it.unit || 0))), 0);
     const qtd = its.reduce((s, it) => s + Number(it.qtd || 0), 0);
@@ -3927,7 +3936,7 @@ function fcModalCombustivel(vs, soPrazo) {
   const map = {}, porCli = {};
   let totL = 0, totV = 0;
   usados.forEach(v => (v.itens || []).forEach(it => {
-    if (it.tipo !== 'abastecimento' || (it.dados && it.dados.tipo === 'produto')) return;
+    if (_fcItemLoja(it)) return;
     const k = it.desc || 'Combustível';
     const litros = Number(it.qtd || 0);
     const valor = it.total != null ? Number(it.total) : Math.round(litros * Number(it.unit || 0) * 100) / 100;
