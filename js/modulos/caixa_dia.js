@@ -132,6 +132,10 @@ function _cdCss() {
     '.cd-t tr.tot td{font-weight:700;border-top:1px solid #2a2d3e}' +
     '.cd-det{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}@media(max-width:1100px){.cd-det{grid-template-columns:1fr}}' +
     '.cd-ok{color:#4ade80}.cd-err{color:#f87171}.cd-roxo{color:#c4b5fd}.cd-mut{color:#8a8fa3}.cd-ama{color:#fbbf24}' +
+    '.cd-tag{display:inline-block;font-size:.64rem;font-weight:700;padding:1px 6px;border-radius:6px;margin-right:5px}' +
+    '.cd-sim{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}.cd-sim label{display:block;font-size:.68rem;color:#8a8fa3;text-transform:uppercase;margin-bottom:3px}' +
+    '.cd-sim input,.cd-sim select{padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0}' +
+    '.cd-btn{padding:7px 14px;border-radius:6px;border:none;background:#f97316;color:#fff;font-weight:600;cursor:pointer}.cd-btn.sec{background:transparent;border:1px solid #2a2d3e;color:#cbd5e1}' +
     '.cd-aviso{background:#2a2510;border:1px solid #4a4016;color:#fde68a;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:.8rem}' +
     '</style>';
 }
@@ -144,7 +148,7 @@ async function _cdCarregar(dataSel) {
   const iniVenda = [ini, _cdSoma(hoje, -30)].sort()[0];
   const emp = (await sb.from('oct_empresas').select('id,nome,nome_fantasia,cnpj,ativo').eq('ativo', true)).data || [];
   const ids = emp.map(e => e.id);
-  const [vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit] = await Promise.all([
+  const [vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig] = await Promise.all([
     _biTudo(() => sb.from('oct_pdv_vendas').select('empresa_id,status,valor_total,pagamentos,data_venda')
       .in('empresa_id', ids).gte('data_venda', _cdIniUtc(iniVenda)).order('data_venda').order('id')),
     _biTudo(() => sb.from('oct_banco_movimentos').select('empresa_id,data,tipo,valor,descricao,info')
@@ -156,7 +160,7 @@ async function _cdCarregar(dataSel) {
       .gte('liquidado_em', _cdSoma(ini < _cdSoma(hoje, -120) ? ini : _cdSoma(hoje, -120), 0)).order('id')),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,valor_original,pago_em').eq('status', 'pago').is('fatura_id', null)
       .gte('pago_em', _cdIniUtc(ini)).order('id')),
-    _biTudo(() => sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento').eq('status', 'aberto')
+    _biTudo(() => sb.from('oct_contas_pagar').select('id,empresa_id,descricao,valor,vencimento,fornecedor_id,categoria,requisicao_id').eq('status', 'aberto')
       .gte('vencimento', _cdSoma(hoje, -30)).lte('vencimento', _cdSoma(hoje, _CD_PREV)).order('id')),
     _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,forma_nome,valor,taxa')
       .gte('ocorrido_em', new Date(Date.now() - 7 * 864e5).toISOString()).in('forma_nome', ['Pix', 'Débito', 'Crédito']).order('ocorrido_em').order('id')),
@@ -169,13 +173,19 @@ async function _cdCarregar(dataSel) {
       .in('empresa_id', ids).in('origem', ['pagbank_edi', 'pagbank_email']).gte('recebido_em', _cdIniUtc(iniVenda)).order('recebido_em').order('id')),
     _biTudo(() => sb.from('oct_pdv_notas_prazo').select('empresa_id,valor,valor_original,status,registrado_em')
       .in('empresa_id', ids).gte('registrado_em', _cdIniUtc(iniVenda)).order('id')),
+    // PEDIDOS (Requisições de compra): o que já foi pedido e ainda não virou título entra na previsão.
+    // Sem a tabela (SQL não rodado) a tela segue sem pedidos.
+    _biTudo(() => sb.from('oct_requisicoes_compra').select('id,empresa_id,numero,fornecedor_id,fornecedor_nome,categoria,valor_total,vencimento_previsto,previsao_chegada,status,criado_em')
+      .in('empresa_id', ids).in('status', ['pedida', 'parcial', 'recebida', 'divergente']).order('id')).catch(() => []),
+    _biTudo(() => sb.from('oct_contas_pagar').select('requisicao_id').not('requisicao_id', 'is', null).order('id')).catch(() => []),
   ]);
-  return { hoje, ehHoje, ini, dataSel, emp, vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit };
+  return { hoje, ehHoje, ini, dataSel, emp, vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig: new Set(reqLig.map(r => r.requisicao_id)) };
 }
 
 // monta a série de dias de UM posto
 function _cdSeriePosto(D, e) {
   const eid = e.id, raiz = _cdRaiz(e.cnpj);
+  let pedidos = [];
   const raizesGrupo = new Set(D.emp.map(x => _cdRaiz(x.cnpj)));
   // taxa real da maquininha (fila dos últimos 7 dias)
   const tx = Object.assign({}, _CD_TAXA_PADRAO), acc = {};
@@ -295,6 +305,21 @@ function _cdSeriePosto(D, e) {
     // (viram fatura depois). Piso = média diária recebida nos últimos 28 dias.
     let r28 = 0; for (let i = 0; i < 28; i++) r28 += linha(_cdSoma(D.hoje, -i)).rc.prazo;
     const prazo28 = r28 / 28;
+    // PEDIDOS: requisição sem título ligado. Se já existe título aberto do mesmo fornecedor com valor
+    // parecido (±8%: o pedido é estimado, a nota vem com o preço do dia) e vencimento perto (±7 dias),
+    // a nota já chegou e o título já está na conta — não soma de novo (a fase 2, que liga sozinho,
+    // está desligada no servidor).
+    const usados = new Set();
+    pedidos = D.reqs.filter(r => r.empresa_id === eid && !D.reqLig.has(r.id)).map(r => {
+      const venc = r.vencimento_previsto || (r.previsao_chegada ? _cdSoma(r.previsao_chegada, 10) : null);
+      const v = Number(r.valor_total || 0);
+      const tit = venc && D.pagar.find(p => p.empresa_id === eid && !usados.has(p.id) && !p.requisicao_id &&
+        (r.fornecedor_id ? p.fornecedor_id === r.fornecedor_id : true) && v > 0 && Math.abs(Number(p.valor) / v - 1) <= 0.08 &&
+        Math.abs((new Date(p.vencimento) - new Date(venc)) / 864e5) <= 7);
+      if (tit) usados.add(tit.id);
+      return { r, venc, valor: v, tit, diaPrev: venc && venc > D.hoje ? venc : _cdSoma(D.hoje, 1) };
+    });
+    const sim = (window._cdSim || []).filter(s => s.eid === eid);
     const media = {};                // média dos 4 últimos dias da mesma semana
     for (let w = 0; w < 7; w++) media[w] = null;
     let dP = disp = saldoHoje, cP = compHoje;
@@ -313,7 +338,11 @@ function _cdSeriePosto(D, e) {
       const m = media[wd];
       const fatV = D.fatAb.filter(f => f.empresa_id === eid && f.vencimento === dia).reduce((a, f) => a + Number(f.valor_liquido != null ? f.valor_liquido : f.valor || 0), 0);
       const rc = { prazo: Math.max(fatV * taxaEmDia, prazo28), frota: rec30.frota / 30, cheque: rec30.cheque / 30 };
-      const desp = D.pagar.filter(p => p.empresa_id === eid && p.vencimento === dia);
+      const desp = D.pagar.filter(p => p.empresa_id === eid && p.vencimento === dia)
+        .map(p => p.categoria === 'recorrente' ? Object.assign({}, p, { planejada: true }) : p);
+      pedidos.filter(x => !x.tit && x.diaPrev === dia).forEach(x => desp.push({ pedido: true, valor: x.valor,
+        descricao: 'Pedido REQ-' + String(x.r.numero).padStart(6, '0') + ' · ' + (x.r.fornecedor_nome || '') + (x.venc && x.venc <= D.hoje ? ' (vencimento previsto já passou)' : '') + ' — ainda sem nota' }));
+      sim.filter(s => s.dia === dia).forEach(s => desp.push({ simulado: true, valor: s.valor, descricao: 'SIMULAÇÃO: ' + (s.desc || 'pedido') }));
       const lanc = desp.reduce((a, p) => a + Number(p.valor || 0), 0), est = Math.max(0, m.D - lanc), Dv = lanc + est;
       if (est > 0.5) desp.push({ descricao: 'Estimativa: média de saídas das últimas 4 ' + _cdSem(dia) + ' (sem conta lançada)', valor: est, estimado: true });
       const vcT = m.vc.prazo + m.vc.frota + m.vc.cheque, rcT = rc.prazo + rc.frota + rc.cheque;
@@ -326,11 +355,12 @@ function _cdSeriePosto(D, e) {
         bancoVenda: 0, recBoleto: 0, bancoOp: m.bancoOp, semDesp: m.semDesp, itens: [], desp, disp: dP, comp: cP, fatV, taxaEmDia, media28 });
     }
   }
-  const vencidas = D.pagar.filter(p => p.empresa_id === eid && p.vencimento < D.hoje);
+  // conta recorrente (distribuição/parcela) é PLANEJADA, não dívida vencida (opção b do Ronan, 19/10)
+  const vencidas = D.pagar.filter(p => p.empresa_id === eid && p.vencimento < D.hoje && p.categoria !== 'recorrente');
   // CONTA ÚNICA (regra do Ronan): toda venda à vista deve chegar ao Sicoob. Mede 14 dias até ontem.
   let vista14 = 0, banco14 = 0;
   for (let i = 1; i <= 14; i++) { const x = linha(_cdSoma(D.hoje, -i)); vista14 += x.entrou; banco14 += x.bancoVenda; }
-  return { eid, nome: e.nome_fantasia || e.nome, dias, comp, saldo: s, saldoHoje, tx, vencidas, vista14, banco14 };
+  return { eid, nome: e.nome_fantasia || e.nome, dias, comp, saldo: s, saldoHoje, tx, vencidas, vista14, banco14, pedidos };
 }
 
 function _cdJuntar(postos) {
@@ -363,7 +393,7 @@ async function _cdRender(recarregar) {
     corpo.innerHTML = '<p style="color:#888">Lendo caixa, extrato e faturas…</p>';
     try { window._cdD = await _cdCarregar(window._cdData); }
     catch (e) { corpo.innerHTML = '<p style="color:#f87171">Não consegui carregar: ' + fcEscBi(e.message || e) + '</p>'; return; }
-    window._cdPostos = window._cdD.emp.map(e => _cdSeriePosto(window._cdD, e));
+    _cdMontar();
     window._cdSel = window._cdData;
   }
   const D = window._cdD, P = window._cdPostos;
@@ -390,6 +420,17 @@ async function _cdRender(recarregar) {
   if (fora.length) h += '<div class="cd-aviso">🏦 <b>Conta única:</b> nos últimos 14 dias, parte da venda à vista não chegou ao Sicoob — ' +
     fora.map(p => fcEscBi(p.nome) + ': vendeu ' + _cdMoney(p.vista14) + ', chegou ' + _cdMoney(p.banco14) + ' (' + Math.round(p.banco14 / p.vista14 * 100) + '%)').join(' · ') +
     '. O que ficou no PagBank ou foi depositado em outro banco não aparece no disponível.</div>';
+  // pedidos (requisições) que ainda não viraram nota
+  const ped = ps.reduce((a, p) => a.concat((p.pedidos || []).map(x => Object.assign({ posto: p.nome }, x))), []);
+  if (ped.length && D.ehHoje) {
+    const conta = ped.filter(x => !x.tit), ja = ped.filter(x => x.tit);
+    h += '<div class="cd-aviso" style="background:#16213a;border-color:#2a4a6a;color:#bfdbfe">🛢️ <b>Pedidos (Requisições de compra)</b>: ' +
+      (conta.length ? conta.length + ' sem nota entram na previsão — ' + conta.map(x => (nomeP ? fcEscBi(x.posto) + ' ' : '') + 'REQ-' + String(x.r.numero).padStart(6, '0') + ' ' +
+        _cdMoney(x.valor) + ' em ' + _cdDm(x.diaPrev) + (x.venc && x.venc <= D.hoje ? ' <b class="cd-ama">(vencimento previsto já passou — a nota chegou?)</b>' : '')).join(' · ') : 'nenhum pendente') +
+      (ja.length ? '<br><span class="cd-mut">' + ja.length + ' já parecem ter virado título (mesmo fornecedor, valor e vencimento próximos) e não somam de novo: ' +
+        ja.map(x => 'REQ-' + String(x.r.numero).padStart(6, '0') + ' ≈ ' + fcEscBi(x.tit.descricao || '') + ' ' + _cdMoney(Number(x.tit.valor))).join(' · ') +
+        '. Ligue o título à requisição na tela Requisições para tirar a dúvida.</span>' : '') + '</div>';
+  }
   const venc = ps.reduce((a, p) => a.concat(p.vencidas), []);
   if (venc.length && D.ehHoje) h += '<div class="cd-aviso">⏰ ' + venc.length + ' conta(s) a pagar vencida(s) nos últimos 30 dias, ' +
     _cdMoney(venc.reduce((a, p) => a + Number(p.valor || 0), 0)) + ' — não entram na previsão (podem já estar pagas sem baixa).</div>';
@@ -424,6 +465,8 @@ async function _cdRender(recarregar) {
   });
   h += '</tbody></table></div>';
 
+  // ---- simular pedido ----
+  if (D.ehHoje) h += _cdSimBox(ps, nomeP);
   // ---- detalhe ----
   const nm = it => nomeP && it.posto ? '<span class="cd-mut">' + fcEscBi(it.posto) + ' · </span>' : '';
   const ordem = ['din', 'deb', 'cred', 'pix', 'prazo', 'frota', 'cheque', 'haver', 'outros'];
@@ -451,7 +494,9 @@ async function _cdRender(recarregar) {
 function _cdTabSaidas(x, nm) {
   if (x.prev) {
     return '<table class="cd-t"><thead><tr><th>Contas que vencem</th><th>Valor</th></tr></thead><tbody>' +
-      (x.desp.length ? x.desp.slice().sort((a, b) => b.valor - a.valor).map(p => '<tr><td style="white-space:normal' + (p.estimado ? ';color:#9aa0b8;font-style:italic' : '') + '">' + nm(p) + fcEscBi(p.descricao || '') + '</td><td class="cd-err">' + _cdMoney(-p.valor) + '</td></tr>').join('')
+      (x.desp.length ? x.desp.slice().sort((a, b) => b.valor - a.valor).map(p => '<tr><td style="white-space:normal' + (p.estimado ? ';color:#9aa0b8;font-style:italic' : '') + '">' + nm(p) +
+        (p.simulado ? '<span class="cd-tag" style="background:#3a1030;color:#f472b6">SIMULAÇÃO</span>' : p.pedido ? '<span class="cd-tag" style="background:#2a2510;color:#fde047">PEDIDO</span>' :
+         p.planejada ? '<span class="cd-tag" style="background:#3a1f10;color:#fb923c">PLANEJADA</span>' : '') + fcEscBi(p.descricao || '') + '</td><td class="cd-err">' + _cdMoney(-p.valor) + '</td></tr>').join('')
         : '<tr><td class="cd-mut">nenhuma</td><td></td></tr>') +
       '<tr class="tot"><td>Total</td><td class="cd-err">' + _cdMoney(-x.D) + '</td></tr></tbody></table>';
   }
@@ -467,3 +512,58 @@ function _cdTabSaidas(x, nm) {
       _cdSinal(i.v) + (i.k === 'neutro' ? ' <span style="font-size:.68rem">(não muda o disponível)</span>' : '') + '</td></tr>').join('')
       : '<tr><td class="cd-mut">nenhum</td><td></td></tr>') + '</tbody></table>';
 }
+
+// ---- monta as séries (com e sem a simulação, para comparar) ----
+function _cdMontar() {
+  const D = window._cdD, sim = window._cdSim || [];
+  window._cdSim = [];
+  window._cdPostosBase = D.emp.map(e => _cdSeriePosto(D, e));
+  window._cdSim = sim;
+  window._cdPostos = sim.length ? D.emp.map(e => _cdSeriePosto(D, e)) : window._cdPostosBase;
+}
+
+// menor saldo previsto (30 dias) de um conjunto de postos
+function _cdMenor(postos) {
+  const L = _cdJuntar(postos).filter(r => r.prev && r.disp != null);
+  return L.length ? L.reduce((m, r) => (r.disp < m.disp ? r : m)) : null;
+}
+
+function _cdSimBox(ps, grupo) {
+  const hoje = _biHojeLocal(), sim = window._cdSim || [];
+  const opts = (grupo ? window._cdPostos : ps).map(p => '<option value="' + p.eid + '">' + fcEscBi(p.nome) + '</option>').join('');
+  let h = '<div class="cd-box"><h3>🧮 Simular um pedido</h3><div class="cd-sub">Coloca um pagamento na previsão e mostra o efeito no saldo antes de você fechar a compra. Não grava nada.</div>' +
+    '<div class="cd-sim"><div><label>Posto</label><select id="cd-sim-posto">' + opts + '</select></div>' +
+    '<div><label>Valor (R$)</label><input id="cd-sim-valor" type="number" step="0.01" min="0" placeholder="25000" style="width:130px"></div>' +
+    '<div><label>Vencimento do boleto</label><input id="cd-sim-dia" type="date" min="' + _cdSoma(hoje, 1) + '" max="' + _cdSoma(hoje, _CD_PREV) + '" value="' + _cdSoma(hoje, 10) + '"></div>' +
+    '<div><label>Descrição</label><input id="cd-sim-desc" placeholder="ex.: carga S10 5.000 L" style="width:180px"></div>' +
+    '<button class="cd-btn" onclick="_cdSimular()">Simular</button>' +
+    (sim.length ? '<button class="cd-btn sec" onclick="_cdSimLimpar()">Limpar simulação</button>' : '') +
+    '<button class="cd-btn sec" onclick="navegarPara(\'requisicoes\')" title="Abre a tela Requisições para lançar o pedido de verdade">Lançar como requisição →</button></div>';
+  if (sim.length) {
+    const ids = new Set(sim.map(s => s.eid));
+    const linha = (rot, antes, depois) => {
+      if (!antes || !depois) return '';
+      const piora = depois.disp < antes.disp - 0.5;
+      return '<tr><td>' + rot + '</td><td>' + _cdMoney(antes.disp) + ' <span class="cd-mut">(' + _cdDm(antes.dia) + ')</span></td><td class="' + (depois.disp < 0 ? 'cd-err' : 'cd-ok') + '"><b>' +
+        _cdMoney(depois.disp) + '</b> <span class="cd-mut">(' + _cdDm(depois.dia) + ')</span></td><td>' + (depois.disp < 0 ? '<b class="cd-err">não cabe</b>' : piora ? 'cabe' : 'cabe, sem mudar o menor saldo') + '</td></tr>';
+    };
+    const B = window._cdPostosBase, A = window._cdPostos;
+    h += '<div style="margin-top:10px"><table class="cd-t"><thead><tr><th>Menor saldo nos próximos ' + _CD_PREV + ' dias</th><th>Sem o pedido</th><th>Com o pedido</th><th></th></tr></thead><tbody>' +
+      [...ids].map(eid => linha(fcEscBi((A.find(p => p.eid === eid) || {}).nome || ''), _cdMenor(B.filter(p => p.eid === eid)), _cdMenor(A.filter(p => p.eid === eid)))).join('') +
+      linha('🏢 Grupo', _cdMenor(B), _cdMenor(A)) + '</tbody></table>' +
+      '<div class="cd-sub" style="margin-top:6px">Na simulação: ' + sim.map(s => fcEscBi((A.find(p => p.eid === s.eid) || {}).nome || '') + ' ' + _cdMoney(s.valor) + ' em ' + _cdDm(s.dia) + (s.desc ? ' (' + fcEscBi(s.desc) + ')' : '')).join(' · ') +
+      '. Os dias com o pedido aparecem marcados na tabela acima.</div></div>';
+  }
+  return h + '</div>';
+}
+
+function _cdSimular() {
+  const eid = document.getElementById('cd-sim-posto').value, valor = Number(document.getElementById('cd-sim-valor').value);
+  const dia = document.getElementById('cd-sim-dia').value, desc = document.getElementById('cd-sim-desc').value.trim();
+  const hoje = _biHojeLocal();
+  if (!(valor > 0)) { alert('Informe o valor do pedido.'); return; }
+  if (!dia || dia <= hoje || dia > _cdSoma(hoje, _CD_PREV)) { alert('O vencimento precisa estar nos próximos ' + _CD_PREV + ' dias.'); return; }
+  window._cdSim = (window._cdSim || []).concat([{ eid, valor, dia, desc }]);
+  _cdMontar(); window._cdSel = dia; _cdRender();
+}
+function _cdSimLimpar() { window._cdSim = []; _cdMontar(); _cdRender(); }
