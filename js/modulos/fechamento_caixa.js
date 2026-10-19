@@ -570,8 +570,10 @@ async function fcCarregarDados() {
     if (!/dinheiro/.test(_ft)) {
       const _g = /pix/.test(_ft) ? (/cnpj/.test(_ft) ? 'pix_cnpj' : 'pix') : /frota/.test(_ft) ? 'frota' : /cheque/.test(_ft) ? 'cheque'
                : /cart|credito|debito/.test(_ft) ? 'cartao' : 'deposito';
-      t.titulos_receb = t.titulos_receb || {};
-      t.titulos_receb[_g] = (t.titulos_receb[_g] || 0) + Number(x.valor || 0);
+      // a soma na forma fica para depois dos lançamentos manuais: no caixa substituído pelo extrato, o título pago na
+      // maquininha já está no extrato (ver "TÍTULO PAGO NA MAQUININHA" abaixo)
+      (t._titFora = t._titFora || []).push({ g: _g, valor: Number(x.valor || 0),
+        dinheiro: Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0), x });
     }
   });
   // LANÇAMENTOS MANUAIS (botão ➕ Incluir do balão): entram nas somas do lado
@@ -632,6 +634,32 @@ async function fcCarregarDados() {
       if (chave === 'outros') t.outrosCaixa += v;
       else t.rec[chave] = (t.rec[chave] || 0) + v;
     }
+  });
+
+  // TÍTULO PAGO NA MAQUININHA × CAIXA SUBSTITUÍDO PELO EXTRATO (19/10/2026, Florestal caixa 1206: 3 títulos no cartão,
+  // R$ 1.055,29, contavam 2× — "falta" de 462,23 escondia 1.517,52). O extrato traz TODA transação da maquininha no turno,
+  // inclusive o título pago nela. Com o caixa substituído, o título de cartão/Pix que casa com uma linha do extrato
+  // (mesma forma, mesmo valor; cada linha casa uma vez) já está no Cartão/Pix e não soma de novo. O que não casa (outra
+  // maquininha, Pix no banco) continua entrando na linha da forma, como manda a regra de 16/10.
+  Object.values(porTurno).forEach(t => {
+    const fora = t._titFora || [];
+    if (!fora.length) return;
+    t.titulos_receb = t.titulos_receb || {};
+    const livres = (t.manuais || []).filter(m => String(m.id || '').indexOf('ext-') === 0).map(m => ({
+      c: Math.round(Number(m.valor || 0) * 100), usado: false,
+      pix: (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(m.forma_nome || ''), '') : '') === 'pix' }));
+    fora.forEach(f => {
+      if (livres.length && (f.g === 'cartao' || f.g === 'pix')) {
+        const alvos = [Math.round(f.dinheiro * 100), Math.round(f.valor * 100)];
+        const m = livres.find(l => !l.usado && l.pix === (f.g === 'pix') && alvos.includes(l.c));
+        if (m) {
+          m.usado = true; f.x._no_extrato = true;
+          t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.valor) * 100) / 100;
+          return;
+        }
+      }
+      t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.valor;
+    });
   });
 
   // ---- CONFERÊNCIA DE CAIXA FÍSICO (dinheiro esperado × contado) ----
