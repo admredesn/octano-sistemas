@@ -142,7 +142,7 @@ function renderTitulosPagar(){
 
 function tabelaTitulos(lista,hoje){
   const f=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
-  const total=lista.reduce((s,c)=>s+Number(c.valor),0);
+  const total=lista.filter(c=>c.status!=='cancelado').reduce((s,c)=>s+Number(c.valor),0);   // cancelado (título em dobro) não é dívida
   const totalAberto=lista.filter(c=>c.status==='aberto').reduce((s,c)=>s+Number(c.valor),0);
   const totalPago=lista.filter(c=>c.status==='pago').reduce((s,c)=>s+Number(c.valor_pago||c.valor),0);
   const fmtDt=d=>d?new Date(d+'T12:00:00').toLocaleDateString('pt-BR'):'';
@@ -152,11 +152,12 @@ function tabelaTitulos(lista,hoje){
     const vencida=c.status==='aberto'&&vend<hoje;
     const prox7=c.status==='aberto'&&!vencida&&vend<=new Date(Date.now()+7*864e5).toISOString().split('T')[0];
     const pago=c.status==='pago';
+    const canc=c.status==='cancelado';
     const emissao=c.oct_nfe_entrada?.emissao||c.competencia||'';
-    let bg=pago?'background:#0a1a0a':vencida?'background:#1a0808':prox7?'background:#161200':'';
-    const corSit=pago?'#4caf50':vencida?'#f44336':'#fbbf24';
+    let bg=canc?'opacity:.5':pago?'background:#0a1a0a':vencida?'background:#1a0808':prox7?'background:#161200':'';
+    const corSit=canc?'#8a8f98':pago?'#4caf50':vencida?'#f44336':'#fbbf24';
     const corValor=pago?'#4caf50':vencida?'#f44':'#e0e0e0';
-    const txtSit=pago?'LIQUIDADO':vencida?'VENCIDO':'ABERTO';
+    const txtSit=canc?'CANCELADO':pago?'LIQUIDADO':vencida?'VENCIDO':'ABERTO';
     const nfe=c.oct_nfe_entrada?'NF Nº: '+c.oct_nfe_entrada.numero+'/'+c.oct_nfe_entrada.serie:'';
     const _rqt=c.requisicao_id?(window._requisicoesTit||{})[c.requisicao_id]:null;
     const selo=(_rqt&&typeof rqNumero==='function')?(['pedida','parcial','divergente'].includes(_rqt.status)?'<div title="A mercadoria desta compra ainda nao chegou — baixar pede motivo" style="color:'+(c.status==='pago'?'#f87171':'#fbbf24')+';font-weight:700;font-size:0.72rem">'+(c.status==='pago'?'⚠ pago, mercadoria ainda não chegou ':'⛔ aguardando chegada ')+rqNumero(_rqt.numero)+'</div>':'<div title="Requisição '+rqNumero(_rqt.numero)+'" style="color:#4ade80;font-size:0.72rem">✔ '+rqNumero(_rqt.numero)+'</div>'):'';
@@ -168,7 +169,7 @@ function tabelaTitulos(lista,hoje){
       '<td style="font-size:0.85rem;font-weight:700;padding:6px 8px;color:'+(vencida?'#f44':prox7?'#fbbf24':pago?'#4caf50':'#e0e0e0')+'">'+fmtDt(vend)+'</td>'+
       '<td style="font-size:0.78rem;padding:6px 8px;color:'+(pago?'#4caf50':'#555')+'">'+fmtDt(c.data_pagamento)+'</td>'+
       '<td style="font-weight:700;padding:6px 8px;color:'+corValor+'">R$ '+f(c.valor)+'</td>'+
-      '<td style="padding:6px 8px"><span style="font-size:0.72rem;padding:2px 8px;border-radius:10px;font-weight:700;background:'+(pago?'#1a3a1a':vencida?'#3a1a1a':'#2a1a00')+';color:'+corSit+'">'+txtSit+'</span></td>'+
+      '<td style="padding:6px 8px"><span style="font-size:0.72rem;padding:2px 8px;border-radius:10px;font-weight:700;background:'+(canc?'#23262f':pago?'#1a3a1a':vencida?'#3a1a1a':'#2a1a00')+';color:'+corSit+'"'+(canc?' title="'+String(c.observacoes||'').replace(/"/g,'&quot;')+'"':'')+'>'+txtSit+'</span></td>'+
       '<td style="font-size:0.75rem;color:#888;padding:6px 8px">'+nfe+selo+'</td>'+
       '<td style="font-size:0.75rem;color:#555;padding:6px 8px">'+(c.oct_bancos?c.oct_bancos.banco:'')+'</td>'+
       '<td style="font-size:0.72rem;color:#555;padding:6px 8px">'+(c.oct_plano_contas?c.oct_plano_contas.codigo:'')+'</td>'+
@@ -388,26 +389,59 @@ async function salvarConta(id,eId){
   msg.textContent='Salvo!';msg.style.color='#4caf50';setTimeout(()=>moduloContasPagar(),600);
 }
 
-async function lancarContasPagarNfe(nfeId,eId,fornId,num,serie,pags,dups,emissao,valorTotal){
+async function lancarContasPagarNfe(nfeId,eId,fornId,num,serie,pags,dups,emissao,valorTotal,chave){
   const dataEmissao = emissao || new Date().toISOString().split('T')[0];
+  // 18/10/2026: a nota que chega pela manifestação JÁ ganha título (sync_contas_pagar_nfe.py,
+  // "manifestada sem entrada … chave:<44>"). Importar a mesma nota aqui criava OUTRO título:
+  // em 15/10 quatro notas da ALE ficaram em dobro (R$ 98,5 mil de dívida que não existe).
+  // Agora, se a nota já tem título (pela chave ou pelo nº da duplicata + valor), só liga o
+  // título existente a esta entrada e não cria nada.
+  const ja=await _cpTitulosDaNota(eId,num,chave);
+  const existe=(nDoc,valor)=>ja.find(t=>(_cpNumDup(t.n_documento)===_cpNumDup(nDoc)&&Math.abs(Number(t.valor)-Number(valor))<0.01)
+    ||(chave&&String(t.observacoes||'').includes('chave:'+chave)&&Math.abs(Number(t.valor)-Number(valor))<0.01));
+  const inserir=async(corpo)=>{
+    const t=existe(corpo.n_documento,corpo.valor);
+    if(t){ if(!t.nfe_id) await sb.from('oct_contas_pagar').update({nfe_id:nfeId}).eq('id',t.id); return; }
+    await sb.from('oct_contas_pagar').insert(corpo);
+  };
   // 1) Se tem duplicatas com vencimento e valor, lança cada uma
   const dupsValidas = (dups||[]).filter(d=>d.dVenc&&d.vDup);
   if(dupsValidas.length>0){
     for(const d of dupsValidas){
-      await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie+' Dup '+(d.nDup||'001'),fornecedor_id:fornId||null,nfe_id:nfeId,valor:d.vDup,vencimento:d.dVenc,n_documento:num+'/'+(d.nDup||'1'),status:'aberto',competencia:dataEmissao});
+      await inserir({empresa_id:eId,descricao:'NF-e '+num+'/'+serie+' Dup '+(d.nDup||'001'),fornecedor_id:fornId||null,nfe_id:nfeId,valor:d.vDup,vencimento:d.dVenc,n_documento:num+'/'+(d.nDup||'1'),status:'aberto',competencia:dataEmissao});
     }
     return;
   }
-  // 2) Sem duplicata: se tem pagamentos a prazo, lança com vencimento = emissao
-  const pagsPrazo = (pags||[]).filter(p=>p.indPag!=='0'&&p.vPag);
+  // 2) Sem duplicata: só é A PRAZO quando o XML diz indPag=1 (prazo declarado) — vencimento = emissão
+  // 18/10/2026: antes valia "indPag diferente de 0", e indPag AUSENTE (SETTA tPag 18, Pix/transferência)
+  // entrava como conta aberta vencida no dia da emissão — 7 notas SETTA do AC (R$ 155 mil) em 14/10.
+  const pagsPrazo = (pags||[]).filter(p=>String(p.indPag)==='1'&&p.vPag);
   if(pagsPrazo.length>0){
     for(const p of pagsPrazo){
-      await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:p.vPag,vencimento:dataEmissao,n_documento:num,status:'aberto',competencia:dataEmissao,observacoes:'Forma: '+(p.xPag||p.tPag||'')});
+      await inserir({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:p.vPag,vencimento:dataEmissao,n_documento:num,status:'aberto',competencia:dataEmissao,observacoes:'Forma: '+(p.xPag||p.tPag||'')});
     }
     return;
   }
-  // 3) Sem duplicata e sem pagamento a prazo: lança UMA conta com o valor total, vencimento = emissao
+  // 3) Sem duplicata e sem prazo declarado = À VISTA: o título já nasce PAGO na emissão (regra do
+  // Ronan, a mesma de _ferramentas/sync_contas_pagar_nfe.py: SETTA tPag 18, Rio Branco indPag 0, Royal 99)
   if(valorTotal&&Number(valorTotal)>0){
-    await sb.from('oct_contas_pagar').insert({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:Number(valorTotal),vencimento:dataEmissao,n_documento:num,status:'aberto',competencia:dataEmissao});
+    const tp=((pags||[]).find(p=>p.tPag)||{}).tPag||'';
+    const forma={'01':'Dinheiro','03':'Cartao Credito','04':'Cartao Debito','15':'Boleto','16':'Deposito','17':'PIX','18':'TED/DOC'}[tp]||'Outros';   // mesmos nomes do sync
+    await inserir({empresa_id:eId,descricao:'NF-e '+num+'/'+serie,fornecedor_id:fornId||null,nfe_id:nfeId,valor:Number(valorTotal),vencimento:dataEmissao,n_documento:num,
+      status:'pago',data_pagamento:dataEmissao,valor_pago:Number(valorTotal),forma_pagamento:forma,competencia:dataEmissao,
+      observacoes:'sem prazo no XML'+(tp?' (tPag='+tp+')':'')+' — lançado como pago à vista'});
   }
+}
+
+// "378811/001", "378811/1" e "378811" -> mesma chave de comparação
+function _cpNumDup(n){
+  const [nf,dup]=String(n||'').split('/');
+  return String(nf||'').trim()+'/'+(dup?String(Number(dup)||dup):'');
+}
+async function _cpTitulosDaNota(eId,num,chave){
+  const filtros=['n_documento.eq.'+num,'n_documento.like.'+num+'/*'];
+  if(chave) filtros.push('observacoes.like.*chave:'+chave+'*');
+  const{data}=await sb.from('oct_contas_pagar').select('id,n_documento,valor,nfe_id,observacoes')
+    .eq('empresa_id',eId).or(filtros.join(','));
+  return data||[];
 }

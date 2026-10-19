@@ -396,6 +396,9 @@ async function _reverterImportacaoNfe(id) {
   // 3) apaga vinculos, itens, contas a pagar e a propria NF-e
   await sb.from('oct_produto_nfe').delete().eq('nfe_id', id);
   await sb.from('oct_nfe_entrada_itens').delete().eq('nfe_id', id);
+  // título que veio da manifestação (só foi LIGADO a esta entrada, ver lancarContasPagarNfe)
+  // é dívida real da nota: desliga em vez de apagar
+  await sb.from('oct_contas_pagar').update({ nfe_id: null }).eq('nfe_id', id).like('observacoes', '%chave:%');
   await sb.from('oct_contas_pagar').delete().eq('nfe_id', id);
   const { error } = await sb.from('oct_nfe_entrada').delete().eq('id', id);
   return error;
@@ -1066,7 +1069,7 @@ async function confirmarNfe(){
   if(nfeErr){msg.textContent='Erro: '+nfeErr.message;msg.style.color='#f44';return;}
 
   // Lança contas a pagar automaticamente (uma única vez)
-  await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups, d.dhEmi, d.vNF);
+  await lancarContasPagarNfe(nfe.id, _empresaId, fornecedorId, d.numero, d.serie, d.pagamentos, d.dups, d.dhEmi, d.vNF, d.chNFe||null);
 
   for(let i=0;i<d.itens.length;i++){
     const it=d.itens[i];
