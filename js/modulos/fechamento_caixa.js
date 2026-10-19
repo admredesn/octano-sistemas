@@ -170,9 +170,12 @@ async function fcCarregarDados() {
     _fcTudo(() => sb.from('oct_pdv_vendas').select('id,turno_id,valor_total,pagamentos,status')
       .eq('empresa_id', eid).in('turno_id', ids).order('id')),
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
-    // venda por turno ja' somada no banco (59 linhas em vez de 3.808 vendas)
-    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod')
-      .eq('empresa_id', eid).in('turno_id', ids),
+    // venda por turno ja' somada no banco (59 linhas em vez de 3.808 vendas). Colunas do valor COBRADO (19/10/2026,
+    // SQL-VIEW-VENDA-TURNO-COBRADO.sql): sem o SQL rodado, cai na leitura antiga e a tela segue como antes.
+    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom')
+      .eq('empresa_id', eid).in('turno_id', ids)
+      .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod')
+        .eq('empresa_id', eid).in('turno_id', ids) : r),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
     // CASA POR JANELA DE HORÁRIO (12/08): o turno_id da fila é nulo em ~70% dos
     // itens (a bomba/casamento no núcleo não conhece o turno). Então buscamos por
@@ -259,7 +262,7 @@ async function fcCarregarDados() {
 
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
-    venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0,
+    venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0, ajuste_tabela: 0,
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
@@ -394,6 +397,12 @@ async function fcCarregarDados() {
       t.fila_sem_pgto += vf; t.fila_sem_pgto_itens.push(f);
       return;
     }
+    // ACRÉSCIMO/DESCONTO DE TABELA do combustível ainda na fila (19/10/2026): o recebimento conta o valor cobrado
+    // (vf); a venda tem de contar o mesmo valor — a pista dá só o preço da bomba
+    if (ehComb && !turnosTecnox.has(tid)) {
+      const ajF = Number(f.acrescimo || 0) - Number(f.desconto || 0);
+      if (Math.abs(ajF) > 0.004) { t.venda_comb += ajF; t.venda_total += ajF; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajF; }
+    }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
     if (turnosTecnox.has(tid)) return;               // recebimento vem do TecnoX
     const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
@@ -429,6 +438,19 @@ async function fcCarregarDados() {
   // só como comparação (cupom_comb), porque a venda de combustível é a bomba.
   ((aggRes && aggRes.data) || []).forEach(g => {
     const t = porTurno[g.turno_id]; if (!t) return;
+    // VENDA = O QUE FOI TRANSMITIDO (19/10/2026, Ronan: "o acréscimo da venda a prazo não está somando na venda de
+    // combustível, desse jeito o recebimento sempre fica sobrando e essa sobra pode maquiar a falta em outra forma").
+    // A bomba continua a régua do VOLUME (todo litro que saiu conta, vendido ou não — regra de 19/08); por cima dela
+    // entra o que o cupom cobrou a mais ou a menos (acréscimo/desconto de tabela). E o produto de loja dos cupons
+    // entra em "Venda produtos" — inclusive o vendido como linha 'prod-' de abastecimento. Antes só o produto ainda
+    // na fila somava: o já transmitido virava sobra (Florestal, caixa 1208: R$ 313,39 = 30,12 + 214,84 + 38,85 + 29,58).
+    if (!turnosTecnox.has(g.turno_id) && g.comb_cobrado != null && g.comb_bomba != null) {
+      const ajT = Math.round((Number(g.comb_cobrado || 0) - Number(g.comb_bomba || 0)) * 100) / 100;
+      const loja = Number(g.loja_cupom || 0);
+      t.venda_comb += ajT; t.venda_total += ajT; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajT;
+      t.venda_prod += loja; t.venda_total += loja;
+      return;
+    }
     if (!turnosTecnox.has(g.turno_id)) return;
     const prod = Number(g.venda_prod || 0);
     t.cupom_comb = Number(g.venda_comb || 0);
@@ -1005,7 +1027,7 @@ function fcDetalhe(turnoId) {
             <span>💰 Total movimentado no caixa</span>
             <span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span>
           </div>
-          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + pista/cupons/pendências ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}</div>
+          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + pista/cupons/pendências ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}${Math.abs(Number(d.ajuste_tabela || 0)) > 0.009 ? ' · combustível = bomba ' + (Number(d.ajuste_tabela) > 0 ? '+ ' : '− ') + fcMoney(Math.abs(d.ajuste_tabela)) + ' de acréscimo/desconto de tabela (valor cobrado nos cupons)' : ''}</div>
         </div>
 
         <div class="fc-painel">
