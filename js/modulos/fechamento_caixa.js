@@ -1115,7 +1115,7 @@ async function fcNode(tipo) {
     return fcNodeMov(tipo);
   }
   if (tipo === 'cupons' || tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
-    fcModal('Carregando...', '<p style="padding:20px;color:#888">Buscando...</p>');
+    fcModalNav('Carregando...', '<p style="padding:20px;color:#888">Buscando...</p>');
     const { data: vendas } = await sb.from('oct_pdv_vendas')
       .select('id,numero,valor_total,itens,pagamentos,status,vendedor,operador,cliente_nome,data_venda')
       .eq('turno_id', turnoId).order('numero');
@@ -1136,7 +1136,7 @@ async function fcNode(tipo) {
   } else if (FC_DETALHES[tipo]) {
     return fcNodeDetalhe(tipo);
   } else {
-    fcModal(tipo, '<p style="padding:24px;color:#777">Este detalhe será ligado na próxima etapa.</p>');
+    fcModalNav(tipo, '<p style="padding:24px;color:#777">Este detalhe será ligado na próxima etapa.</p>');
   }
 }
 
@@ -2246,7 +2246,7 @@ async function fcNodeDetalhe(tipo) {
   const cache = window._fcCache || {};
   const t = (cache.turnos || []).find(x => x.id === turnoId);
   if (!cfg || !t) return;
-  fcModal(cfg.titulo, '<p style="padding:20px;color:#888">Buscando...</p>');
+  fcModalNav(cfg.titulo, '<p style="padding:20px;color:#888">Buscando...</p>');
 
   // fila de transmissão: lista do cache (já veio no fcCarregarDados)
   if (cfg.especial === 'fila') {
@@ -2261,7 +2261,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td fc-r">${fcMoney(f.valor)}</td>
         <td class="fc-td fc-r">${(Number(f.desconto || 0) || Number(f.acrescimo || 0)) ? fcMoney(vf) : '—'}</td></tr>`;
     });
-    fcModal(cfg.titulo, its.length
+    fcModalNav(cfg.titulo, its.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Abastecimentos baixados no PDV aguardando NFC-e. Já estão SOMADOS nos totais do caixa; desconto/acréscimo é lançado na aba NFC-e do retaguarda.</p>
          <table class="fc-grid"><thead><tr><th>Combustível/Produto</th><th>Bico</th><th>Litros</th><th>Forma</th><th>Valor</th><th>Valor c/ ajuste</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(d0.fila_total)}</b></td></tr></tbody></table>`
@@ -2327,7 +2327,7 @@ async function fcNodeDetalhe(tipo) {
         <td class="fc-td fc-r">${e.n}</td></tr>`;
     });
     const difT = tot.enc - tot.vendido - tot.afer - tot.canc;
-    fcModal(cfg.titulo, lista.length
+    fcModalNav(cfg.titulo, lista.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Encerrante = totalizador do bico (inicial = 1º abastecimento do turno, final = último). Ele conta tudo que saiu da bomba; <b>Diferença</b> = encerrante − vendido − aferição − cancelado (deveria ficar em ~0).</p>
          <div class="fc-gridwrap"><table class="fc-grid"><thead><tr><th>Bico</th><th>Bomba</th><th>Combustível</th><th>Enc. inicial</th><th>Enc. final</th><th>Encerrante (L)</th><th>Vendido (L)</th><th>Aferição</th><th>Cancelado</th><th>Diferença</th><th>Abast.</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Total</b></td><td class="fc-td fc-r"><b>${fcNum(tot.enc, 3)}</b></td><td class="fc-td fc-r"><b>${fcNum(tot.vendido, 3)}</b></td><td class="fc-td fc-r">${tot.afer ? fcNum(tot.afer, 3) : '—'}</td><td class="fc-td fc-r">${tot.canc ? fcNum(tot.canc, 3) : '—'}</td><td class="fc-td fc-r" style="color:${Math.abs(difT) < 0.05 ? '#86efac' : '#f87171'}"><b>${fcNum(difT, 3)}</b></td><td class="fc-td"></td></tr></tbody></table></div>`
@@ -2354,7 +2354,7 @@ async function fcNodeDetalhe(tipo) {
       <td class="fc-td">${c.motivo ? fcEsc(c.motivo) + (c.operador ? ` <span style="color:#888">(${fcEsc(c.operador)})</span>` : '')
         : '<b style="color:#f87171">⚠ SEM MOTIVO (fora do PDV)</b>'}</td></tr>`);
     const totC = cs.reduce((s, c) => s + Number(c.valor || 0), 0);
-    fcModal(cfg.titulo, cs.length
+    fcModalNav(cfg.titulo, cs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Combustível que SAIU DA BOMBA e teve o registro cancelado. Sem motivo = cancelado por fora do fluxo oficial do PDV.</p>
          <table class="fc-grid"><thead><tr><th>Hora</th><th>Bico</th><th>Combustível</th><th>Litros</th><th>Valor</th><th>Frentista</th><th>Motivo</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(totC)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`
@@ -2372,7 +2372,7 @@ async function fcNodeDetalhe(tipo) {
     // por fora não sai do depósito e vira "sobra" só no dinheiro).
     const dif = d.resultado_caixa == null ? null : d.resultado_caixa;
     const dinDif = d.dif_dinheiro;
-    fcModal(cfg.titulo, `
+    fcModalNav(cfg.titulo, `
       <div style="padding:16px;font-size:0.9rem;color:#cdd6e0">
         <div style="color:#f97316;font-weight:700;font-size:0.8rem;margin-bottom:6px">RESULTADO DO CAIXA (recebido × vendido)</div>
         <div style="display:flex;justify-content:space-between;padding:5px 0"><span>Total recebido (prestação de contas)</span><b>${fcMoney(d.recebido_caixa)}</b></div>
@@ -2467,7 +2467,7 @@ async function fcNodeDetalhe(tipo) {
           ${naoSoma > 0.009 ? lin('Troco copiado do TecnoX (não soma)', naoSoma, 'color:#667;font-size:0.72rem') : ''}
         </div>`;
     }
-    fcModal(cfg.titulo, `
+    fcModalNav(cfg.titulo, `
       <div style="padding:14px;font-size:0.85rem;color:#cdd6e0">
         <label style="color:#9aa;font-size:0.75rem;display:block;margin-bottom:4px">${rot}</label>
         <input id="fc-troco-inp" type="number" step="0.01" value="${Number(t[campo] || 0).toFixed(2)}" class="fc-inp2" style="width:140px">
@@ -2892,7 +2892,7 @@ async function fcNodeDetalhe(tipo) {
   if (!secoes.length)
     secoes.push('<p style="padding:24px;color:#777">Sem lançamentos deste tipo neste caixa (o octano ainda não movimenta esta categoria).</p>');
   // barra de ações no topo + rodapé com contador/total (modelo TecnoX)
-  fcModal(cfg.titulo, secoes.join(''), {
+  fcModalNav(cfg.titulo, secoes.join(''), {
     topo: _fcToolbar(tipo === 'cartao'
       ? '<span class="fc-sep"></span><button class="fc-btn mini" style="border-color:#2a4a6a;color:#7ea8d8"'
         + ' title="Troca os lançamentos de cartão/Pix pelo que a maquininha reportou"'
@@ -3062,7 +3062,7 @@ function fcNodeMov(tipo) {
     const btnBuscar = `<div style="padding:8px 10px">
         <button class="fc-btn azul" onclick="fcTitBuscar()">🔎 Buscar notas a prazo em aberto</button>
       </div>`;
-    return fcModal('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
+    return fcModalNav('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
          ${btnBuscar}
          <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th><th></th></tr></thead>
@@ -3086,7 +3086,7 @@ function fcNodeMov(tipo) {
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
     const tit = tipo === 'vale_haver' ? '🤝 Haver (o posto deve)' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
-    return fcModal(tit, vs.length
+    return fcModalNav(tit, vs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
          <table class="fc-grid"><thead><tr><th>Hora</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Saldo do turno</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
@@ -3102,7 +3102,7 @@ function fcNodeMov(tipo) {
       <td class="fc-td">${r.conciliado ? '✓' : '—'}</td>
       <td class="fc-td fc-r">${fcMoney(r.valor)}</td></tr>`);
     const tot = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
-    return fcModal('💳 Recebimentos (maquininha / cofre / Pix)', rs.length
+    return fcModalNav('💳 Recebimentos (maquininha / cofre / Pix)', rs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Tudo que entrou pela maquininha, cofre e Pix no período do turno (EDI/cofre). Já casa com os cupons/fila — aqui é a conferência bruta, casado ou não.</p>
          <div style="display:flex;gap:14px;padding:4px 10px;color:#9fb0c4;font-size:0.78rem">
            <span>Cartão: <b>${fcMoney(d.receb_ext_cartao)}</b></span>
@@ -3124,7 +3124,7 @@ function fcNodeMov(tipo) {
     const linhas = ev.map(e => `<tr><td class="fc-td">${_fcHora(e[0])}</td>
       <td class="fc-td">${e[1]}</td><td class="fc-td">${fcEsc(e[2])}</td>
       <td class="fc-td fc-r" style="color:${e[3] >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(e[3])}</td></tr>`);
-    return fcModal('🧾 Movimentação completa do turno', ev.length
+    return fcModalNav('🧾 Movimentação completa do turno', ev.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Todo movimento do PDV neste turno, em ordem de horário: sangrias, recebimentos de maquininha/cofre, vales/haver e a fila de NFC-e. Vendas fiscais estão em "Cupons Fiscais".</p>
          <table class="fc-grid"><thead><tr><th>Hora</th><th>Movimento</th><th>Detalhe</th><th>Valor</th></tr></thead>
          <tbody>${linhas.join('')}</tbody></table>`
@@ -3582,7 +3582,7 @@ function _fcCuponsRender() {
       <td class="fc-td">${x.origem}</td>`, `fcCupomVer('${x.ref}','${x.id}')`);
   });
   const total = lista.reduce((s, x) => s + x.valor, 0);
-  fcModal(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, `
+  fcModalNav(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, `
     <div class="fc-filtros">
       <label>Forma:</label>
       <select class="fc-inp2" onchange="window._fcCuponsFiltro.forma=this.value;_fcCuponsRender()">
@@ -3761,7 +3761,7 @@ function fcModalItens(vs) {
       <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     n++; tot += Number(m.valor || 0);
   });
-  fcModal('📋 Itens Vendidos (produtos de loja)', `
+  fcModalNav('📋 Itens Vendidos (produtos de loja)', `
     <div class="fc-filtros">
       <button class="fc-btn" style="color:#4ade80" onclick="fcItemVendidoForm()">➕ Lançar item vendido (esquecido)</button>
       <span style="color:#667">combustível fica na aba ⛽ Combustível Vendido · ☑ marca · ESPAÇO confere · ✎ altera</span>
@@ -3936,7 +3936,7 @@ function fcModalCombustivel(vs, soPrazo) {
         }).join('')}${tot('Total a prazo', totL, totV, 2)}</tbody></table>`;
   }
   const bt = (rot, ligado, arg) => `<button class="fc-btn mini" style="${ligado ? 'background:#f97316;border-color:#f97316;color:#111;font-weight:700' : ''}" onclick="fcModalCombustivel(null, ${arg})">${rot}</button>`;
-  fcModal('Combustível Vendido', html, {
+  fcModalNav('Combustível Vendido', html, {
     topo: `<div class="fc-filtros" style="gap:5px">${bt('Todos', !soPrazo, 'false')}${bt('Só a prazo', soPrazo, 'true')}
       <span style="color:#667;font-size:0.72rem;margin-left:8px">${soPrazo ? 'cupons pagos com nota a prazo' : 'todos os cupons do turno'} — ${usados.length} cupom(ns)</span></div>`,
   });
@@ -3946,7 +3946,7 @@ function fcModalVendedor(vs) {
   vs.forEach(v => { const k = v.vendedor || v.operador || '—'; map[k] = (map[k] || 0) + Number(v.valor_total || 0); });
   const linhas = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, val]) => `<tr>
     <td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${fcMoney(val)}</td></tr>`).join('');
-  fcModal('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
+  fcModalNav('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
 }
 function fcModal(titulo, html, opts) {
   window._fcModalVolta = false;   // editor de lançamento liga isto p/ voltar ao balão
@@ -3955,7 +3955,7 @@ function fcModal(titulo, html, opts) {
   if (!m) { m = document.createElement('div'); m.id = 'fc-modal'; document.body.appendChild(m); }
   // topo (ações/filtros) e pé (somatório) FIXOS; só a lista rola (pedido 19/08)
   m.innerHTML = `<div class="fc-modal-bg" onclick="fcModalFechar()"></div>
-    <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
+    <div class="fc-modal-cx"><div class="fc-modal-tit">${fcEsc(titulo)}${opts.nav ? _fcModalNavHtml() : ''}<span onclick="fcModalFechar()" style="cursor:pointer;float:right">✕</span></div>
     ${opts.topo ? `<div class="fc-modal-topo">${opts.topo}</div>` : ''}
     ${opts.lado
       ? `<div class="fc-modal-corpo fc-corpo-flex"><div class="fc-corpo-scroll">${html}</div><div class="fc-corpo-lado">${opts.lado}</div></div>`
@@ -3964,6 +3964,41 @@ function fcModal(titulo, html, opts) {
   // arrastável pela barra do título + redimensionável (canto inferior direito)
   if (typeof octArrastavel === 'function')
     octArrastavel(m.querySelector('.fc-modal-cx'), m.querySelector('.fc-modal-tit'));
+  // trocou de caixa pelas setas da janela: ela fica onde o usuário tinha arrastado
+  if (opts.nav && window._fcNavPos) {
+    const cx = m.querySelector('.fc-modal-cx');
+    if (cx) Object.assign(cx.style, { position: 'fixed', margin: '0', transform: 'none' }, window._fcNavPos);
+  }
+}
+
+// SETAS ENTRE CAIXAS NAS JANELAS DE ASSUNTO (19/10/2026, pedido do Ronan: "colocar essa mesma setinha em todas as
+// telas que abrem, para facilitar a navegação entre os caixa no mesmo assunto"). Mesmas regras do ⏮◀▶⏭ do topo
+// (fcNavTurno); a janela reabre o MESMO assunto (window._fcNodeAtual) no caixa novo.
+function fcModalNav(titulo, html, opts) { return fcModal(titulo, html, Object.assign({}, opts || {}, { nav: true })); }
+function _fcModalNavHtml() {
+  const ts = ((window._fcCache || {}).turnos || []).slice()
+    .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+  const i = ts.findIndex(x => x.id === window._fcTurnoAtual);
+  if (i < 0 || !window._fcNodeAtual) return '';
+  const t = ts[i];
+  let dia = '';
+  const dt = new Date(t.aberto_em);
+  if (!isNaN(dt)) dia = String(dt.getDate()).padStart(2, '0') + '/' + String(dt.getMonth() + 1).padStart(2, '0');
+  const op = String(t.operador || '').trim().split(/\s+/)[0] || '';
+  const b = (onde, txt, tit, off) => `<button class="fc-btn mini" ${off ? 'disabled' : ''} title="${tit}" onclick="event.stopPropagation();fcNavTurnoNo(${typeof onde === 'string' ? "'" + onde + "'" : onde})">${txt}</button>`;
+  return `<span class="fc-modal-nav">${b('first', '⏮', 'Primeiro caixa', i <= 0)}${b(-1, '◀', 'Caixa anterior', i <= 0)}`
+    + `${b(1, '▶', 'Próximo caixa', i >= ts.length - 1)}${b('last', '⏭', 'Último caixa', i >= ts.length - 1)}`
+    + `<span class="fc-modal-nav-txt">Caixa ${fcEsc(String(t.numero || ''))}${dia ? ' · ' + fcEsc(dia) : ''}${op ? ' · ' + fcEsc(op) : ''} · ${i + 1} de ${ts.length}</span></span>`;
+}
+async function fcNavTurnoNo(onde) {
+  const tipo = window._fcNodeAtual, antes = window._fcTurnoAtual;
+  const cx = document.querySelector('#fc-modal .fc-modal-cx');
+  window._fcNavPos = cx && cx.style.position === 'fixed'
+    ? { left: cx.style.left, top: cx.style.top, width: cx.style.width, height: cx.style.height } : null;
+  fcNavTurno(onde);                          // troca o caixa da tela de trás (pelo cache, na hora)
+  if (!tipo || window._fcTurnoAtual === antes) { window._fcNavPos = null; return; }
+  window._fcSel.clear();                     // marcados de um caixa não vão para o outro
+  try { await fcNode(tipo); } finally { window._fcNavPos = null; }
 }
 
 // fechar SEM salvar: se veio do editor (✎/➕), volta pra tela de conferência
@@ -4283,6 +4318,9 @@ function _fcEstilo() {
   #fc-modal .fc-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998}
   #fc-modal .fc-modal-cx{position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(1020px,94vw);height:auto;max-height:88vh;min-width:340px;min-height:180px;overflow:hidden;resize:both;display:flex;flex-direction:column;background:#13151f;border:1px solid #2a2d3e;border-radius:12px;z-index:9999;box-shadow:0 10px 40px rgba(0,0,0,.6)}
   #fc-modal .fc-modal-tit{background:#1a1d2e;color:#f97316;padding:10px 16px;font-weight:600;border-radius:12px 12px 0 0}
+  #fc-modal .fc-modal-nav{display:inline-flex;align-items:center;gap:4px;margin-left:22px;vertical-align:middle}
+  #fc-modal .fc-modal-nav .fc-btn{padding:2px 8px}
+  #fc-modal .fc-modal-nav-txt{color:#9aa;font-size:0.78rem;font-weight:400;margin-left:8px}
   #fc-modal .fc-modal-corpo{padding:12px;flex:1 1 auto;overflow:auto;min-height:0}
   #fc-modal .fc-corpo-flex{display:flex;padding:0;overflow:hidden}
   #fc-modal .fc-corpo-scroll{flex:1 1 auto;overflow:auto;padding:12px;min-width:0}
