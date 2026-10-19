@@ -224,8 +224,12 @@ async function fcCarregarDados() {
   window._fcConf = {};
   let confRows = [];
   try {
-    const rConf = await sb.from('oct_fc_lancamentos')
-      .select('turno_id,ref_tipo,ref_id,conferido,ajuste').in('turno_id', ids);
+    // TODAS AS PÁGINAS (19/10/2026, Florestal caixa 1208: "a substituição do cartão não está funcionando"): o Florestal
+    // passou de 1.000 ajustes no período e o PostgREST corta em 1.000 — as linhas novas (a substituição pelo extrato)
+    // ficavam de fora: a tela seguia mostrando os cupons, e o botão dizia "Sai do caixa 0,00" (lote invisível).
+    const rConf = await _fcTudo(() => sb.from('oct_fc_lancamentos')
+      .select('turno_id,ref_tipo,ref_id,conferido,ajuste').in('turno_id', ids)
+      .order('turno_id').order('ref_tipo').order('ref_id'));
     confRows = rConf.data || [];
     confRows.forEach(c => {
       window._fcConf[c.ref_tipo + ':' + c.ref_id] = { conferido: !!c.conferido, ajuste: c.ajuste || null };
