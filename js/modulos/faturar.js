@@ -1793,6 +1793,8 @@ async function fatLiquidarTitulo(id) {
       <label id="flt-parcial-box" style="display:none;gap:8px;align-items:center;margin-top:8px;font-size:0.8rem;color:#cbd5e1;cursor:pointer">
         <input type="checkbox" id="flt-parcial" onchange="_fatDifCalc('flt-', ${saldo})"> Pagamento parcial — o restante continua em aberto (sem desconto)</label>
       <div id="flt-resumo" style="font-size:0.8rem;margin-top:6px"></div>
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Data do pagamento (quando o cliente pagou)</label>
+      <input id="flt-data" type="date" value="${_fatHojeIso()}" max="${_fatHojeIso()}" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
       <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:10px">Conta onde o dinheiro caiu <b style="color:#f87171">*</b> — já entra na conciliação bancária</label>
       <select id="flt-conta" style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
         <option value="">— escolha a conta —</option></select>
@@ -1956,7 +1958,13 @@ async function fatLiquidarTituloOk(id) {
   const autor = (document.getElementById("flt-autor").value || "").trim();
   const contaEl = document.getElementById("flt-conta");
   const contaId = contaEl && contaEl.value ? Number(contaEl.value) : null;
+  // DATA DO PAGAMENTO (19/10/2026): a data que o cliente pagou — vai para a baixa (data do crédito na conciliação) e
+  // para o pago_em do título; hoje leva a hora de agora, data passada leva meio-dia daquele dia (sem virar de dia no fuso)
+  const hojeRec = _fatHojeIso();
+  const dataRec = ((document.getElementById("flt-data") || {}).value || hojeRec).slice(0, 10);
+  const pagoEmIso = dataRec === hojeRec ? new Date().toISOString() : dataRec + "T12:00:00-03:00";
   if (!(recebido > 0) || !(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataRec) || dataRec > hojeRec) { msg.textContent = "Data do pagamento inválida (não pode ser no futuro)."; return; }
   if (!contaId) { msg.textContent = "Escolha a conta onde o dinheiro caiu (vai para a conciliação bancária)."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu."; return; }
   const saldo = Number(t.valor || 0);
@@ -1970,14 +1978,14 @@ async function fatLiquidarTituloOk(id) {
     await sb.from("oct_recebimentos_titulo").insert({
       empresa_id: window._fatEid, nota_prazo_id: id, cliente_id: t.cliente_id || null,
       cliente_nome: t.cliente_nome, valor: Number(valor.toFixed(2)), juros, desconto, forma,
-      data_recebimento: _fatHojeIso(), autor, origem: "faturar",   // data do Brasil (toISOString vira o dia às 21h)
+      data_recebimento: dataRec, autor, origem: "faturar",   // data em que o cliente pagou (campo da tela)
       recebimento_id: receb ? receb.id : null,
       conta_id: contaId,   // onde caiu: vira crédito nessa conta na conciliação (oct_fin_sincronizar)
     });
     // 2) atualiza o título (reduz saldo; quita se zerou)
     const novoSaldo = Number((saldo - valor).toFixed(2));
     const patch = novoSaldo <= 0.005
-      ? { valor: 0, status: "pago", pago_em: new Date().toISOString() }
+      ? { valor: 0, status: "pago", pago_em: pagoEmIso }
       : { valor: novoSaldo };
     await sb.from("oct_pdv_notas_prazo").update(patch).eq("id", id);
     // 3) marca o recebimento como consumido para não reaparecer no painel do
@@ -3565,8 +3573,8 @@ async function fatLiquidar(id) {
             <option>Cartão de débito</option><option>Cartão de crédito</option>
             <option>Cheque</option><option>Boleto</option><option>Outro</option>
           </select></div>
-        <div><label style="color:#9aa;font-size:0.74rem">Data</label>
-          <input id="fr-data" type="date" value="${hoje}"
+        <div><label style="color:#9aa;font-size:0.74rem">Data do pagamento</label>
+          <input id="fr-data" type="date" value="${hoje}" max="${hoje}"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
       </div>
       <label id="fr-parcial-box" style="display:none;gap:8px;align-items:center;margin-top:8px;font-size:0.8rem;color:#cbd5e1;cursor:pointer">
@@ -3617,6 +3625,7 @@ async function fatConfirmarRecebimento(faturaId) {
   const contaSel = document.getElementById("fr-conta");
   const contaId = contaSel && contaSel.value ? Number(contaSel.value) : null;
   if (!(recebidoCx > 0) || !(valor > 0)) { msg.textContent = "Informe o valor recebido."; return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dataRec || "")) || dataRec > _fatHojeIso()) { msg.textContent = "Data do pagamento inválida (não pode ser no futuro)."; return; }
   if (!contaId) { msg.textContent = "Escolha a conta onde o dinheiro caiu (vai para a conciliação bancária)."; return; }
   if (!autor) { msg.textContent = "Informe quem recebeu (fica registrado)."; return; }
   {
@@ -3643,7 +3652,9 @@ async function fatConfirmarRecebimento(faturaId) {
   const recebido = await _fatRecebidoDa(faturaId);
   const quitou = recebido + 0.005 >= _fatLiquido(f);
   if (quitou) {
-    await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: new Date().toISOString() }).eq("id", faturaId);
+    // quitada na DATA DO PAGAMENTO informada (19/10/2026); hoje leva a hora de agora
+    const liqEm = (!dataRec || dataRec === _fatHojeIso()) ? new Date().toISOString() : dataRec + "T12:00:00-03:00";
+    await sb.from("oct_faturas").update({ status: "liquidada", liquidado_em: liqEm }).eq("id", faturaId);
   }
   document.getElementById("fat-receber-modal")?.remove();
   alert(quitou
