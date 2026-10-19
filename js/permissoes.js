@@ -83,6 +83,7 @@ const PERM_CATALOGO = [
     { c: 'bi.ver', d: 'Acessar B.I', p: 'gf' },
     { c: 'bi.disponivel', d: 'Ver saldos disponíveis', p: 'gf' },
     { c: 'bi.informar_saldo', d: 'Informar saldo real de conta', p: 'gf', s: 1 },
+    { c: 'caixa_dia.ver', d: 'Acessar Caixa do dia (venda × conta × a compensar)', p: '' },
     { c: 'notas_prazo.ver', d: 'Acessar Notas a prazo', p: 'gf' },
     { c: 'comissoes.ver', d: 'Acessar Comissões', p: 'gf' },
     { c: 'comissoes.alterar', d: 'Alterar percentuais e categorias de comissão', p: 'g', s: 1 },

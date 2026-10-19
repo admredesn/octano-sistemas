@@ -5,6 +5,7 @@ const MODULOS = [
   { id: 'afericoes',     label: 'Aferições',      breve: false },
   { id: 'automacao_cfg', label: '🔧 Automação',   breve: false },
   { id: 'bi',            label: '📈 B.I',        breve: false },
+  { id: 'caixa_dia',     label: '💵 Caixa do dia', breve: false },
   { id: 'cartoes',       label: '💳 Cartões',     breve: false },
   { id: 'cashback',      label: '💸 Cashback',    breve: false },
   { id: 'comissoes',     label: '💰 Comissões',   breve: false },
@@ -340,6 +341,7 @@ function navegarPara(modulo){
   const fns = {
     empresa:       moduloEmpresa,
     bi:            moduloBi,
+    caixa_dia:     moduloCaixaDia,
     fcaixa:        moduloFCaixa,
     faturar:       moduloFaturar,
     nfe:           moduloNfe,

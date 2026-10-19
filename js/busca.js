@@ -28,6 +28,7 @@
     cashback: 'cashback pix sicoob cliente credito bonus centavos por litro',
     comissoes: 'comissao vendedor frentista percentual loja produto',
     conc_banco: 'banco bancaria extrato sicoob livro financeiro conciliar conciliacao conta corrente saldo lancamento deposito saque transferencia maquininha pagbank',
+    caixa_dia: 'caixa do dia fluxo de caixa disponivel saldo banco sicoob entrou na conta a compensar a receber prazo frota cheque despesas previsao projecao vencimentos',
     cartoes: 'cartoes cartao cartões taxa taxas maquininha pagbank adquirente bandeira credito debito pix conferencia pre-conferencia divergente negociada edi',
     contabilidade: 'contabil plano de contas sped ecd contador lancamento contabil fiscal',
     contas_pagar: 'contas a pagar fornecedor boleto vencimento banco despesa titulo pagar conta fixa',
