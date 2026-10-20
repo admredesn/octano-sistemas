@@ -261,6 +261,9 @@ const PERM_CATALOGO = [
     { c: 'cartoes.livro', d: 'Enviar cartões conferidos para a Conciliação', p: 'gf', s: 1 },
     { c: 'cartoes.taxas', d: 'Cadastrar/alterar as taxas negociadas', p: 'g', s: 1 },
   ]},
+  { n: 18, area: 'Retaguarda', grupo: 'Financeiro — Recebimentos (consulta)', itens: [
+    { c: 'recebimentos.ver', d: 'Consultar Recebimentos (maquininha, frota, cofre, banco, boletos)', p: 'gfc' },
+  ]},
 ];
 
 // ---------------- código de cada permissão (1.1, 2.3...) ----------------
