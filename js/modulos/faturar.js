@@ -1308,6 +1308,23 @@ async function fatFaturaDetalhes(faturaId) {
     .eq("empresa_id", window._fatEid).eq("fatura_id", dona).order("registrado_em");
   const titulos = ts || [];
   const tot = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
+  // recebimentos da fatura: onde/como entrou cada um (20/10/2026)
+  let recsHtml = "";
+  try {
+    const { data: recs } = await sb.from("oct_recebimentos_titulo").select("id,valor,juros,desconto,forma,data_recebimento,autor,origem,conta_id,turno_id")
+      .eq("fatura_id", faturaId).order("data_recebimento").order("id");
+    if ((recs || []).length) {
+      await _fatOndePreparar(recs);
+      recsHtml = `<div style="color:#f97316;font-weight:600;font-size:0.82rem;margin:16px 0 6px">💰 Recebimentos</div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.8rem;color:#cdd6e0">
+        <thead><tr style="background:#1a1d2e;color:#9fb0c4;text-align:left"><th style="padding:6px 7px">Data</th><th style="padding:6px 7px">Forma</th><th style="padding:6px 7px">Recebido em</th><th style="padding:6px 7px">Por</th><th style="padding:6px 7px;text-align:right">Valor</th></tr></thead>
+        <tbody>${recs.map(r => `<tr style="border-bottom:1px solid #1c2130"><td style="padding:5px 7px">${_fatData(r.data_recebimento)}</td>
+          <td style="padding:5px 7px">${_fatEsc(r.forma) || "—"}</td><td style="padding:5px 7px">${_fatOndeCel([r])}</td>
+          <td style="padding:5px 7px">${_fatEsc(r.autor) || "—"}</td>
+          <td style="padding:5px 7px;text-align:right;color:#4ade80">${_fatMoney(Number(r.valor || 0) + Number(r.juros || 0) - Number(r.desconto || 0))}</td></tr>`).join("")}</tbody>
+      </table>`;
+    }
+  } catch (e) { /* sem a tabela de recebimentos: o quadro não aparece */ }
   const linhas = titulos.map(t => `<tr style="border-bottom:1px solid #1c2130">
     <td style="padding:5px 7px">${_fatData(t.registrado_em)}</td>
     <td style="padding:5px 7px">${_fatEsc(t.numero_nfe) || "—"}</td>
@@ -1322,6 +1339,7 @@ async function fatFaturaDetalhes(faturaId) {
         <tbody>${linhas || '<tr><td colspan="4" style="padding:14px;text-align:center;color:#667">Sem títulos.</td></tr>'}</tbody>
         <tfoot><tr style="border-top:2px solid #2a2d3e"><td colspan="3" style="padding:7px;font-weight:700">Total</td><td style="padding:7px;text-align:right;font-weight:700;color:#f59e0b">${_fatMoney(tot)}</td></tr></tfoot>
       </table>
+      ${recsHtml}
       <div style="text-align:right;margin-top:12px"><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button></div>
     </div>`);
 }
@@ -3380,7 +3398,7 @@ async function _fatBuscarFaturas(status) {
   if (error) return { error };
   const faturas = data || [];
   const ids = faturas.map(x => x.id);
-  const bolPorFat = {}, recebidos = {}, recPor = {};
+  const bolPorFat = {}, recebidos = {}, recPor = {}, ondePor = {};
   if (ids.length) {
     // um boleto por fatura: lê a VIEW de situação (pago em dia / atraso / vencido),
     // que o banco calcula com a data de hoje. Fatura com mais de um boleto (o 2º
@@ -3406,9 +3424,11 @@ async function _fatBuscarFaturas(status) {
     } catch (e) { /* tabela de boletos pode não existir */ }
     try {
       const rr = await _fatPorLotes(ids, l => _fatTodas(() => sb.from("oct_recebimentos_titulo")
-        .select("id,fatura_id,valor,autor,data_recebimento").in("fatura_id", l).order("id")));
+        .select("id,fatura_id,valor,autor,data_recebimento,origem,forma,conta_id,turno_id").in("fatura_id", l).order("id")));
+      await _fatOndePreparar(rr.data || []);
       (rr.data || []).forEach(x => {
         recebidos[x.fatura_id] = (recebidos[x.fatura_id] || 0) + Number(x.valor || 0);
+        (ondePor[x.fatura_id] = ondePor[x.fatura_id] || []).push(x);
         const u = recPor[x.fatura_id];   // vale o último recebimento (data, depois ordem de lançamento)
         if (!u || String(x.data_recebimento || "") >= u.data) recPor[x.fatura_id] = { data: String(x.data_recebimento || ""), autor: x.autor || "" };
       });
@@ -3422,7 +3442,46 @@ async function _fatBuscarFaturas(status) {
     (ro.data || []).forEach(o => { origNum[o.id] = o.numero; });
   }
   faturas.forEach(f => { if (f.parcela_de) f._origNum = origNum[f.parcela_de]; });
-  return { faturas, bolPorFat, recebidos, recPor };
+  return { faturas, bolPorFat, recebidos, recPor, ondePor };
+}
+
+// ---------- ONDE / COMO FOI RECEBIDO (20/10/2026) ----------
+// Ronan: "se foi no retaguarda vai aparecer o banco (sicoob, pagbank, brasil....) se foi no pdv aparece recebido no caixa".
+// Baixa sem conta (antes de 19/10 a tela não perguntava) mostra a conta PADRÃO PELA FORMA — a mesma regra que o livro
+// financeiro usa (oct_fin_sincronizar: dinheiro → Caixa, cartão → PagBank, resto → Sicoob), em itálico.
+window._fatTurnosNum = window._fatTurnosNum || {};
+async function _fatOndePreparar(recs) {
+  try { if (!window._fatContas || window._fatContas.eid !== window._fatEid) await _fatCarregarContas(null); } catch (e) { /* sem contas: mostra a forma */ }
+  const falta = [...new Set((recs || []).map(r => r.turno_id).filter(t => t && !window._fatTurnosNum[t]))];
+  if (!falta.length) return;
+  try {
+    const r = await _fatPorLotes(falta, l => sb.from("oct_pdv_turnos").select("id,numero,operador,aberto_em").in("id", l));
+    (r.data || []).forEach(t => { window._fatTurnosNum[t.id] = t; });
+  } catch (e) { /* sem o número do caixa: mostra só "Caixa (PDV)" */ }
+}
+function _fatOndeReceb(r) {
+  const contas = (window._fatContas && window._fatContas.eid === window._fatEid) ? window._fatContas.lista : [];
+  const porTipo = tp => contas.find(c => c.tipo === tp);
+  const forma = String(r.forma || "");
+  const org = String(r.origem || "").toLowerCase();
+  if (r.turno_id || org === "pdv" || org === "fechamento") {
+    const t = window._fatTurnosNum[r.turno_id] || null;
+    const n = t && t.numero != null ? " nº " + t.numero : "";
+    return { txt: "🏪 Caixa" + n, tit: `Recebido no caixa${n}${t && t.operador ? " (" + t.operador + ")" : ""}${org === "fechamento" ? ", lançado no F.Caixa" : ", no PDV"} · ${forma || "—"}` };
+  }
+  const c = r.conta_id != null ? contas.find(x => String(x.id) === String(r.conta_id)) : null;
+  if (c) return { txt: "🏦 " + c.nome + (org === "boleto" ? " (boleto)" : ""), tit: `Conta informada na baixa · ${forma || "—"}${org ? " · " + org : ""}` };
+  const f = forma.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const pad = /^dinheiro/.test(f) ? porTipo("caixa") : /^(cart|debito|credito)/.test(f) ? porTipo("pagbank") : porTipo("sicoob");
+  if (org === "boleto") return { txt: "🏦 " + ((pad && pad.nome) || "Sicoob") + " (boleto)", tit: "Boleto pago no banco" };
+  return { txt: "🏦 " + ((pad && pad.nome) || forma || "—"), pela_forma: true,
+           tit: `Conta não informada na baixa — padrão pela forma (${forma || "—"}), a mesma que vai para a conciliação` };
+}
+function _fatOndeCel(lista) {
+  const vistos = new Map();
+  (lista || []).forEach(r => { const o = _fatOndeReceb(r); if (!vistos.has(o.txt)) vistos.set(o.txt, o); });
+  if (!vistos.size) return '<span style="color:#4a5160">—</span>';
+  return [...vistos.values()].map(o => `<span title="${_fatEsc(o.tit)}"${o.pela_forma ? ' style="font-style:italic;color:#9aa"' : ""}>${_fatEsc(o.txt)}</span>`).join("<br>");
 }
 // a aba que mostra cada status: lista que chega para OUTRA aba só é guardada
 function _fatAbaDoStatus(status) { return status === "liquidada" ? "liquidadas" : "faturas"; }
@@ -3480,7 +3539,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   // a seleção vale para a lista que está na tela: ids de outra aba viram lixo
   const idsAqui = new Set(faturas.map(x => x.id));
   [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
-  const bolPorFat = dados.bolPorFat || {}, rec = dados.recebidos || {};
+  const bolPorFat = dados.bolPorFat || {}, rec = dados.recebidos || {}, onde = dados.ondePor || {};
   window._fatBolPorFat = bolPorFat;
   const linhas = faturas.map(fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
@@ -3492,10 +3551,11 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
     ${status === "liquidada" ? `<td class="fat-td" style="color:#4ade80">${_fatData(fatr.liquidado_em) || "—"}</td>` : ""}
     <td class="fat-td" style="text-align:center">${_fatAtrasoCel(fatr, status)}</td>
     <td class="fat-td fat-r" id="fatf-vl-${fatr.id}">${_fatValorCel(fatr)}</td>
-    <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">${_fatSaldoCel(fatr, rec[fatr.id])}</td>
+    <td class="fat-td" id="fat-saldo-${fatr.id}" style="color:#9aa">${_fatSaldoCel(fatr, rec[fatr.id])}${status !== "liquidada" && (onde[fatr.id] || []).length ? `<div style="font-size:0.7rem;margin-top:2px">em: ${_fatOndeCel(onde[fatr.id])}</div>` : ""}</td>
     <td class="fat-td" id="fatf-st-${fatr.id}">${_fatStatusCel(fatr, bolPorFat[fatr.id])}</td>
     <td class="fat-td" style="text-align:center">${fatr.nfe_numero ? _fatEsc(String(fatr.nfe_numero)) : '<span style="color:#4a5160">—</span>'}</td>
     <td class="fat-td" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_fatEsc(fatr._usuario)}">${_fatEsc(fatr._usuario)}</td>
+    ${status === "liquidada" ? `<td class="fat-td" style="font-size:0.78rem;white-space:nowrap">${_fatOndeCel(onde[fatr.id])}</td>` : ""}
     <td class="fat-td" id="fatf-dc-${fatr.id}" style="white-space:nowrap">${_fatDocsCol(fatr)}</td>
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : ""}
@@ -3514,8 +3574,8 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   </tr>`).join("");
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}<th>Docs</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 14 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? '<th title="Conta onde caiu (Sicoob, PagBank, Banco do Brasil…) ou o caixa do PDV">Recebido em</th>' : ""}<th>Docs</th><th>Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 15 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     ${_fatResumoBoletos(faturas, bolPorFat, status)}
     ${_fatRodapeF(faturas, status)}`;
