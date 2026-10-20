@@ -26,7 +26,8 @@
 // ============================================================
 // Filtros: _CTZ.* é o que está APLICADO na tabela; _CTZ.p é o que está nos campos (só vira filtro ao 🔍 Pesquisar / Enter).
 const _CTZ = { p: null, de: null, ate: null, forma: '', bandeira: '', status: '', conf: '', caixa: 'conf', busca: '',
-  sel: new Set(), itens: [], fora: [], txs: [], taxas: [], contas: [], formasFrota: [], turnos: [], confs: {}, controle: null, carregando: false };
+  sel: new Set(), itens: [], fora: [], txs: [], taxas: [], contas: [], formasFrota: [], turnos: [], confs: {}, controle: null, carregando: false,
+  operadoras: [] };
 const _CTZ_FORMA = { credito: 'Crédito', debito: 'Débito', pix: 'Pix', frota: 'Frota' };
 const _CTZ_STATUS = {
   ok:          { rot: '✓ confere',                 cor: '#7ee2a0' },
@@ -400,7 +401,7 @@ async function _ctzCarregar() {
   _CTZ.carregando = true;
   try {
     const deTs = _CTZ.de + 'T00:00:00', ateTs = _CTZ.ate + 'T23:59:59';
-    const [vendas, fila, turnos, txs, rT, rC, rK, rF] = await Promise.all([
+    const [vendas, fila, turnos, txs, rT, rC, rK, rF, rOp] = await Promise.all([
       // cupons do período (data_venda é UTC de verdade: o dia local vai de 00:00-03:00 a 23:59-03:00)
       _ctzTudo((a, b) => sb.from('oct_pdv_vendas').select('id,numero,data_venda,turno_id,vendedor,operador,status,pagamentos,itens')
         .eq('empresa_id', eid).gte('data_venda', deTs + '-03:00').lte('data_venda', ateTs + '-03:00').order('data_venda').order('id').range(a, b)),
@@ -417,7 +418,11 @@ async function _ctzCarregar() {
       // conta da frota: a forma "Cartão Frota" (e as de operadora, se houver) em Formas de Pagamento
       sb.from('oct_formas_pagamento').select('id,nome,classificacao,conta_id,ordem,ativo').eq('empresa_id', eid).eq('classificacao', 'cartao_frota')
         .then(r => r, () => ({ data: [] })),
+      // operadoras de frota do posto (Parâmetros › "Operadoras de cartão frota", nomes separados por ";")
+      sb.from('oct_parametros').select('valor').eq('empresa_id', eid).eq('chave', 'frota_operadoras').maybeSingle()
+        .then(r => r, () => ({ data: null })),
     ]);
+    _CTZ.operadoras = _ctzOperadorasDoTexto(rOp && rOp.data ? rOp.data.valor : '');
     _CTZ.taxas = rT.data || []; _CTZ.contas = rC.data || []; _CTZ.controle = (rK && rK.data) || null; _CTZ.turnos = turnos; _CTZ.txs = txs;
     _CTZ.formasFrota = (rF && !rF.error && rF.data) || [];
     const filaPorNfce = {};
@@ -449,10 +454,93 @@ async function _ctzCarregar() {
   _CTZ.carregando = false;
   _ctzRender();
 }
+// ---------- FILTRO DE FORMAS com caixas de marcar (20/10/2026) ----------
+// valor do filtro = chaves marcadas separadas por vírgula; vazio = TODAS. 'frota' = todas as operadoras; 'frota:<op>' = uma.
+const _CTZ_OPERADORAS_PADRAO = ['TicketLog', 'FitCard / Prime', 'ValeCard', 'Sem Parar'];   // a do PDV (pagamento.js)
+function _ctzOperadorasDoTexto(txt) {
+  const v = String(txt == null ? '' : txt).split(/[;\n]/).map(x => x.trim()).filter(x => x && !/^outr[ao]s?$/i.test(x));
+  return v.length ? v : _CTZ_OPERADORAS_PADRAO.slice();
+}
+// chave da operadora pelo NOME (FitCard Prime e FitCard Neo ficam separadas); sem nome = não informada
+function _ctzOpChave(nome) {
+  const n = String(nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+  return (!n || /^(frota|cartaofrota|outra|outro|outras)$/.test(n)) ? '?' : n;
+}
+function _ctzFormaOk(t, f) {
+  if (!f) return true;
+  const ks = String(f).split(',');
+  if (t.forma === 'frota') return ks.includes('frota') || ks.includes('frota:' + _ctzOpChave(t.bandeira));
+  return ks.includes(t.forma);
+}
+// opções: as 3 formas da maquininha + as operadoras (lista do posto + as que aparecem nos recebimentos do período)
+function _ctzFormaOpcoes() {
+  const ops = new Map();
+  (_CTZ.operadoras || []).forEach(o => { const k = _ctzOpChave(o); if (k !== '?' && !ops.has(k)) ops.set(k, o); });
+  (_CTZ.itens || []).filter(t => t.forma === 'frota').forEach(t => {
+    const k = _ctzOpChave(t.bandeira);
+    if (!ops.has(k)) ops.set(k, k === '?' ? 'Frota (operadora não informada)' : String(t.bandeira).trim());
+  });
+  const frota = [...ops.entries()].sort((a, b) => (a[0] === '?') - (b[0] === '?') || a[1].localeCompare(b[1], 'pt-BR'))
+    .map(([k, rot]) => ({ k: 'frota:' + k, rot }));
+  return { cartao: [{ k: 'credito', rot: 'Crédito' }, { k: 'debito', rot: 'Débito' }, { k: 'pix', rot: 'Pix (maquininha)' }], frota };
+}
+function _ctzFormaResumo(f) {
+  if (!f) return 'Todas';
+  const o = _ctzFormaOpcoes(), rot = {};
+  o.cartao.concat(o.frota).forEach(x => { rot[x.k] = x.rot; });
+  rot.frota = '🚛 Frota (todas)';
+  const ns = String(f).split(',').map(k => rot[k] || (k.indexOf('frota:') === 0 ? '🚛 ' + k.slice(6) : k));
+  return ns.length > 3 ? ns.slice(0, 3).join(', ') + ' +' + (ns.length - 3) : ns.join(', ');
+}
+function _ctzFormaHtml(f) {
+  const o = _ctzFormaOpcoes();
+  const ks = new Set(f ? String(f).split(',') : []);
+  const cx = (k, rot, extra) => `<label style="display:flex;align-items:center;gap:7px;padding:3px 2px;cursor:pointer;white-space:nowrap${extra || ''}">
+    <input type="checkbox" data-ctzk="${_ctzEsc(k)}" ${k === '' ? (ks.size ? '' : 'checked') : (ks.has(k) ? 'checked' : '')} onchange="ctzFormaMarcar(this)" style="width:auto;margin:0"> ${_ctzEsc(rot)}</label>`;
+  return `<div id="ctz-ms" style="position:relative;display:inline-block">
+    <button type="button" class="ctz-inp" onclick="ctzFormaAbrir(event)" style="cursor:pointer;min-width:150px;text-align:left" title="Escolha uma ou mais formas">Formas: <b id="ctz-ms-rot">${_ctzEsc(_ctzFormaResumo(f))}</b> ▾</button>
+    <div id="ctz-ms-pop" onclick="event.stopPropagation()" style="display:none;position:absolute;z-index:60;top:calc(100% + 4px);left:0;background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:8px 12px;box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:0.78rem;color:#dbe2ea;min-width:240px;max-height:60vh;overflow:auto">
+      ${cx('', 'Todas', ';font-weight:700')}
+      <div style="border-top:1px solid #243041;margin:5px 0"></div>
+      ${o.cartao.map(x => cx(x.k, x.rot)).join('')}
+      <div style="color:#93c5fd;font-weight:700;margin:6px 0 2px">🚛 Cartão frota</div>
+      ${cx('frota', 'Todas as operadoras')}
+      ${o.frota.map(x => cx(x.k, x.rot, ';padding-left:16px')).join('')}
+      <div style="color:#667;font-size:0.68rem;margin-top:6px">Marque quantas quiser e clique em 🔍 Pesquisar. As operadoras vêm de Parâmetros › "Operadoras de cartão frota".</div>
+    </div>
+  </div>`;
+}
+function ctzFormaAbrir(ev) {
+  if (ev) ev.stopPropagation();
+  const p = document.getElementById('ctz-ms-pop'); if (!p) return;
+  const abrir = p.style.display === 'none';
+  p.style.display = abrir ? 'block' : 'none';
+  if (abrir) setTimeout(() => document.addEventListener('click', function fecha() {
+    const q = document.getElementById('ctz-ms-pop'); if (q) q.style.display = 'none';
+    document.removeEventListener('click', fecha);
+  }), 0);
+}
+function ctzFormaMarcar(el) {
+  const pop = document.getElementById('ctz-ms-pop'); if (!pop) return;
+  const k = el.getAttribute('data-ctzk');
+  const caixas = [...pop.querySelectorAll('input[data-ctzk]')];
+  const por = kk => caixas.find(c => c.getAttribute('data-ctzk') === kk);
+  if (k === '') caixas.forEach(c => { c.checked = c === el; });          // "Todas" limpa o resto
+  else {
+    if (por('')) por('').checked = false;
+    if (k === 'frota' && el.checked) caixas.forEach(c => { if (c.getAttribute('data-ctzk').indexOf('frota:') === 0) c.checked = false; });
+    if (k.indexOf('frota:') === 0 && el.checked && por('frota')) por('frota').checked = false;
+  }
+  const ks = caixas.filter(c => c.checked && c.getAttribute('data-ctzk')).map(c => c.getAttribute('data-ctzk'));
+  if (!ks.length && por('')) por('').checked = true;                     // nada marcado = todas
+  const v = ks.join(',');
+  ctzFiltro('forma', v);
+  const r = document.getElementById('ctz-ms-rot'); if (r) r.textContent = _ctzFormaResumo(v);
+}
 function _ctzVisiveis() {
   const b = _CTZ.busca.toLowerCase();
   return _CTZ.itens.filter(t => (_CTZ.caixa !== 'conf' || t.caixa_confirmado)
-    && (!_CTZ.forma || t.forma === _CTZ.forma)
+    && _ctzFormaOk(t, _CTZ.forma)
     && (!_CTZ.bandeira || String(t.bandeira || '') === _CTZ.bandeira)
     && (!_CTZ.status || (_CTZ.status === 'div' ? (t._av.status === 'maior' || t._av.status === 'menor' || t._av.prazoDiverge || t._av.formaDiverge)
       : _CTZ.status === 'forma' ? !!t._av.formaDiverge : t._av.status === _CTZ.status))
@@ -501,7 +589,7 @@ function _ctzRender() {
       <td class="ctz-td" style="text-align:center">${t.conferido ? `<span style="color:#7ee2a0" title="por ${_ctzEsc(t.conferido_por || '')} em ${t.conferido_em ? new Date(t.conferido_em).toLocaleString('pt-BR') : ''}">✓</span>` : '<span class="ctz-mut">·</span>'}${t.livro_em ? ' <span style="color:#7ea8d8" title="já na Conciliação (livro da conta PagBank)">📒</span>' : ''}</td>
     </tr>`;
   }).join('');
-  const foraVis = _CTZ.fora.filter(t => (!_CTZ.forma || t.forma === _CTZ.forma));
+  const foraVis = _CTZ.fora.filter(t => _ctzFormaOk(t, _CTZ.forma));
   const foraHtml = foraVis.length ? `
     <div style="margin-top:16px">
       <div style="color:#f0b45c;font-weight:700;font-size:0.86rem;margin-bottom:6px">⚠ Na maquininha e fora do caixa (${foraVis.length}) — R$ ${_ctzNum(foraVis.reduce((s, t) => s + Number(t.valor_bruto || 0), 0))}</div>
@@ -539,7 +627,7 @@ function _ctzRender() {
       <input type="date" class="ctz-inp" value="${P.de}" onchange="ctzFiltro('de', this.value)" onkeydown="_ctzEnter(event)"> <span style="color:#667">a</span>
       <input type="date" class="ctz-inp" value="${P.ate}" onchange="ctzFiltro('ate', this.value)" onkeydown="_ctzEnter(event)">
       ${sel('caixa', P.caixa, [['conf', 'Só caixa confirmado (F.Caixa)'], ['todos', 'Todos os turnos']])}
-      ${sel('forma', P.forma, [['', 'Crédito + Débito + Pix + Frota'], ['credito', 'Crédito'], ['debito', 'Débito'], ['pix', 'Pix (maquininha)'], ['frota', '🚛 Cartão frota']])}
+      ${_ctzFormaHtml(P.forma)}
       ${sel('bandeira', P.bandeira, [['', 'Todas as bandeiras / operadoras']].concat(bandeiras.map(b => [b, b])))}
       ${sel('status', P.status, [['', 'Tudo'], ['div', 'Só divergentes'], ['ok', 'Só o que confere'], ['sem_retorno', 'Maquininha não informou'], ['forma', 'Forma diferente na maquininha'], ['sem_regra', 'Sem taxa cadastrada']])}
       ${sel('conf', P.conf, [['', 'Conferidos e não'], ['nao', 'Não conferidos'], ['sim', 'Conferidos'], ['semlivro', 'Ainda fora da Conciliação'], ['livro', 'Já na Conciliação']])}
