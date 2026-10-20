@@ -703,7 +703,8 @@ async function fcCarregarDados() {
     const abertura = Number(t.valor_abertura || 0);
     // receita em cartão/pix/cheque (receita_banco) não está na gaveta: só a receita em dinheiro entra
     d.receita_dinheiro = Math.round((Number(d.receita || 0) - Number(d.receita_banco || 0)) * 100) / 100;
-    const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + d.receita_dinheiro;
+    const entra = abertura + Number(d.rec.dinheiro || 0) + Number(d.suprimento || 0) + d.receita_dinheiro
+      + Math.max(0, Number(d.haver_din || 0) - Number(d.receita_haver || 0));   // crédito em dinheiro lançado pelo retaguarda (sem a receita do PDV)
     // COFRE EM DOBRO (06/10/2026 — Florestal, turno 1188: esperado −208,35 e "sobra"
     // de 2.059,90). O depósito no cofre chegava duas vezes: o TecnoX lança uma
     // "SANGRIA AUTOMATICA BRINKS" a cada depósito (o espelho traz para oct_pdv_caixa)
@@ -746,11 +747,12 @@ async function fcCarregarDados() {
       + Number(d.rec.pix || 0) + Number(d.rec.pix_cnpj || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
       + Number(d.rec.haver || 0)   // abastecido com o crédito do cliente (20/10/2026)
+      - Number(d.haver_gerado || 0)   // HAVER CRÉDITO: parte do recebido que virou crédito, não venda (20/10/2026)
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
       + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
       + Number(d.receita || 0) - Number(d.receita_titulo || 0)   // receita lançada entra na origem (menos a de título, que já está em Títulos Recebidos)
-      + Number(d.haver_gerado || 0) - Math.min(Number(d.receita_haver || 0), Number(d.haver_din || 0));   // crédito gerado (20/10/2026)
+      - Math.min(Number(d.receita_haver || 0), Number(d.haver_din || 0));   // receita do crédito em dinheiro: a origem é o Haver crédito (à esquerda)
     d.recebido_caixa = Math.round(recebido * 100) / 100;
     d.vendido_caixa = Math.round(vendido * 100) / 100;
     d.resultado_caixa = Math.round((recebido - vendido) * 100) / 100;
@@ -892,7 +894,13 @@ function fcDetalhe(turnoId) {
     // VALE HAVER (20/10/2026, Ronan: "aqui teria que ter só o valor abastecido, não o valor de crédito gerado"): o que o
     // cliente abasteceu pagando com o crédito dele (forma "Crédito do cliente" do cupom). SOMA, como a nota a prazo —
     // é o pagamento daquela venda. O crédito GERADO no turno fica do lado das Vendas, em "Haver (crédito gerado)".
-    ['Vale Haver', Number(rec.haver || 0)],
+    ['Vale Haver', Number(rec.haver || 0), { node: 'vale_haver' }],
+    // HAVER CRÉDITO (20/10/2026, Ronan: "criar uma linha na coluna da esquerda que vai servir para lançar/editar esse
+    // valor"): o crédito que o cliente PAGOU neste caixa. O dinheiro dele já está na linha da forma (Cheque, Pix, Cartão,
+    // Depósito em Conta, ou na gaveta) — aqui ele sai do total, porque não é venda: vira saldo do cliente, e o consumo
+    // aparece depois em Vale Haver. Clique para lançar ou editar (forma, data do pagamento, conta).
+    ['Haver crédito', -Number(d.haver_gerado || 0), { node: 'haver_credito' }],
+    ...(Number(d.haver_sem_forma || 0) > 0.004 ? [['Haver crédito sem forma de pagamento', d.haver_sem_forma, { info: true, node: 'haver_credito' }]] : []),
     // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
     // heranca do layout TecnoX e so' mostrava numero errado — os R$349,38 que
     // apareceram no turno 52 eram a MESMA falta de caixa lancada 6x como vale,
@@ -917,8 +925,6 @@ function fcDetalhe(turnoId) {
     ['Cheque troco', 0, I],
     // crédito GERADO no turno (crédito adiantado / troco pendente). (mov.) por enquanto: o lançamento do PDV ainda não
     // diz em que forma o dinheiro entrou — sem isso, somar aqui acusaria falta do valor inteiro (20/10/2026).
-    ['Haver (crédito gerado)', Number(d.haver_gerado || 0)],
-    ...(Number(d.haver_sem_forma || 0) > 0.004 ? [['Haver sem forma de pagamento', d.haver_sem_forma, I]] : []),
     // RECEITAS (06/10/2026 — turno 1188 do Florestal): a linha era um zero fixo. A receita
     // lançada (balão Receitas ou oct_pdv_caixa tipo 'receita') aparecia no balão e entrava
     // no esperado da gaveta, mas o campo ficava 0,00 e o Resultado a ignorava. É dinheiro
@@ -986,7 +992,7 @@ function fcDetalhe(turnoId) {
   const totalMov = somaVenda;
   const cuponsTransm = Math.max(0, Number(d.venda_total || 0) - Number(d.fila_total || 0));
 
-  const linhaVal = (rot, val, opt) => `<div class="fc-lin"><span class="fc-lbl">${rot}${opt && opt.info ? ' <span style="color:#6b7688;font-size:9px">(mov.)</span>' : ''}</span><span class="fc-box"${opt && opt.info ? ' style="opacity:.75"' : ''}>${fcMoney(val)}</span></div>`;
+  const linhaVal = (rot, val, opt) => `<div class="fc-lin"${opt && opt.node ? ` onclick="fcNode('${opt.node}')" style="cursor:pointer" title="Clique para ver, lançar ou editar"` : ''}><span class="fc-lbl">${rot}${opt && opt.node ? ' <span style="color:#6b7688;font-size:9px">✎</span>' : ''}${opt && opt.info ? ' <span style="color:#6b7688;font-size:9px">(mov.)</span>' : ''}</span><span class="fc-box"${opt && opt.info ? ' style="opacity:.75"' : ''}>${fcMoney(val)}</span></div>`;
   const nodo = (txt, tipo) => `<li ${tipo ? `onclick="fcNode('${tipo}')" style="cursor:pointer"` : ''}>${txt}</li>`;
 
   const conteudo = document.getElementById('conteudo');
@@ -1050,7 +1056,7 @@ function fcDetalhe(turnoId) {
             <li>😊 Recebimentos<ul>
               ${nodo('💵 Dinheiro / Sangria', 'dinheiro')}${nodo('💳 Cartão + Pix', 'cartao')}${nodo('🚛 Cartão Frota', 'frota')}${nodo('🏦 Pix CNPJ', 'pix_cnpj')}${nodo('📄 Nota a Prazo', 'prazo')}
               ${nodo('🧾 Cheque', 'cheque')}
-              ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
+              ${nodo('Troco Final', 'troco_final')}${nodo('Vale Haver', 'vale_haver')}${nodo('Haver crédito', 'haver_credito')}${nodo('Despesa', 'despesa')}${nodo('🏦 Depósito em Conta', 'deposito')}
             </ul></li>
             <li>📁 Remessas<ul>
               ${nodo('Suprimentos', 'suprimento')}${nodo('Títulos Recebidos', 'titulos')}${nodo('Receita', 'receita')}
@@ -1198,6 +1204,7 @@ async function fcNode(tipo) {
   const turnoId = window._fcTurnoAtual; if (!turnoId) return;
   window._fcNodeAtual = tipo;   // p/ reabrir o mesmo balão após salvar edição
   // nós v2 — lidos do cache (movimentação completa do PDV)
+  if (tipo === 'haver_credito') return fcNodeHaverCredito();
   if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales'
       || tipo === 'movimentacao' || tipo === 'receb_ext' || tipo === 'titulos') {
     return fcNodeMov(tipo);
@@ -3184,7 +3191,7 @@ function fcNodeMov(tipo) {
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
     const gerados = tipo === 'vale_haver' ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
-    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito gerado neste turno (fica em Vendas › Haver; o dinheiro dele, na linha da forma): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : 'sem forma'})`).join(' · ')}</p>` : '';
+    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito pago neste turno (está em Haver crédito, à esquerda; o dinheiro dele, na linha da forma): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : 'sem forma'})`).join(' · ')}</p>` : '';
     const tit = tipo === 'vale_haver' ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
     return fcModalNav(tit, vs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
@@ -4696,4 +4703,137 @@ async function fcExtratoDesfazer() {
   }
   _fcToast('↩ Substituição desfeita');
   await _fcRecarregarNode();
+}
+
+// ============================================================
+// HAVER CRÉDITO — lançar / editar o crédito do cliente pelo F.Caixa (20/10/2026)
+// Ronan: "no pdv e retaguarda quando lançarmos um vale haver para o cliente, no lançamento tem que perguntar a forma
+// de pagamento (pdv); retaguarda pergunta forma de pagamento, data de pagamento e conta que foi pago, esse valor vai
+// para o fechamento de caixa já com a forma de pagamento correta e espelhando no haver crédito (dando a opção de
+// editar se necessário)". O crédito é uma linha de oct_vales (tipo credito_adiantado, valor +) com forma, pago_em e
+// conta_id, no turno deste caixa. O saldo do cliente é a soma dos lançamentos dele: editar o valor muda o saldo.
+// ============================================================
+const _FC_HAVER_FORMAS = ['Dinheiro', 'Pix', 'Cartão de débito', 'Cartão de crédito', 'Cheque', 'Transferência'];
+
+async function fcNodeHaverCredito() {
+  const turnoId = window._fcTurnoAtual; if (!turnoId) return;
+  const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const vs = (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0);
+  const contas = await _fcContasDoPosto();
+  window._fcHaverContas = contas;
+  const nomeConta = id => { const c = contas.find(x => String(x.id) === String(id)); return c ? c.nome : (id ? '#' + id : '—'); };
+  const dt = s => s ? String(s).slice(8, 10) + '/' + String(s).slice(5, 7) + '/' + String(s).slice(0, 4) : '—';
+  const linhas = vs.map(v => `<tr>
+      <td class="fc-td">${_fcDataHoraLocal(v.criado_em)}</td>
+      <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
+      <td class="fc-td">${v.forma ? fcEsc(v.forma) : '<span style="color:#f0b45c">sem forma</span>'}</td>
+      <td class="fc-td">${dt(v.pago_em)}</td>
+      <td class="fc-td">${fcEsc(nomeConta(v.conta_id))}</td>
+      <td class="fc-td" style="color:#889;font-size:0.72rem">${fcEsc(v.operador) || '—'}${v.descricao ? '<br>' + fcEsc(String(v.descricao).slice(0, 90)) : ''}</td>
+      <td class="fc-td fc-r" style="color:#7ee2a0">${fcMoney(v.valor)}</td>
+      <td class="fc-td">${v.tipo === 'credito_adiantado' ? `<button class="fc-btn2" onclick="fcHaverForm('${v.id}')" title="Editar forma, data, conta ou valor">✎</button>` : ''}</td></tr>`);
+  const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
+  const btn = `<button class="fc-btn2" style="margin:10px;border-color:#2a5a3a;color:#7be0a0" onclick="fcHaverForm('')">➕ Lançar crédito do cliente</button>`;
+  return fcModalNav('💰 Haver crédito — crédito pago pelo cliente neste caixa', `
+    <p style="padding:8px 10px;color:#888;font-size:0.78rem">O cliente pagou e ficou com crédito para abastecer depois. O dinheiro entra na
+      linha da forma (Cheque, Pix, Cartão, Depósito em Conta ou na gaveta) e aqui sai do total — não é venda. O que ele abastecer com o
+      crédito aparece em <b>Vale Haver</b>, no dia do abastecimento.</p>
+    ${vs.length ? `<table class="fc-grid"><thead><tr><th>Lançado</th><th>Cliente</th><th>Forma</th><th>Pago em</th><th>Conta</th><th>Quem / obs.</th><th>Valor</th><th></th></tr></thead>
+      <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>`
+      : '<p style="padding:16px 10px;color:#777">Nenhum crédito lançado neste caixa.</p>'}${btn}`);
+}
+
+async function fcHaverForm(id) {
+  if (!podeOuAvisa(id ? 'fcaixa.lanc_alterar' : 'fcaixa.lanc_incluir')) return;
+  if (_fcTravado()) return;
+  const turnoId = window._fcTurnoAtual;
+  const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const t = (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoId) || {};
+  const v = id ? (d.vales_lst || []).find(x => String(x.id) === String(id)) : null;
+  if (id && !v) { alert('Lançamento não encontrado — atualize a tela.'); return; }
+  const contas = window._fcHaverContas || await _fcContasDoPosto();
+  const diaCaixa = t.aberto_em ? _fcDiaLocal(t.aberto_em) : _fcDiaLocal();
+  window._fcHaverSel = v ? { id: v.pessoa_id, nome: v.pessoa_nome } : null;
+  const inp = 'style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"';
+  const lab = txt => `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:10px">${txt}</label>`;
+  fcModal(id ? '✎ Editar crédito do cliente' : '➕ Lançar crédito do cliente', `
+    <div style="padding:16px;font-size:0.85rem;color:#cdd6e0;max-width:460px">
+      ${lab('Cliente')}
+      ${v ? `<div style="padding:8px;border:1px solid #2a2d3e;border-radius:6px;background:#0b0d14">${fcEsc(v.pessoa_nome)}</div>`
+          : `<input id="fhc-busca" placeholder="Buscar por nome ou CPF/CNPJ..." oninput="fcHaverBuscar(this.value)" ${inp}>
+             <div id="fhc-lista" style="max-height:150px;overflow:auto"></div>
+             <div id="fhc-escolhido" style="margin-top:4px;color:#7ee2a0;font-size:0.8rem"></div>`}
+      ${lab('Valor do crédito (R$)')}<input id="fhc-valor" type="number" step="0.01" min="0.01" value="${v ? Number(v.valor).toFixed(2) : ''}" ${inp}>
+      ${lab('Forma de pagamento')}
+      <select id="fhc-forma" ${inp}><option value="">— como o cliente pagou? —</option>
+        ${_FC_HAVER_FORMAS.map(f => `<option ${v && v.forma === f ? 'selected' : ''}>${f}</option>`).join('')}</select>
+      ${lab('Data do pagamento')}<input id="fhc-data" type="date" value="${(v && v.pago_em) || diaCaixa || ''}" ${inp}>
+      ${lab('Conta em que o dinheiro entrou')}
+      <select id="fhc-conta" ${inp}><option value="">— (gaveta / não se aplica) —</option>
+        ${contas.map(c => `<option value="${c.id}" ${v && String(v.conta_id) === String(c.id) ? 'selected' : ''}>${fcEsc(c.nome)}</option>`).join('')}</select>
+      ${lab('Observação')}<input id="fhc-obs" value="${v && v.descricao ? fcEsc(v.descricao) : ''}" placeholder="ex.: sobra do cheque 3192" ${inp}>
+      ${v ? '<p style="color:#f0b45c;font-size:0.74rem;margin-top:8px">Mudar o valor muda o saldo de crédito do cliente.</p>' : ''}
+      <div id="fhc-msg" style="color:#f87171;font-size:0.78rem;min-height:16px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fc-btn2" style="flex:1" onclick="fcNode('haver_credito')">Voltar</button>
+        <button class="fc-btn2" style="flex:2;border-color:#2a5a3a;color:#7be0a0" onclick="fcHaverSalvar('${id || ''}')">💾 Salvar</button>
+      </div>
+    </div>`);
+}
+
+let _fcHaverBuscaT = null;
+function fcHaverBuscar(termo) {
+  clearTimeout(_fcHaverBuscaT);
+  _fcHaverBuscaT = setTimeout(async () => {
+    const el = document.getElementById('fhc-lista'); if (!el) return;
+    termo = String(termo || '').trim();
+    if (termo.length < 2) { el.innerHTML = ''; return; }
+    const limpo = termo.replace(/[,()]/g, ' ');
+    const { data } = await sb.from('oct_pessoas').select('id,nome,documento,tecnox_cod')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
+      .or(`nome.ilike.%${limpo}%,documento.ilike.%${limpo}%`).order('nome').limit(20);
+    el.innerHTML = (data || []).map(p => `<div onclick="fcHaverEscolher('${p.id}', ${JSON.stringify(String(p.nome || '')).replace(/"/g, '&quot;')})"
+        style="padding:6px 8px;border-bottom:1px solid #1a1d2e;cursor:pointer;font-size:0.8rem"
+        onmouseover="this.style.background='#141826'" onmouseout="this.style.background='transparent'">
+        ${p.tecnox_cod ? fcEsc(p.tecnox_cod) + ' · ' : ''}${fcEsc(p.nome)} <span style="color:#667">${fcEsc(p.documento || '')}</span></div>`).join('')
+      || '<div style="padding:6px 8px;color:#667;font-size:0.8rem">Nenhuma pessoa.</div>';
+  }, 250);
+}
+function fcHaverEscolher(id, nome) {
+  window._fcHaverSel = { id, nome };
+  const el = document.getElementById('fhc-escolhido'); if (el) el.textContent = '✔ ' + nome;
+  const l = document.getElementById('fhc-lista'); if (l) l.innerHTML = '';
+}
+
+async function fcHaverSalvar(id) {
+  if (!podeOuAvisa(id ? 'fcaixa.lanc_alterar' : 'fcaixa.lanc_incluir')) return;
+  if (_fcTravado()) return;
+  const msg = document.getElementById('fhc-msg');
+  const g = k => (document.getElementById(k) || {}).value || '';
+  const valor = Math.round(parseFloat(g('fhc-valor').replace(',', '.')) * 100) / 100;
+  const forma = g('fhc-forma'), data = g('fhc-data'), conta = g('fhc-conta'), obs = g('fhc-obs').trim();
+  const pes = window._fcHaverSel;
+  if (!pes || !pes.id) { msg.textContent = 'Escolha o cliente.'; return; }
+  if (!(valor > 0)) { msg.textContent = 'Informe o valor do crédito.'; return; }
+  if (!forma) { msg.textContent = 'Escolha a forma de pagamento.'; return; }
+  if (!data) { msg.textContent = 'Informe a data do pagamento.'; return; }
+  if (['Pix', 'Transferência'].includes(forma) && !conta) { msg.textContent = 'Pix / transferência: informe a conta em que o dinheiro entrou.'; return; }
+  const dados = { valor, forma, pago_em: data, conta_id: conta ? Number(conta) : null, descricao: obs || null };
+  let r;
+  if (id) {
+    r = await sb.from('oct_vales').update(dados).eq('id', id).eq('tipo', 'credito_adiantado').select('id');
+  } else {
+    r = await sb.from('oct_vales').insert(Object.assign({
+      empresa_id: window._fcEmpresaId, pessoa_id: pes.id, pessoa_nome: pes.nome, tipo: 'credito_adiantado',
+      origem: 'retaguarda', turno_id: window._fcTurnoAtual, operador: await _fcAutor(),
+    }, dados)).select('id');
+  }
+  if (r.error) {
+    msg.innerHTML = /pago_em|conta_id|forma|column/i.test(r.error.message || '')
+      ? 'Falta rodar <code>repo/sql/SQL-VALE-PAGAMENTO.sql</code> no Supabase.' : 'Erro: ' + fcEsc(r.error.message);
+    return;
+  }
+  if (!r.data || !r.data.length) { msg.textContent = 'Nada foi gravado (sem permissão para alterar este lançamento?).'; return; }
+  _fcToast(id ? '✔ Crédito alterado' : '✔ Crédito lançado');
+  await fcRecarregar('haver_credito');
 }
