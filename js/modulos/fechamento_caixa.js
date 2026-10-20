@@ -49,6 +49,13 @@ function _fcHora(v) { return v ? new Date(v).toLocaleTimeString('pt-BR', { hour:
 // hora p/ campos do NÚCLEO (fila/receb/pista/vales/cancelamentos): gravados em
 // hora LOCAL com +00:00 falso — exibir direto pelo _fcHora deslocava 3h (20/08).
 function _fcHoraLocal(v) { return v ? new Date(_fcTsLocal(v)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
+// DATA + HORA nos balões de lançamento (20/10/2026, Ronan: "preciso que apareça a data do recebimento"): dd/mm hh:mm:ss
+function _fcDataHora(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function _fcDataHoraLocal(v) { return v ? _fcDataHora(_fcTsLocal(v)) : ''; }
 
 async function moduloFCaixa() {
   const conteudo = document.getElementById('conteudo');
@@ -2659,7 +2666,7 @@ async function fcNodeDetalhe(tipo) {
       const chq = p.cheque && typeof p.cheque === 'object' ? p.cheque : null;
       const chqTxt = chq ? ` <span style="color:#7ea8d8;font-size:0.72rem">🧾 cheque nº ${fcEsc(chq.numero || '?')}${chq.banco ? ' · bco ' + fcEsc(chq.banco) : ''}${chq.emitente ? ' · ' + fcEsc(chq.emitente) : ''}${chq.bom_para ? ' · bom p/ ' + fcEsc(String(chq.bom_para).slice(0, 10).split('-').reverse().join('/')) : ''}</span>` : '';
       entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
-        _fcRow('venda', v.id, `<td class="fc-td">${_fcHora(v.data_venda)}</td>
+        _fcRow('venda', v.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHora(v.data_venda)}</td>
           <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span>${chqTxt}${frotaTxt}</td>
           <td class="fc-td">—</td>
           <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
@@ -2679,7 +2686,7 @@ async function fcNodeDetalhe(tipo) {
     const vfDe = (f) => Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const linhaDe = (f) => {
       window._fcLancBase['fila:' + f.id] = { rotulo: fcEsc(f.descricao) || 'Abastecimento', valor: f.valor, forma_nome: f.forma_nome, bandeira: f.bandeira };
-      return _fcRow('fila', f.id, `<td class="fc-td">${_fcHoraLocal(f.ocorrido_em || f.criado_em)}</td>
+      return _fcRow('fila', f.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHoraLocal(f.ocorrido_em || f.criado_em)}</td>
         <td class="fc-td">⏳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
@@ -2689,7 +2696,7 @@ async function fcNodeDetalhe(tipo) {
     };
     const linhaDetalhe = (f, k) => `<tr data-fcgrp="${k}" style="display:none;background:#0d1420;color:#9aa">
         <td class="fc-td"></td>
-        <td class="fc-td" style="font-size:0.78rem">${_fcHoraLocal(f.ocorrido_em || f.criado_em)}</td>
+        <td class="fc-td" style="font-size:0.78rem">${_fcDataHoraLocal(f.ocorrido_em || f.criado_em)}</td>
         <td class="fc-td" style="font-size:0.78rem">↳ ${fcEsc(f.descricao) || '—'}</td>
         <td class="fc-td" style="font-size:0.78rem">${f.bico ?? '—'}</td>
         <td class="fc-td fc-r" style="font-size:0.78rem">${Number(f.litros || 0) ? fcNum(f.litros, 2) + ' L' : '—'}</td>
@@ -2707,7 +2714,7 @@ async function fcNodeDetalhe(tipo) {
       const vG = g.reduce((s, f) => s + vfDe(f), 0);
       const lG = g.reduce((s, f) => s + Number(f.litros || 0), 0);
       window._fcLancBase['fila:' + f0.id] = { rotulo: `Recebimento unificado (${g.length} itens)`, valor: vG, forma_nome: f0.forma_nome, bandeira: f0.bandeira };
-      let hdr = _fcRow('fila', f0.id, `<td class="fc-td">${_fcHoraLocal(f0.ocorrido_em || f0.criado_em)}</td>
+      let hdr = _fcRow('fila', f0.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHoraLocal(f0.ocorrido_em || f0.criado_em)}</td>
         <td class="fc-td">🧷 <b>Recebimento unificado</b> <button class="fc-btn mini" onclick="event.stopPropagation();fcGrpToggle('${fcEsc(k)}',this)" title="Ver os itens vinculados">▸ ${g.length} itens</button></td>
         <td class="fc-td">—</td>
         <td class="fc-td fc-r">${fcNum(lG, 2)} L</td>
@@ -2735,7 +2742,7 @@ async function fcNodeDetalhe(tipo) {
     mans.filter(m => fBand({ forma_nome: m.forma_nome, forma: '', bandeira: m.bandeira || '' })).forEach(m => {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
-        _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '—'}</td>
+        _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '—'}</td>
           <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
@@ -2758,7 +2765,7 @@ async function fcNodeDetalhe(tipo) {
           forma_nome: 'Nota a prazo', bandeira: null,
         };
         entradas.push({ val: vN, hora: n.registrado_em || '9999', oficial: 1, rows: [
-          _fcRow('np', n.id, `<td class="fc-td">${n.registrado_em ? _fcHoraLocal(n.registrado_em) : '—'}</td>
+          _fcRow('np', n.id, `<td class="fc-td" style="white-space:nowrap">${n.registrado_em ? _fcDataHoraLocal(n.registrado_em) : '—'}</td>
             <td class="fc-td">📄 Nota a prazo <span style="color:#6b7688;font-size:9px">(TecnoX)</span></td>
             <td class="fc-td">—</td>
             <td class="fc-td fc-r">—</td>
@@ -2773,7 +2780,7 @@ async function fcNodeDetalhe(tipo) {
     listaN += entradas.length; listaTot += totalLista;
     secoes.push(stit(`Lançamentos do caixa (${entradas.length}) — 🧾 cupom · ⏳ fila · ✍ manual`));
     secoes.push(entradas.length
-      ? tab(['', 'Hora', 'Descrição', 'Bico', 'Litros', 'Vendedor/Cliente', 'Forma', 'Valor', ''],
+      ? tab(['', 'Data/Hora', 'Descrição', 'Bico', 'Litros', 'Vendedor/Cliente', 'Forma', 'Valor', ''],
             entradas.flatMap(e => e.rows),
             `<tr><td class="fc-td" colspan="7"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totalLista)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum lançamento nesta forma neste caixa.</p>');
@@ -2831,7 +2838,7 @@ async function fcNodeDetalhe(tipo) {
       const dupCofre = cofreNoContado && String(m.tipo || '').toLowerCase().includes('sangria') && _fcEhSangriaCofreTecnox(m);
       const dep = _depDe(m);
       const depTxt = dep ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria ${_fcHora(m.criado_em)} depositada em ${fcEsc(dep.conta_nome || 'conta')}${dep.data ? ' · ' + fcEsc(String(dep.data).split('-').reverse().join('/')) : ''}${_fcDepLote(dep)}</span>` : '';
-      return _fcRow('caixa', m.id, `<td class="fc-td">${_fcHora(m.criado_em)}</td>
+      return _fcRow('caixa', m.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHora(m.criado_em)}</td>
         <td class="fc-td">${fcEsc(m.descricao) || (dep ? 'Depósito da sangria' : '—')}${depTxt}${dupCofre ? ' <span style="color:#f59e0b;font-size:0.72rem">— mesmo depósito do cofre (lista abaixo): não desconta de novo</span>' : ''}</td><td class="fc-td">${fcEsc(m.forma) || '—'}</td>
         <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
     });
@@ -2839,7 +2846,7 @@ async function fcNodeDetalhe(tipo) {
     listaN += ms.length; listaTot += total;
     secoes.push(stit(`${tipo === 'dinheiro' ? 'Sangrias (valores retirados/depositados)' : cfg.titulo} — ${ms.length} lançamento(s)`));
     secoes.push(ms.length
-      ? tab(['', 'Hora', 'Descrição', 'Forma', 'Valor', ''], linhas,
+      ? tab(['', 'Data/Hora', 'Descrição', 'Forma', 'Valor', ''], linhas,
             `<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum lançamento neste caixa.</p>');
   }
@@ -2864,7 +2871,7 @@ async function fcNodeDetalhe(tipo) {
       window._fcLancBase['receb:' + r.id] = { rotulo: 'Depósito ' + (r.origem || 'cofre'), valor: r.valor, forma_nome: 'Dinheiro' };
       const dep = _depDeR(r);
       const depTxt = dep ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(dep.conta_nome || 'conta')}${dep.data ? ' · ' + fcEsc(String(dep.data).split('-').reverse().join('/')) : ''}${_fcDepLote(dep)}</span>` : '';
-      return _fcRow('receb', r.id, `<td class="fc-td">${_fcHoraLocal(r.recebido_em)}</td>
+      return _fcRow('receb', r.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHoraLocal(r.recebido_em)}</td>
         <td class="fc-td">${fcEsc(r.origem) || 'cofre'}${depTxt}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
     if (tipo === 'deposito' && !rs.length) { /* nenhuma sangria F7 depositada: sem seção */ } else {
@@ -2872,7 +2879,7 @@ async function fcNodeDetalhe(tipo) {
     listaN += rs.length; listaTot += total;
     secoes.push(stit(tipo === 'deposito' ? `Sangrias do PDV depositadas em conta — ${rs.length}` : `Depósitos (cofre/sangria) — ${rs.length}`));
     secoes.push(rs.length
-      ? tab(['', 'Hora', 'Origem', 'Valor', ''], linhas,
+      ? tab(['', 'Data/Hora', 'Origem', 'Valor', ''], linhas,
             `<tr><td class="fc-td" colspan="3"><b>Total depositado</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum depósito no período do turno.</p>');
     }
@@ -2892,7 +2899,7 @@ async function fcNodeDetalhe(tipo) {
         totM += Number(m.valor || 0);
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
         const depN = m.deposito ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 ${_manDepN(m) ? 'sangria depositada' : 'depositado'} em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : '';
-        return _fcRow('manual', m.id, `<td class="fc-td">${m.recebido_em ? _fcHoraLocal(m.recebido_em) : '✍ manual'}</td>
+        return _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '✍ manual'}</td>
           <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
