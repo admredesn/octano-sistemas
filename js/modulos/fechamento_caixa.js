@@ -22,6 +22,10 @@ function _fcGrupoForma(cod) {
 function _fcGrupoNome(nome, cod) {
   const n = String(nome || '').toLowerCase();
   if (n) {
+    // CRÉDITO DO CLIENTE (haver) antes de tudo (20/10/2026, Florestal caixa 1207): "Crédito do cliente" tem "créd"
+    // e virava CARTÃO — e a troca pelo extrato da maquininha TIRAVA o cupom do caixa (não está no extrato): os
+    // R$ 1.759,12 do Marcus viraram falta. É o crédito já pago antes, gasto agora: linha própria "Vale Haver".
+    if (n.indexOf('crédito do cliente') >= 0 || n.indexOf('credito do cliente') >= 0 || /\bhaver\b/.test(n)) return 'haver';
     // FROTA antes de cartão (18/08): "cartão frota"/Prime/Fit/TicketLog/GoodCard
     // é outra natureza — liquida pela administradora, não pela adquirente.
     // mesma lista do sync_pagamentos_tecnox.py (FROTA)
@@ -271,7 +275,7 @@ async function fcCarregarDados() {
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0, ajuste_tabela: 0,
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
-    rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0 },
+    rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0, haver: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
     sangria_depositada: 0, sangrias_dep: [],   // sangria que virou depósito em conta (🏦 Gerar depósito)
     fila_total: 0, fila_litros: 0, fila_itens: [],
@@ -433,7 +437,8 @@ async function fcCarregarDados() {
       // caso real: cupom de cartão FROTA que sai com tpag 03 genérico.
       const ajV = _aj('venda', v.id);
       // prioridade: ajuste do gerente > NOME gravado pelo PDV (18/08) > código
-      const g = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
+      const g = p.haver ? 'haver'   // crédito do cliente (o PDV marca haver:true; o tPag 05 é o mesmo da nota a prazo)
+        : (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
       t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
     });
@@ -726,6 +731,7 @@ async function fcCarregarDados() {
     const recebido = _trTot + Number(d.receb_ext_cofre || 0) + Number(d.sangria_gaveta || 0) + Number(d.rec.cartao || 0)
       + Number(d.rec.pix || 0) + Number(d.rec.pix_cnpj || 0) + Number(d.rec.frota || 0) + Number(d.rec.prazo || 0)
       + Number(d.rec.cheque || 0) + Number(d.despesa || 0) + Number(d.deposito || 0)
+      + Number(d.rec.haver || 0)   // abastecido com o crédito do cliente (20/10/2026)
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
       + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
@@ -868,7 +874,10 @@ function fcDetalhe(turnoId) {
     ['Despesas', d.despesa],
     ['Deposito em Conta', Number(d.deposito || 0) + Number(_trd.deposito || 0)],   // + títulos em "Outro" (boleto, transferência)
     ['Troco Final (gaveta)', Number(t.valor_fechamento || 0)],
-    ['Vale Haver', d.vale_haver, I],
+    // VALE HAVER (20/10/2026, Ronan: "aqui teria que ter só o valor abastecido, não o valor de crédito gerado"): o que o
+    // cliente abasteceu pagando com o crédito dele (forma "Crédito do cliente" do cupom). SOMA, como a nota a prazo —
+    // é o pagamento daquela venda. O crédito GERADO no turno fica do lado das Vendas, em "Haver (crédito gerado)".
+    ['Vale Haver', Number(rec.haver || 0)],
     // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
     // heranca do layout TecnoX e so' mostrava numero errado — os R$349,38 que
     // apareceram no turno 52 eram a MESMA falta de caixa lancada 6x como vale,
@@ -891,7 +900,9 @@ function fcDetalhe(turnoId) {
     // é a linha "Troco inicial (fundo)", mantendo o Resultado em zero.
     ['Remessas', Number(t.valor_abertura || 0) + Number(d.suprimento || 0)],
     ['Cheque troco', 0, I],
-    ['Haver', 0, I],
+    // crédito GERADO no turno (crédito adiantado / troco pendente). (mov.) por enquanto: o lançamento do PDV ainda não
+    // diz em que forma o dinheiro entrou — sem isso, somar aqui acusaria falta do valor inteiro (20/10/2026).
+    ['Haver (crédito gerado)', d.vale_haver, I],
     // RECEITAS (06/10/2026 — turno 1188 do Florestal): a linha era um zero fixo. A receita
     // lançada (balão Receitas ou oct_pdv_caixa tipo 'receita') aparecia no balão e entrava
     // no esperado da gaveta, mas o campo ficava 0,00 e o Resultado a ignorava. É dinheiro
@@ -3142,7 +3153,9 @@ function fcNodeMov(tipo) {
 
   if (tipo === 'vale_haver' || tipo === 'vale_motorista' || tipo === 'vales') {
     let vs = d.vales_lst || [];
-    if (tipo === 'vale_haver') vs = vs.filter(v => Number(v.valor || 0) >= 0);
+    // Vale Haver (20/10/2026): o balão do lado dos Recebimentos mostra o que foi ABASTECIDO com o crédito (consumo);
+    // o crédito gerado no turno aparece embaixo, separado (é a origem, não o pagamento)
+    if (tipo === 'vale_haver') vs = vs.filter(v => v.tipo === 'consumo');
     else if (tipo === 'vale_motorista') vs = vs.filter(v => Number(v.valor || 0) < 0);
     const linhas = vs.map(v => {
       const val = Number(v.valor || 0);
@@ -3154,12 +3167,14 @@ function fcNodeMov(tipo) {
         <td class="fc-td fc-r" style="color:${val >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(val)}</td></tr>`;
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
-    const tit = tipo === 'vale_haver' ? '🤝 Haver (o posto deve)' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
+    const gerados = tipo === 'vale_haver' ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
+    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito gerado neste turno (fica em Vendas › Haver, fora do total): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)}`).join(' · ')}</p>` : '';
+    const tit = tipo === 'vale_haver' ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
     return fcModalNav(tit, vs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
          <table class="fc-grid"><thead><tr><th>Hora</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>Saldo do turno</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td></tr></tbody></table>`
-      : '<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>');
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>${tipo === 'vale_haver' ? 'Total abastecido com crédito' : 'Saldo do turno'}</b></td><td class="fc-td fc-r"><b>${fcMoney(tipo === 'vale_haver' ? Math.abs(tot) : tot)}</b></td></tr></tbody></table>${extraGer}`
+      : `<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>${extraGer}`);
   }
 
   if (tipo === 'receb_ext') {
@@ -4484,7 +4499,8 @@ async function _fcExtratoAlvos(turnoId, d0) {
     // 06/10/2026, turno 1188 do Florestal: R$ 1.570,19 de Fit Card/Prime e Ticket Log
     // sumiram, e o extrato do PagBank não tem frota para pôr no lugar.
     const ajV = aj['venda:' + v.id] || {};
-    const grupoPg = p => ajV.forma_nome
+    const grupoPg = p => p.haver ? 'haver'   // crédito do cliente não está no extrato: nunca sai na troca
+      : ajV.forma_nome
       ? _fcGrupoNome(ajV.forma_nome, p.forma)
       : _fcGrupoNome(p.nome || p.forma_nome || p.forma, p.forma);
     const soma = (pgs || []).filter(p => grupos.includes(grupoPg(p)))
