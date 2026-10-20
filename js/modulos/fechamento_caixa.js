@@ -200,7 +200,7 @@ async function fcCarregarDados() {
     _fcTudo(() => sb.from('oct_recebimentos').select('id,origem,forma,bandeira,valor,parcelas,recebido_em,conciliado,cliente')
       .eq('empresa_id', eid).gte('recebido_em', janIni).lte('recebido_em', janFim).order('recebido_em')),
     // VALES / HAVER — tem turno_id, liga direto
-    sb.from('oct_vales').select('turno_id,pessoa_nome,tipo,valor,descricao,operador,criado_em')
+    sb.from('oct_vales').select('*')   // '*' (20/10/2026): traz a forma do crédito quando a coluna existir
       .eq('empresa_id', eid).in('turno_id', ids)
       .then(r => r, () => ({ data: [] })),
     // TÍTULOS RECEBIDOS — baixa de nota a prazo antiga; no TecnoX entra no lado
@@ -282,7 +282,7 @@ async function fcCarregarDados() {
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
     // v2 — movimentação completa
     sangria_f7: 0, sangrias_lst: [], np_itens: [],
-    vale_haver: 0, vale_desconto: 0, vales_lst: [],
+    vale_haver: 0, vale_desconto: 0, vales_lst: [], haver_gerado: 0, haver_din: 0, haver_sem_forma: 0, receita_haver: 0,
     receb_ext: [], receb_ext_cartao: 0, receb_ext_pix: 0, receb_ext_cofre: 0,
     titulos: 0, titulos_lst: [],
   });
@@ -505,6 +505,8 @@ async function fcCarregarDados() {
       t.receita += val;
       // recebimento de título/fatura em DINHEIRO no PDV também vira receita no caixa (receber_titulo.js) — ver receita_titulo
       if (/^recebimento de (t[ií]tulo|fatura)/i.test(String(m.descricao || ''))) t.receita_receb_tit = (t.receita_receb_tit || 0) + val;
+      // crédito do cliente pago em dinheiro (vales.js, 20/10/2026): a origem é Vendas › Haver, não Receitas
+      if (/^cr[eé]dito do cliente/i.test(String(m.descricao || ''))) t.receita_haver += val;
     }
     else t.outrosCaixa += val;
   });
@@ -538,6 +540,18 @@ async function fcCarregarDados() {
     const t = porTurno[v.turno_id]; if (!t) return;
     const val = Number(v.valor || 0);
     if (val >= 0) t.vale_haver += val; else t.vale_desconto += Math.abs(val);
+    // CRÉDITO GERADO COM A FORMA (20/10/2026, Ronan: "o valor de crédito tem que ter a forma de pagamento que entrou na
+    // conta"): é origem do dinheiro (Vendas › Haver, como Títulos Recebidos) e o dinheiro entra na linha da forma — pela
+    // MESMA fila dos títulos pagos fora do dinheiro (_titFora), que já não conta em dobro no caixa trocado pelo extrato.
+    // Em DINHEIRO o PDV também lança a receita no caixa (esperado da gaveta): ela sai de Receitas (receita_haver).
+    // Crédito antigo, sem forma: fica (mov.) — somar acusaria falta do valor inteiro.
+    if (val > 0 && v.tipo === 'credito_adiantado' && v.forma) {
+      t.haver_gerado += val;
+      const gH = _fcGrupoNome(String(v.forma), '');
+      if (gH === 'dinheiro') t.haver_din += val;
+      else (t._titFora = t._titFora || []).push({ g: ['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(gH) ? gH : 'deposito',
+        valor: val, dinheiro: val, x: v, haver: true });
+    } else if (val > 0) t.haver_sem_forma += val;
     t.vales_lst.push(v);
   });
   // NOTA A PRAZO EMITIDA (TecnoX) -> entra em rec.prazo.
@@ -735,7 +749,8 @@ async function fcCarregarDados() {
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
       + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
-      + Number(d.receita || 0) - Number(d.receita_titulo || 0);   // receita lançada entra na origem (menos a de título, que já está em Títulos Recebidos)
+      + Number(d.receita || 0) - Number(d.receita_titulo || 0)   // receita lançada entra na origem (menos a de título, que já está em Títulos Recebidos)
+      + Number(d.haver_gerado || 0) - Math.min(Number(d.receita_haver || 0), Number(d.haver_din || 0));   // crédito gerado (20/10/2026)
     d.recebido_caixa = Math.round(recebido * 100) / 100;
     d.vendido_caixa = Math.round(vendido * 100) / 100;
     d.resultado_caixa = Math.round((recebido - vendido) * 100) / 100;
@@ -902,12 +917,13 @@ function fcDetalhe(turnoId) {
     ['Cheque troco', 0, I],
     // crédito GERADO no turno (crédito adiantado / troco pendente). (mov.) por enquanto: o lançamento do PDV ainda não
     // diz em que forma o dinheiro entrou — sem isso, somar aqui acusaria falta do valor inteiro (20/10/2026).
-    ['Haver (crédito gerado)', d.vale_haver, I],
+    ['Haver (crédito gerado)', Number(d.haver_gerado || 0)],
+    ...(Number(d.haver_sem_forma || 0) > 0.004 ? [['Haver sem forma de pagamento', d.haver_sem_forma, I]] : []),
     // RECEITAS (06/10/2026 — turno 1188 do Florestal): a linha era um zero fixo. A receita
     // lançada (balão Receitas ou oct_pdv_caixa tipo 'receita') aparecia no balão e entrava
     // no esperado da gaveta, mas o campo ficava 0,00 e o Resultado a ignorava. É dinheiro
     // que entrou sem ser venda — mesma natureza de Títulos Recebidos: SOMA em Vendas/Saídas.
-    ['Receitas', Math.round((Number(d.receita || 0) - Number(d.receita_titulo || 0)) * 100) / 100],   // sem o dinheiro de título (já em Títulos Recebidos)
+    ['Receitas', Math.round((Number(d.receita || 0) - Number(d.receita_titulo || 0) - Math.min(Number(d.receita_haver || 0), Number(d.haver_din || 0))) * 100) / 100],   // sem o dinheiro de título (já em Títulos Recebidos)
   ];
   const soma = (arr) => arr.reduce((s, r) => s + (r[2] && r[2].info ? 0 : Number(r[1] || 0)), 0);
   const somaReceb = soma(recebBase);
@@ -3168,7 +3184,7 @@ function fcNodeMov(tipo) {
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
     const gerados = tipo === 'vale_haver' ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
-    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito gerado neste turno (fica em Vendas › Haver, fora do total): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)}`).join(' · ')}</p>` : '';
+    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito gerado neste turno (fica em Vendas › Haver; o dinheiro dele, na linha da forma): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : 'sem forma'})`).join(' · ')}</p>` : '';
     const tit = tipo === 'vale_haver' ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
     return fcModalNav(tit, vs.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
