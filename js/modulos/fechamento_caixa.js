@@ -1067,7 +1067,7 @@ function fcDetalhe(turnoId) {
 
         <div class="fc-painel">
           <div class="fc-obscab"><span>Observação:</span><button class="fc-btn mini" onclick="fcSalvarObs()">💾 Salvar Obs.</button></div>
-          <textarea id="fc-obs" class="fc-obs" placeholder="Observações do caixa...">${fcEsc(t.observacao || '')}</textarea>
+          <textarea id="fc-obs" class="fc-obs" placeholder="Observações do caixa..." oninput="_fcObsRascunho(this.value)">${fcEsc(_fcObsValor(t))}</textarea>
           <div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px">
             <div style="color:#f0b45c;font-weight:700;font-size:0.82rem;margin-bottom:6px">💵 Conferência de Caixa (dinheiro)</div>
             <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
@@ -2106,11 +2106,19 @@ function fcGrpToggle(k, btn) {
 // AUTO-ATUALIZAÇÃO (18/08): com a tela do turno aberta, os números se
 // renovam sozinhos a cada 30s — depósito do cofre, venda nova, edição de
 // outro usuário. Pausa quando um modal está aberto (não atrapalha edição).
+// RASCUNHO DA OBSERVAÇÃO (20/10/2026, Ronan: "antes que eu termine ele simplesmente apaga tudo"): o redesenho dos 30 s
+// voltava o campo para o texto SALVO. O que foi digitado fica guardado por turno até o "Salvar Obs.".
+window._fcObsRasc = window._fcObsRasc || {};
+function _fcObsRascunho(v) { if (window._fcTurnoAtual) window._fcObsRasc[window._fcTurnoAtual] = v; }
+function _fcObsValor(t) { const r = (window._fcObsRasc || {})[t && t.id]; return r != null ? r : ((t && t.observacao) || ''); }
 if (!window._fcAutoTimer) {
   window._fcAutoTimer = setInterval(() => {
     try {
       if (!window._fcTurnoAtual) return;
       if (document.getElementById('fc-modal')) return;
+      // digitando num campo do F.Caixa (observação, troco, contado...): espera — redesenhar tira o cursor e o texto
+      const ae = document.activeElement;
+      if (ae && /^(TEXTAREA|INPUT|SELECT)$/.test(ae.tagName) && ae.closest && ae.closest('.fc-corpo')) return;
       if (!document.querySelector('.fc-corpo')) return;   // F.Caixa não está na tela
       fcRecarregar();
     } catch (e) { /* nunca derruba o timer */ }
@@ -4082,8 +4090,15 @@ function fcModalFechar() {
 }
 async function fcSalvarObs() {
   const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
-  try { await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId); _fcToast('✔ Observação salva'); }
-  catch (e) { alert('Não foi possível salvar (campo observacao pode não existir ainda).'); }
+  try {
+    const { error } = await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId);
+    if (error) throw error;
+    // salvo: o rascunho sai e o cache já fica com o texto novo (o próximo redesenho mostra o salvo)
+    delete (window._fcObsRasc || {})[turnoId];
+    const tc = (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoId);
+    if (tc) tc.observacao = txt;
+    _fcToast('✔ Observação salva');
+  } catch (e) { alert('Não foi possível salvar a observação: ' + ((e && e.message) || e) + '\nO texto continua no campo.'); }
 }
 
 // confirma a conferência de caixa físico e persiste no turno (esperado, diferença,
