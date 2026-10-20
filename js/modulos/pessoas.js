@@ -62,6 +62,8 @@ async function moduloPessoas() {
       { rotulo: `Inativos (${window._todasPessoas.filter(p=>!p.ativo).length})`, onClick: `pessoaFiltrar('inativos')` },
     ],
     colunas: [
+      // código do cliente (20/10/2026): o do TecnoX para quem veio de lá, 10001+ para cliente novo (numerado pelo banco)
+      { campo: 'tecnox_cod', titulo: 'Código', largura: '80px', render: (v)=> v != null ? v : '—' },
       { campo: 'nome', titulo: 'Nome / Razão Social', largura: '260px' },
       { titulo: 'Status', largura: '110px', valor: (p)=> p, render: (p)=> pessoaStatusHtml(p) },
       { titulo: 'Classificação', largura: '200px', valor: (p)=> p, render: (p)=> badges(p) },
@@ -104,7 +106,7 @@ async function abrirFormPessoa(id, empresaId) {
   div.innerHTML = `
     <div style="background:#13151f;border:1px solid #2a4a6a;border-radius:12px;padding:20px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3 style="color:#60a5fa;font-size:0.95rem">${id ? '✏️ Editar pessoa' : '+ Nova pessoa'}</h3>
+        <h3 style="color:#60a5fa;font-size:0.95rem">${id ? '✏️ Editar pessoa' + (p?.tecnox_cod != null ? ' — código ' + p.tecnox_cod : '') : '+ Nova pessoa'}</h3>
         <button onclick="document.getElementById('form-pessoa').style.display='none'" style="background:transparent;border:none;color:#888;cursor:pointer;font-size:1.3rem">✕</button>
       </div>
       <div class="form-grid">

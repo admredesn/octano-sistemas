@@ -17,7 +17,7 @@ async function npListar() {
   const filtroCli = window._npFiltroCliente || '';
 
   const [cliRes, notasRes] = await Promise.all([
-    sb.from('oct_pessoas').select('id,nome').eq('empresa_id', eid).eq('ativo', true).order('nome'),
+    sb.from('oct_pessoas').select('id,nome,tecnox_cod').eq('empresa_id', eid).eq('ativo', true).order('nome'),
     (() => {
       let q = sb.from('oct_pdv_notas_prazo').select('*').eq('empresa_id', eid).order('registrado_em', { ascending: false });
       if (filtroCli) q = q.eq('cliente_id', filtroCli);
@@ -25,6 +25,7 @@ async function npListar() {
     })(),
   ]);
   const clientes = cliRes.data || [];
+  const _npCod = Object.fromEntries(clientes.filter(c => c.tecnox_cod != null).map(c => [c.id, c.tecnox_cod]));   // código do cliente (20/10/2026)
   const notas = notasRes.data || [];
 
   conteudo.innerHTML = `
@@ -35,7 +36,7 @@ async function npListar() {
           <label style="color:#888;font-size:0.78rem;margin-right:6px">Cliente</label>
           <select onchange="npSetFiltro(this.value)" style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
             <option value="">Todos</option>
-            ${clientes.map(c => `<option value="${c.id}" ${filtroCli === c.id ? 'selected' : ''}>${npEsc(c.nome)}</option>`).join('')}
+            ${clientes.map(c => `<option value="${c.id}" ${filtroCli === c.id ? 'selected' : ''}>${c.tecnox_cod != null ? c.tecnox_cod + ' · ' : ''}${npEsc(c.nome)}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -49,7 +50,7 @@ async function npListar() {
                 onclick="verFoto(this.dataset.foto, this.dataset.legenda)"
                 style="width:100%;height:160px;object-fit:cover;cursor:zoom-in;display:block" title="Ver comprovante">` : (n.auth_codigo ? npCartaoAssinatura(n, d) : '<div style="height:160px;background:#0b0d14;display:flex;align-items:center;justify-content:center;color:#555">sem foto</div>')}
               <div style="padding:10px">
-                <div style="color:#ddd;font-weight:500;font-size:0.86rem">${npEsc(n.cliente_nome) || '—'}</div>
+                <div style="color:#ddd;font-weight:500;font-size:0.86rem">${_npCod[n.cliente_id] != null ? '<span style="color:#93c5fd">' + _npCod[n.cliente_id] + '</span> · ' : ''}${npEsc(n.cliente_nome) || '—'}</div>
                 <div style="color:#9aa;font-size:0.76rem;margin-top:3px">${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
                 <div style="color:#4ade80;font-size:0.82rem;margin-top:3px">R$ ${Number(n.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                 ${n.numero_nfe ? `<div style="color:#666;font-size:0.72rem;margin-top:2px">NFC-e ${npEsc(n.numero_nfe)}</div>` : ''}

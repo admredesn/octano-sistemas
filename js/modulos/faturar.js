@@ -56,8 +56,9 @@ async function moduloFaturar() {
   window._fatF = window._fatF || _fatFVazio();
   // clientes do posto: o filtro de cliente vale para as três abas
   if (!window._fatClientes || window._fatClientes.eid !== eid) {
-    const r = await _fatTodas(() => sb.from("oct_pessoas").select("id,nome").eq("empresa_id", eid).order("nome").order("id"));
-    window._fatClientes = { eid, lista: r.data || [] };
+    const r = await _fatTodas(() => sb.from("oct_pessoas").select("id,nome,tecnox_cod").eq("empresa_id", eid).order("nome").order("id"));
+    // código do cliente (20/10/2026): o do TecnoX para quem veio de lá, 10001+ para cliente novo
+    window._fatClientes = { eid, lista: r.data || [], cod: Object.fromEntries((r.data || []).filter(p => p.tecnox_cod != null).map(p => [p.id, p.tecnox_cod])) };
   }
   conteudo.innerHTML = `
     ${_fatEstilo()}
@@ -203,6 +204,9 @@ function _fatIsoLocal(v) {
   if (isNaN(d)) return "";
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
+// código do cliente na frente do nome, como no TecnoX ("16 · UNIVERSIDADE…")
+function _fatCod(id) { const m = (window._fatClientes || {}).cod || {}; return id && m[id] != null ? m[id] : null; }
+function _fatCodHtml(id) { const c = _fatCod(id); return c != null ? `<span style="color:#93c5fd;font-variant-numeric:tabular-nums">${c}</span> · ` : ""; }
 function _fatPainelRender() {
   const el = document.getElementById("fat-filtros-c");
   if (!el) return;
@@ -215,7 +219,7 @@ function _fatPainelRender() {
       <span class="fat-c-g">Cliente:
         <select class="fat-sel" id="fat-c-cli" onchange="fatSetF('cli',this.value)" style="max-width:360px">
           <option value="">Todos os clientes</option>
-          ${cli.map(p => `<option value="${p.id}" ${F.cli === p.id ? "selected" : ""}>${_fatEsc(p.nome)}</option>`).join("")}
+          ${cli.map(p => `<option value="${p.id}" ${F.cli === p.id ? "selected" : ""}>${p.tecnox_cod != null ? p.tecnox_cod + " · " : ""}${_fatEsc(p.nome)}</option>`).join("")}
         </select></span>
       <input class="fat-inp" id="fat-c-busca" type="search" autocomplete="off" placeholder="🔍 nome, NFC-e ou nº da fatura"
         value="${_fatEsc(F.busca || "")}" oninput="fatSetFBusca(this.value)" style="width:230px">
@@ -331,7 +335,7 @@ function _fatRenderTitulos(manterRolagem) {
       if (F.vde && (!ven || ven < F.vde)) return false;
       if (F.vate && (!ven || ven > F.vate)) return false;
     }
-    if (F.busca) { const b = _fatNorm(F.busca).trim(); const alvo = _fatNorm((t.cliente_nome || "") + " " + (t.numero_nfe || "")); if (b && alvo.indexOf(b) < 0) return false; }
+    if (F.busca) { const b = _fatNorm(F.busca).trim(); const alvo = _fatNorm((t.cliente_nome || "") + " " + (t.numero_nfe || "") + " " + (_fatCod(t.cliente_id) ?? "")); if (b && alvo.indexOf(b) < 0) return false; }
     return true;
   });
   titulos = _fatOrdenar(titulos, window._fatOrdT, _FAT_ORD_T);
@@ -359,7 +363,7 @@ function _fatRenderTitulos(manterRolagem) {
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
     <td class="fat-td" style="color:${vencCor}">${venc ? _fatData(venc) : "—"}</td>
     <td class="fat-td" style="text-align:center">${atrTxt}</td>
-    <td class="fat-td">${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}${_fatEhSaldoAnt(t)
+    <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}${_fatEhSaldoAnt(t)
       ? ` <span class="fat-sa" title="${_fatEsc(t.observacao)} — já faturado/cobrado pelo TecnoX; o espelho dá baixa quando o cliente pagar lá">saldo anterior · TecnoX</span>` : ""}</td>
     <td class="fat-td">${_fatEsc(t.numero_nfe) || "—"}</td>
     <td class="fat-td">${_fatEsc(t.forma_nome) || "Prazo"}</td>
@@ -2963,7 +2967,7 @@ function _fatVisiveisF() {
   const entre = (v, de, ate) => (!de || (v && v >= de)) && (!ate || (v && v <= ate));
   const liq = window._fatAba === "liquidadas";
   return lista.filter(f => {
-    if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "") +
+    if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "") + " " + (_fatCod(f.cliente_id) ?? "") +
         (f.parcela_de ? " " + (f._origNum ?? "") + "/" + f.parcela_num : "")).includes(termo)) return false;
     if (F.cli && f.cliente_id !== F.cli) return false;
     if (!entre(_fatIsoLocal(f.emissao || f.criado_em), F.de, F.ate)) return false;
@@ -3545,7 +3549,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
     <td class="fat-td">${fatr.numero ?? "—"}${fatr.parcela_de ? ` <span class="fat-parc" title="Parcela ${fatr.parcela_num} de ${fatr.parcela_total} da fatura ${fatr._origNum ?? ""}">${fatr._origNum ?? "?"}/${fatr.parcela_num}</span>` : ""}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
-    <td class="fat-td">${_fatEsc(fatr.cliente_nome) || "—"}</td>
+    <td class="fat-td">${_fatCodHtml(fatr.cliente_id)}${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
     <td class="fat-td">${_fatData(fatr.vencimento) || "—"}</td>
     ${status === "liquidada" ? `<td class="fat-td" style="color:#4ade80">${_fatData(fatr.liquidado_em) || "—"}</td>` : ""}
