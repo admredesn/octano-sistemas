@@ -160,7 +160,8 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Cashback</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cashback" type="checkbox" ${p?.cashback_ativo?'checked':''} style="width:auto" /> Recebe cashback (R$0,05/litro via Pix)</label></div>
         <div class="form-group"><label>Nota a prazo <span style="font-size:0.72rem;color:#888">(libera a compra na conta — inclusive pelo app)</span></label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-prazo" type="checkbox" ${p?.aceita_nota_prazo?'checked':''} style="width:auto" /> Aceita nota a prazo</label></div>
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
-        <div class="form-group"><label>Prazo de pagamento (dias) <span style="font-size:0.72rem;color:#888">(vencimento proposto ao faturar)</span></label><input id="fpe-prazo-dias" type="number" step="1" min="0" max="365" value="${p?.prazo_dias ?? ''}" placeholder="ex.: 10" /></div>
+        <div class="form-group"><label>Prazo de pagamento (dias) <span style="font-size:0.72rem;color:#888">(vencimento proposto ao faturar)</span></label><input id="fpe-prazo-dias" type="number" step="1" min="0" max="365" value="${p?.prazo_dias ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
+        <div class="form-group"><label>Vencimento em dia fixo do mês <span style="font-size:0.72rem;color:#888">(preenchido, vale no lugar do prazo; sábado, domingo ou feriado = dia útil anterior)</span></label><input id="fpe-venc-dia" type="number" step="1" min="1" max="31" value="${p?.venc_dia ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
         <!-- TABELA DE PREÇO no cadastro (modelo TecnoX 17/08): o vínculo
              cliente→negociação é escolhido AQUI, não dentro da tabela. -->
@@ -406,6 +407,12 @@ function _pessoaFaAtualizar() {
   if (!prox) { el.innerHTML = '<span style="color:#f87171">Escolha o dia do fechamento.</span>'; return; }
   const prazoTxt = document.getElementById('fpe-prazo-dias')?.value;
   const prazo = prazoTxt === '' || prazoTxt == null ? 7 : parseInt(prazoTxt, 10) || 0;
+  // dia fixo do mês (20/10/2026): a MESMA conta do núcleo e do Faturar (fatVencDiaFixo, em faturar.js)
+  const vencDia = parseInt(document.getElementById('fpe-venc-dia')?.value, 10);
+  const eid = (typeof empresaAtiva === 'function') ? empresaAtiva() : null;
+  const ferLoc = (window._fatFerLocais || {})[eid];
+  if (vencDia >= 1 && vencDia <= 31 && ferLoc == null && typeof fatFeriadosLocais === 'function') fatFeriadosLocais(eid).then(() => _pessoaFaAtualizar());
+  const vencFixo = vencDia >= 1 && vencDia <= 31 && typeof fatVencDiaFixo === 'function' ? fatVencDiaFixo(prox, vencDia, ferLoc || '') : null;
   const avisos = [];
   const falta = [['fpe-doc', 'CPF/CNPJ'], ['fpe-end', 'endereço'], ['fpe-bairro', 'bairro'], ['fpe-cidade', 'cidade'], ['fpe-cep', 'CEP'], ['fpe-uf', 'UF']]
     .filter(([i]) => !(document.getElementById(i)?.value || '').trim()).map(([, r]) => r);
@@ -414,7 +421,8 @@ function _pessoaFaAtualizar() {
   const temContato = ['fpe-email', 'fpe-whatsapp', 'fpe-tel', 'fpe-fat-emails', 'fpe-fat-zaps'].some(i => (document.getElementById(i)?.value || '').trim());
   if (envia && !temContato) avisos.push('não há e-mail nem WhatsApp no cadastro para enviar');
   el.innerHTML = `<span style="color:#7ee2a0">Próximo fechamento: <b>${_faBr(prox)}</b> — títulos até ${_faBr(_faMais(prox, -1))},
-    vencimento ${_faBr(_faMais(prox, prazo))}${prazoTxt === '' || prazoTxt == null ? ' (7 dias; o prazo do cliente está vazio)' : ''}.</span>
+    vencimento ${vencFixo ? `<b>${_faBr(vencFixo)}</b> (todo dia ${vencDia}; fim de semana ou feriado = dia útil anterior)`
+      : _faBr(_faMais(prox, prazo)) + (prazoTxt === '' || prazoTxt == null ? ' (7 dias; o prazo do cliente está vazio)' : '')}.</span>
     ${envia ? '<br><span style="color:#9aa">Envia sozinho quando os documentos ficarem prontos.</span>' : '<br><span style="color:#9aa">Não envia sozinho: você confere e envia pelo Faturar.</span>'}
     ${avisos.map(a => `<br><span style="color:#f0b45c">⚠ ${a}.</span>`).join('')}`;
 }
@@ -788,6 +796,8 @@ async function salvarPessoa(id, empresaId) {
     limite_nota_prazo: parseFloat(document.getElementById('fpe-prazo-limite')?.value) || null,
     // dias, nao data: "10 dias da emissao" vale para toda fatura que vier
     prazo_dias: (document.getElementById('fpe-prazo-dias')?.value || '') === '' ? null : parseInt(document.getElementById('fpe-prazo-dias').value, 10),
+    // dia fixo do vencimento (20/10/2026): vale no lugar do prazo — fechamento automático e "Gerar fatura"
+    venc_dia: (document.getElementById('fpe-venc-dia')?.value || '') === '' ? null : parseInt(document.getElementById('fpe-venc-dia').value, 10),
     credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
     // exigências da venda a prazo (o PDV as respeita desde sempre; a tela é nova)
     exige_placa:          !!document.getElementById('fpe-ex-placa')?.checked,

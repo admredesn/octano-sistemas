@@ -200,6 +200,9 @@ const PARAM_DEFS = [
         desc: 'Cobrada uma vez sobre o valor da fatura vencida. Ex.: 2 para 2%. Em branco = sem multa.' },
       { chave: 'cobranca_juros_mes_pct', tipo: 'texto', rot: 'Juros por atraso (% ao mês)', pad: '', dica: '1', validar: 'percentual',
         desc: 'Proporcional aos dias de atraso (1% ao mês = 0,033% ao dia). Ex.: 1 para 1% ao mês. Em branco = sem juros.' },
+      // 20/10/2026 (Ronan: "dia útil conta feriado também") — vencimento em dia fixo do mês (cadastro do cliente)
+      { chave: 'feriados_locais', tipo: 'texto', rot: 'Feriados municipais (para o vencimento)', pad: '', dica: '08/12; 21/09',
+        desc: 'O vencimento em dia fixo (cadastro do cliente) que cair em sábado, domingo ou feriado passa para o dia útil anterior. Os feriados nacionais já contam (inclusive Carnaval, Sexta-feira Santa e Corpus Christi); aqui só os do município, em dd/mm separados por ponto e vírgula.' },
     ],
   },
   // (29/09/2026) o grupo '🎁 Cashback' saiu daqui, mas a chave 'cashback' de

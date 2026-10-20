@@ -2189,6 +2189,56 @@ function _fatDiasEntre(isoA, isoB) {
   return Math.round((new Date(b[0], b[1] - 1, b[2]) - new Date(a[0], a[1] - 1, a[2])) / 86400000);
 }
 
+// ---------- VENCIMENTO EM DIA FIXO DO MÊS (20/10/2026) ----------
+// Ronan: "fechamento mensal com vencimento no dia 10, caso o dia 10 caia em um final de semana o pagamento deve
+// ser feito no dia útil anterior" — e "dia útil conta feriado também". Expetaculo dia 15; Jessica, Cristiane e
+// Mariana dia 20. O dia fica em oct_pessoas.venc_dia; vazio = prazo em dias (prazo_dias), como sempre.
+// A MESMA regra está no núcleo (nucleo/api/faturamento_auto.py, vencimento_dia_fixo): mudar os dois juntos.
+// Feriados: os nacionais em que o banco não abre (com Carnaval, Sexta-feira Santa e Corpus Christi) + os do
+// posto em Parâmetros › Cobrança › "Feriados municipais" (dd/mm separados por ;).
+function _fatIsoDe(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function _fatPascoa(ano) {   // algoritmo de Meeus/Jones/Butcher
+  const a = ano % 19, b = Math.floor(ano / 100), c = ano % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  return new Date(ano, Math.floor((h + l - 7 * m + 114) / 31) - 1, ((h + l - 7 * m + 114) % 31) + 1);
+}
+function fatFeriados(ano, extras) {
+  const s = new Set(["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"].map(md => ano + "-" + md));
+  const p = _fatPascoa(ano);
+  [-48, -47, -2, 60].forEach(n => s.add(_fatIsoDe(new Date(p.getFullYear(), p.getMonth(), p.getDate() + n))));
+  String(extras || "").split(/[;,\s]+/).forEach(x => {
+    const m = /^(\d{1,2})\/(\d{1,2})$/.exec(x.trim());
+    if (m) s.add(ano + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0"));
+  });
+  return s;
+}
+// primeiro "dia X" DEPOIS de baseIso, recuado ao dia útil anterior (sábado, domingo, feriado)
+function fatVencDiaFixo(baseIso, dia, extras) {
+  const [a, m] = String(baseIso).split("-").map(Number);
+  for (let k = 0; k < 3; k++) {
+    const ano = a + Math.floor((m - 1 + k) / 12), mes = (m - 1 + k) % 12;
+    const d = new Date(ano, mes, Math.min(Math.max(Number(dia) || 1, 1), new Date(ano, mes + 1, 0).getDate()));
+    const fer = new Set([...fatFeriados(ano - 1, extras), ...fatFeriados(ano, extras)]);
+    while (d.getDay() === 0 || d.getDay() === 6 || fer.has(_fatIsoDe(d))) d.setDate(d.getDate() - 1);
+    if (_fatIsoDe(d) > baseIso) return _fatIsoDe(d);
+  }
+  return null;
+}
+// feriados municipais do posto (oct_parametros.feriados_locais), lidos uma vez por empresa
+window._fatFerLocais = window._fatFerLocais || {};
+async function fatFeriadosLocais(eid) {
+  if (!eid) return "";
+  if (window._fatFerLocais[eid] != null) return window._fatFerLocais[eid];
+  try {
+    const { data } = await sb.from("oct_parametros").select("valor").eq("empresa_id", eid).eq("chave", "feriados_locais").maybeSingle();
+    window._fatFerLocais[eid] = (data && data.valor) || "";
+  } catch (e) { return ""; }
+  return window._fatFerLocais[eid];
+}
+
 async function fatGerarFatura() {
   const sel = [...window._fatSel];
   if (!sel.length) { alert("Selecione ao menos um título."); return; }
@@ -2207,19 +2257,24 @@ async function fatGerarFatura() {
 
   // prazo do cadastro. Le' a pessoa inteira de proposito: se a coluna
   // prazo_dias ainda nao existir (SQL nao rodado), isso nao quebra a geracao.
-  let prazo = null, cliNome = titulos[0].cliente_nome || "";
+  let prazo = null, vencDia = null, cliNome = titulos[0].cliente_nome || "";
   if (cliId) {
     const { data: p } = await sb.from("oct_pessoas").select("*").eq("id", cliId).maybeSingle();
     if (p) {
       if (p.prazo_dias != null && p.prazo_dias !== "") prazo = Number(p.prazo_dias);
+      if (Number(p.venc_dia) >= 1 && Number(p.venc_dia) <= 31) vencDia = Number(p.venc_dia);
       cliNome = p.nome || cliNome;
     }
   }
   const hoje = _fatHojeIso();
-  const venc = (prazo != null && !isNaN(prazo)) ? _fatSomaDias(hoje, prazo) : hoje;
+  // dia fixo do cadastro (20/10/2026) vale no lugar do prazo em dias
+  const vencFixo = vencDia ? fatVencDiaFixo(hoje, vencDia, await fatFeriadosLocais((typeof empresaAtiva === "function") ? empresaAtiva() : null)) : null;
+  const venc = vencFixo || ((prazo != null && !isNaN(prazo)) ? _fatSomaDias(hoje, prazo) : hoje);
   window._fatNovaFat = { sel, titulos, total, cliId, cliNome, prazo, hoje };
 
-  const origem = (prazo != null && !isNaN(prazo))
+  const origem = vencFixo
+    ? `<span style="color:#7ee2a0">vencimento todo dia ${vencDia} (cadastro de ${_fatEsc(cliNome)}; em fim de semana ou feriado, o dia útil anterior)</span>`
+    : (prazo != null && !isNaN(prazo))
     ? `<span style="color:#7ee2a0">prazo de ${prazo} dia(s) do cadastro de ${_fatEsc(cliNome)}</span>`
     : `<span style="color:#f0b45c">${_fatEsc(cliNome) || "Este cliente"} não tem prazo cadastrado — proposto o dia de hoje. Ajuste abaixo.</span>`;
 
@@ -2238,7 +2293,7 @@ async function fatGerarFatura() {
         style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff;font-size:1.05rem">
       <p id="fgf-dica" style="font-size:0.78rem;margin:6px 0 0">${origem}</p>
       <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:0.8rem;color:#9aa;cursor:pointer">
-        <input type="checkbox" id="fgf-salvar" ${prazo == null ? "checked" : ""} style="width:auto">
+        <input type="checkbox" id="fgf-salvar" ${prazo == null && !vencFixo ? "checked" : ""} style="width:auto">
         <span id="fgf-salvar-txt">Gravar este prazo no cadastro do cliente</span></label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
         ${_fatAjCampo("fgf-desc", "Desconto", "#4ade80")}
