@@ -363,7 +363,8 @@ function _fatRenderTitulos(manterRolagem) {
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
     <td class="fat-td" style="color:${vencCor}">${venc ? _fatData(venc) : "—"}</td>
     <td class="fat-td" style="text-align:center">${atrTxt}</td>
-    <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}${_fatEhSaldoAnt(t)
+    <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "<span style='color:#f59e0b'>Sem cliente</span>"}${t.status === "aberto" && !t.fatura_id
+      ? ` <span title="Trocar o cliente deste título (lançado no nome errado no caixa)" onclick="event.stopPropagation();fatTrocarCliente('${t.id}')" style="cursor:pointer;color:#7cc4ff;margin-left:4px">✎</span>` : ""}${_fatEhSaldoAnt(t)
       ? ` <span class="fat-sa" title="${_fatEsc(t.observacao)} — já faturado/cobrado pelo TecnoX; o espelho dá baixa quando o cliente pagar lá">saldo anterior · TecnoX</span>` : ""}</td>
     <td class="fat-td">${_fatEsc(t.numero_nfe) || "—"}</td>
     <td class="fat-td">${_fatEsc(t.forma_nome) || "Prazo"}</td>
@@ -2067,9 +2068,95 @@ async function fatVerTitulo(id) {
       </table>
       <div style="display:flex;gap:10px;margin-top:14px">
         <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Fechar</button>
+        ${t.status === "aberto" && !t.fatura_id ? `<button class="fat-btn" onclick="fatTrocarCliente('${id}')" style="flex:1">👤 Trocar cliente</button>` : ""}
         ${t.status !== "pago" ? `<button class="fat-btn azul" onclick="_fatFechaModal();fatLiquidarTitulo('${id}')" style="flex:1">💰 Receber</button>` : ""}
       </div>
     </div>`);
+}
+
+// ---------- TROCAR O CLIENTE DO TÍTULO (21/10/2026) ----------
+// Ronan: "preciso que em faturamento tenha a opção de editar o responsável pelo título, caso no caixa tenha colocado em
+// nome da pessoa errada". Só título EM ABERTO e FORA de fatura (na fatura ele já foi cobrado do outro: tire da fatura
+// antes) e sem recebimento (a baixa ficaria no nome errado). Muda cliente_id/cliente_nome do título; o cupom fiscal já
+// emitido não muda (documento fiscal). A troca fica registrada na observação do título: de quem, para quem, quem fez,
+// quando e por quê.
+async function fatTrocarCliente(id) {
+  if (!podeOuAvisa("faturar.alterar_fatura")) return;
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  if (t.status !== "aberto" || t.fatura_id) { alert("Só dá para trocar o cliente de título em aberto que ainda não está em fatura."); return; }
+  const { data: rec } = await sb.from("oct_recebimentos_titulo").select("id").eq("nota_prazo_id", id).limit(1);
+  if ((rec || []).length) { alert("Este título já tem recebimento lançado. Exclua o recebimento antes de trocar o cliente (senão a baixa fica no nome errado)."); return; }
+  window._fatTc = null;
+  const inp = 'style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"';
+  _fatModal(`
+    <div style="background:#13151f;color:#f97316;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>👤 Trocar o cliente do título</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0;font-size:0.85rem">
+      <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 12px;margin-bottom:12px;line-height:1.6">
+        NFC-e <b>${_fatEsc(t.numero_nfe) || "—"}</b> · ${_fatData(t.registrado_em)} · <b style="color:#f59e0b">R$ ${_fatMoney(t.valor)}</b><br>
+        Hoje está em nome de: <b>${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "—"}</b></div>
+      <label style="color:#9aa;font-size:0.76rem">Passar para o cliente</label>
+      <input id="ftc-busca" placeholder="Buscar por nome, código ou CPF/CNPJ..." oninput="_fatTcBuscar(this.value)" ${inp}>
+      <div id="ftc-lista" style="max-height:180px;overflow:auto;margin-top:4px"></div>
+      <div id="ftc-escolhido" style="margin-top:6px;color:#7ee2a0;font-size:0.82rem"></div>
+      <label style="color:#9aa;font-size:0.76rem;display:block;margin-top:10px">Motivo</label>
+      <input id="ftc-motivo" placeholder="ex.: frentista lançou no nome do pai" ${inp}>
+      <div id="ftc-msg" style="color:#f87171;font-size:0.78rem;min-height:16px;margin-top:8px"></div>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="fat-btn" onclick="_fatFechaModal()" style="flex:1">Cancelar</button>
+        <button class="fat-btn azul" onclick="fatTrocarClienteOk('${id}')" style="flex:2">✔ Trocar cliente</button>
+      </div>
+      <p style="color:#778;font-size:0.72rem;margin-top:8px">O cupom fiscal já emitido não muda. A troca fica anotada na observação do título.</p>
+    </div>`);
+  setTimeout(() => document.getElementById("ftc-busca")?.focus(), 60);
+}
+
+let _fatTcT = null;
+function _fatTcBuscar(termo) {
+  clearTimeout(_fatTcT);
+  _fatTcT = setTimeout(async () => {
+    const el = document.getElementById("ftc-lista"); if (!el) return;
+    termo = String(termo || "").trim().replace(/[,()]/g, " ");
+    if (termo.length < 2) { el.innerHTML = ""; return; }
+    const ehCod = /^\d{1,6}$/.test(termo);
+    let q = sb.from("oct_pessoas").select("id,nome,documento,tecnox_cod,credito_bloqueado,ativo").eq("empresa_id", window._fatEid).eq("ativo", true);
+    q = ehCod ? q.or(`tecnox_cod.eq.${termo},documento.ilike.%${termo}%`) : q.or(`nome.ilike.%${termo}%,documento.ilike.%${termo}%`);
+    const { data } = await q.order("nome").limit(25);
+    el.innerHTML = (data || []).map(p => `<div onclick="_fatTcEscolher('${p.id}', ${JSON.stringify(String(p.nome || "")).replace(/"/g, "&quot;")})"
+        style="padding:6px 8px;border-bottom:1px solid #1c2130;cursor:pointer;font-size:0.82rem"
+        onmouseover="this.style.background='#141826'" onmouseout="this.style.background='transparent'">
+        ${p.tecnox_cod ? _fatEsc(p.tecnox_cod) + " · " : ""}${_fatEsc(p.nome)} <span style="color:#667">${_fatEsc(p.documento || "")}</span>
+        ${p.credito_bloqueado ? '<span style="color:#f87171;font-size:0.72rem"> · crédito bloqueado</span>' : ""}</div>`).join("")
+      || '<div style="padding:6px 8px;color:#667;font-size:0.8rem">Nenhum cliente.</div>';
+  }, 250);
+}
+function _fatTcEscolher(id, nome) {
+  window._fatTc = { id, nome };
+  const el = document.getElementById("ftc-escolhido"); if (el) el.textContent = "✔ " + nome;
+  const l = document.getElementById("ftc-lista"); if (l) l.innerHTML = "";
+}
+
+async function fatTrocarClienteOk(id) {
+  if (!podeOuAvisa("faturar.alterar_fatura")) return;
+  const t = (window._fatTitulos || []).find(x => x.id === id); if (!t) return;
+  const msg = document.getElementById("ftc-msg");
+  const novo = window._fatTc;
+  const motivo = (document.getElementById("ftc-motivo")?.value || "").trim();
+  if (!novo || !novo.id) { msg.textContent = "Escolha o cliente certo."; return; }
+  if (novo.id === t.cliente_id) { msg.textContent = "É o mesmo cliente de hoje."; return; }
+  if (!motivo) { msg.textContent = "Informe o motivo."; return; }
+  const quem = await _fatUsuario();
+  const agora = new Date();
+  const quando = agora.toLocaleDateString("pt-BR") + " " + agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const nota = `Cliente trocado em ${quando} por ${quem}: de ${t.cliente_nome || "—"} para ${novo.nome} (${motivo})`;
+  const { data, error } = await sb.from("oct_pdv_notas_prazo")
+    .update({ cliente_id: novo.id, cliente_nome: novo.nome, observacao: t.observacao ? t.observacao + " | " + nota : nota })
+    .eq("id", id).eq("status", "aberto").is("fatura_id", null).select("id");
+  if (error) { msg.textContent = "Erro: " + error.message; return; }
+  if (!data || !data.length) { msg.textContent = "Não troquei: o título mudou (entrou em fatura ou foi recebido). Atualize a lista."; return; }
+  _fatFechaModal();
+  alert(`Título da NFC-e ${t.numero_nfe || ""} passou para ${novo.nome}.`);
+  if (typeof fatListarTitulos === "function") fatListarTitulos();
 }
 
 // ---------- PARCELAR título (divide o saldo em N parcelas) ----------
