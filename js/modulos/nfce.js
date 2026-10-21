@@ -135,7 +135,9 @@ async function nfceFilaCarregar() {
   try {
     const r = await sb.from('oct_fila_transmissao').select('*')
       .eq('empresa_id', _nfceEmpresaId).eq('status', 'fila')
-      .order('atualizado_em', { ascending: false }).limit(500);
+      // 21/10/2026: ordenava por atualizado_em (o núcleo regrava a vitrine toda a cada ciclo) com limite 500 — com milhares
+      // de itens antigos da época do TecnoX, o Pix de 280,02 do AC (20/10) ficava fora. Agora os MAIS RECENTES primeiro.
+      .order('ocorrido_em', { ascending: false, nullsFirst: false }).limit(500);
     if (r.error) erro = r.error.message; else fila = r.data || [];
     // ordem: data/hora do ABASTECIMENTO, do mais recente para o mais antigo
     fila.sort((x, y) => String(y.ocorrido_em || y.criado_em || '').localeCompare(String(x.ocorrido_em || x.criado_em || '')));
@@ -148,6 +150,9 @@ async function nfceFilaCarregar() {
     const vf = Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0);
     const dh = v => {
       if (!v) return '<span style="color:#555">—</span>';
+      // ocorrido_em/recebido_em da vitrine são a HORA LOCAL do posto gravada como +00:00: converter tirava 3 h (19:14 → 16:14)
+      const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d:\d\d)/.exec(String(v));
+      if (m && /\+00:?00$|Z$/.test(String(v))) return `${m[3]}/${m[2]}, ${m[4]}`;
       const d = new Date(v);
       return isNaN(d) ? String(v).slice(0, 16).replace('T', ' ')
         : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
