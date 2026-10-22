@@ -396,7 +396,13 @@ async function manifConsultarSefaz() {
           // completa campos que faltavam, sem rebaixar status ja avancado
           const patch = {};
           if (!existente.numero && n.numero) patch.numero = n.numero;
-          if (!existente.xml && n.xml) patch.xml = n.xml;
+          // RESUMO -> COMPLETO (21/10/2026, NF 2550 KR do Florestal): depois da ciencia a SEFAZ manda o XML completo
+          // (nfeProc, com <prod>) para a chave que ja' estava aqui como resumo. Antes so' se preenchia o xml VAZIO e o
+          // completo era jogado fora; como o NSU avanca, ele nao volta na proxima consulta. Mesma regra do robo
+          // (octano-sefaz sefaz/dfe_auto.py _salvar_nota).
+          if (n.xml && /<prod/.test(n.xml) && !/<prod/.test(existente.xml || '')) {
+            patch.xml = n.xml; patch.tipo = 'nfe_completa'; if (n.schema) patch.schema = n.schema;
+          } else if (!existente.xml && n.xml) patch.xml = n.xml;
           if (!existente.emissao && n.emissao) patch.emissao = n.emissao;
           if (!existente.emitente && n.emitente) patch.emitente = n.emitente;
           if ((existente.valor==null) && n.valor) patch.valor = parseFloat(n.valor);
