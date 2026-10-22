@@ -139,8 +139,16 @@ async function _biRender() {
     .then(r => r.data || [], () => []);
   const filaProm = umaJanela ? fFila(iniJanela, null) : duasJanelas(fFila);
   const pistaProm = umaJanela ? fPista(iniJanela, null) : duasJanelas(fPista);
+  // VENDA PELO CUPOM (22/10/2026, Ronan: "todos tem que seguir o cupom, porque tem variação de
+  // preço no cupom, diferente do que sai na bomba"): por dia, o que os cupons COBRARAM a mais/menos
+  // que a bomba (acréscimo de tabela a prazo, desconto). Sem a view no banco: sem ajuste (como antes).
+  const cupomProm = _biTudo(() => sb.from('oct_v_dia_venda_cupom')
+      .select('empresa_id,dia,comb_cobrado,comb_bomba')
+      .gte('dia', iniJanela).lte('dia', somaDia(per.fim > hoje ? per.fim : hoje, 1))
+      .order('dia').order('empresa_id'))
+    .catch(() => []);
 
-  const [empR, cpR, cpMesR, fixasR, npR, fatR, tqR, prR, fila, pista, bicos] = await Promise.all([
+  const [empR, cpR, cpMesR, fixasR, npR, fatR, tqR, prR, fila, pista, bicos, cupomDia] = await Promise.all([
     sb.from('oct_empresas').select('id,nome').eq('ativo', true),
     sb.from('oct_contas_pagar').select('empresa_id,descricao,valor,vencimento,status,categoria').eq('status', 'aberto').order('vencimento'),
     sb.from('oct_contas_pagar').select('empresa_id,valor,competencia').gte('competencia', per.ini).lte('competencia', per.fim),
@@ -158,6 +166,7 @@ async function _biRender() {
     filaProm,
     pistaProm,
     bicosProm,
+    cupomProm,
   ]);
   for (const r of [empR, cpR, cpMesR, fatR, tqR, prR]) if (r.error) throw new Error(r.error.message);
 
@@ -253,6 +262,22 @@ async function _biRender() {
            || custoBico[String(a.bico)] || 0;
     if (!(c > 0) || !(L > 0)) { lucSemCusto[a.empresa_id] = (lucSemCusto[a.empresa_id] || 0) + val; return; }
     lucPer[a.empresa_id] = (lucPer[a.empresa_id] || 0) + (val - c * L);
+  });
+  // VENDA PELO CUPOM: o combustível que virou cupom vale o que o cupom cobrou; o que não virou
+  // cupom segue pelo valor da bomba (acima). Ajuste = cobrado − bomba dos cupons do dia +
+  // (acréscimo − desconto) da fila ainda não transmitida. Sem custo a mais: entra inteiro no lucro.
+  const _ajVenda = (e, dt, aj) => {
+    if (!dt || Math.abs(aj) < 0.005) return;
+    somaVenda(e, dt, aj);
+    if (dt >= per.ini && dt <= per.fim) lucPer[e] = (lucPer[e] || 0) + aj;
+  };
+  (cupomDia || []).forEach(c => _ajVenda(c.empresa_id, String(c.dia || '').slice(0, 10),
+    Number(c.comb_cobrado || 0) - Number(c.comb_bomba || 0)));
+  fila.forEach(f => {
+    if ((f.status || 'fila') !== 'fila') return;                       // transmitido = já está no cupom
+    if (f.bico === null || f.bico === undefined || f.bico === '') return;  // loja: vai abaixo
+    _ajVenda(f.empresa_id, (f.ocorrido_em || f.criado_em || '').slice(0, 10),
+      Number(f.acrescimo || 0) - Number(f.desconto || 0));
   });
   // produtos de loja: fila (item sem bico)
   fila.forEach(f => {

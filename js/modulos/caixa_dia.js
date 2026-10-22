@@ -148,7 +148,7 @@ async function _cdCarregar(dataSel) {
   const iniVenda = [ini, _cdSoma(hoje, -30)].sort()[0];
   const emp = (await sb.from('oct_empresas').select('id,nome,nome_fantasia,cnpj,ativo').eq('ativo', true)).data || [];
   const ids = emp.map(e => e.id);
-  const [vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig] = await Promise.all([
+  const [vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig, cupomDia, filaAjuste] = await Promise.all([
     _biTudo(() => sb.from('oct_pdv_vendas').select('empresa_id,status,valor_total,pagamentos,data_venda')
       .in('empresa_id', ids).gte('data_venda', _cdIniUtc(iniVenda)).order('data_venda').order('id')),
     _biTudo(() => sb.from('oct_banco_movimentos').select('empresa_id,data,tipo,valor,descricao,info')
@@ -178,8 +178,15 @@ async function _cdCarregar(dataSel) {
     _biTudo(() => sb.from('oct_requisicoes_compra').select('id,empresa_id,numero,fornecedor_id,fornecedor_nome,categoria,valor_total,vencimento_previsto,previsao_chegada,status,criado_em')
       .in('empresa_id', ids).in('status', ['pedida', 'parcial', 'recebida', 'divergente']).order('id')).catch(() => []),
     _biTudo(() => sb.from('oct_contas_pagar').select('requisicao_id').not('requisicao_id', 'is', null).order('id')).catch(() => []),
+    // VENDA PELO CUPOM (22/10/2026, Ronan: "todos tem que seguir o cupom, porque tem variação de preço no
+    // cupom, diferente do que sai na bomba"): por dia, o que os cupons cobraram a mais/menos que a bomba
+    // (acréscimo de tabela a prazo, desconto) + o mesmo da fila ainda não transmitida. Sem a view: sem ajuste.
+    _biTudo(() => sb.from('oct_v_dia_venda_cupom').select('empresa_id,dia,comb_cobrado,comb_bomba')
+      .in('empresa_id', ids).gte('dia', iniVenda).order('dia').order('empresa_id')).catch(() => []),
+    _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,acrescimo,desconto,ocorrido_em')
+      .in('empresa_id', ids).eq('status', 'fila').not('bico', 'is', null).gte('ocorrido_em', iniVenda + 'T00:00:00').order('id')).catch(() => []),
   ]);
-  return { hoje, ehHoje, ini, dataSel, emp, vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig: new Set(reqLig.map(r => r.requisicao_id)) };
+  return { hoje, ehHoje, ini, dataSel, emp, vendas, movs, saldos, notasAb, fatAb, fatLiq, notasPagas, pagar, fila, pista, loja, maq, notasEmit, reqs, reqLig: new Set(reqLig.map(r => r.requisicao_id)), cupomDia, filaAjuste };
 }
 
 // monta a série de dias de UM posto
@@ -196,6 +203,14 @@ function _cdSeriePosto(D, e) {
   // ---- venda por dia ----
   const total = {}, add = (o, d, k, v) => { const x = (o[d] = o[d] || {}); x[k] = (x[k] || 0) + v; };
   D.pista.forEach(a => { if (a.empresa_id === eid) add(total, String(a.data_abast).slice(0, 10), 't', Number(a.valor_total || 0)); });
+  // combustível que virou cupom vale o que o cupom cobrou: + (cobrado − bomba) dos cupons e (acréscimo − desconto)
+  // da fila; ocorrido_em da fila é hora LOCAL com +00:00 falso (igual ao data_abast): o dia é o texto.
+  // Só em dia COM pista: dia sem pista (concentrador fora) tem venda 0 e fica fora da média da previsão —
+  // com só o ajuste ele viraria uma "venda" de poucos reais e derrubaria a média.
+  const comPista = new Set(Object.keys(total));
+  const addAj = (d, v) => { if (comPista.has(d) && Math.abs(v) >= 0.005) add(total, d, 't', v); };
+  (D.cupomDia || []).forEach(c => { if (c.empresa_id === eid) addAj(String(c.dia || '').slice(0, 10), Number(c.comb_cobrado || 0) - Number(c.comb_bomba || 0)); });
+  (D.filaAjuste || []).forEach(f => { if (f.empresa_id === eid) addAj(String(f.ocorrido_em || '').slice(0, 10), Number(f.acrescimo || 0) - Number(f.desconto || 0)); });
   D.loja.forEach(f => { if (f.empresa_id === eid && f.status !== 'cancelado' && f.status !== 'removido')
     add(total, _cdLocal(f.ocorrido_em), 't', Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0)); });
   // maquininha: o mesmo pagamento chega pelo e-mail (na hora) e pelo EDI — por dia vale a origem com mais valor

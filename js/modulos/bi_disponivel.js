@@ -77,7 +77,7 @@ async function _dispCarregar() {
   const precisaPista = contas.some(c => (c.conta === 'especie' || c.conta === 'bb') && ancoras[c.empresa_id + '|' + c.conta]);
   const iniPista = precisaPista ? diaIni + 'T00:00:00' : hoje + 'T00:00:00';   // data_abast é hora LOCAL com +00:00 falso
 
-  const [receb, movs, pista, prazo, filaTaxa, filaLoja] = await Promise.all([
+  const [receb, movs, pista, prazo, filaTaxa, filaLoja, cupomDia, filaAjuste] = await Promise.all([
     _biTudo(() => sb.from('oct_recebimentos').select('empresa_id,origem,forma,valor,recebido_em')
       .in('origem', ['pagbank_edi', 'pagbank_email', 'cofre_brinks']).gte('recebido_em', inicio).order('recebido_em').order('id')),
     _biTudo(() => sb.from('oct_banco_movimentos').select('empresa_id,data,valor,descricao,info,criado_em')
@@ -90,8 +90,25 @@ async function _dispCarregar() {
       .gte('ocorrido_em', menos(7)).in('forma_nome', ['Pix', 'Débito', 'Crédito']).order('ocorrido_em').order('id')),
     _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,valor,desconto,acrescimo,bico,status')
       .gte('ocorrido_em', new Date(iniHoje).toISOString()).is('bico', null).order('id')),
+    // VENDA PELO CUPOM (22/10/2026, Ronan: "todos tem que seguir o cupom"): por dia, o que os cupons
+    // cobraram a mais/menos que a bomba (acréscimo de tabela a prazo, desconto) + o mesmo da fila
+    // ainda não transmitida. Sem a view no banco: sem ajuste (como antes).
+    _biTudo(() => sb.from('oct_v_dia_venda_cupom').select('empresa_id,dia,comb_cobrado,comb_bomba')
+      .gte('dia', iniPista.slice(0, 10)).order('dia').order('empresa_id')).catch(() => []),
+    _biTudo(() => sb.from('oct_fila_transmissao').select('empresa_id,acrescimo,desconto,ocorrido_em')
+      .eq('status', 'fila').not('bico', 'is', null).gte('ocorrido_em', iniPista.slice(0, 10)).order('id')).catch(() => []),
   ]);
-  return { hoje, iniHoje, emp, saldos, contas, ancoras, informados, pagar, receb, movs, pista, prazo, filaTaxa, filaLoja };
+  // ajuste do cupom sobre a bomba: empresa -> dia -> valor
+  const ajusteCupom = {};
+  const _aj = (e, d, v) => {
+    if (!d || Math.abs(v) < 0.005) return;
+    const m = (ajusteCupom[e] = ajusteCupom[e] || {});
+    m[d] = (m[d] || 0) + v;
+  };
+  cupomDia.forEach(c => _aj(c.empresa_id, String(c.dia || '').slice(0, 10), Number(c.comb_cobrado || 0) - Number(c.comb_bomba || 0)));
+  // ocorrido_em da fila é hora LOCAL com +00:00 falso (igual ao data_abast): o dia é o texto
+  filaAjuste.forEach(f => _aj(f.empresa_id, String(f.ocorrido_em || '').slice(0, 10), Number(f.acrescimo || 0) - Number(f.desconto || 0)));
+  return { hoje, iniHoje, emp, saldos, contas, ancoras, informados, pagar, receb, movs, pista, prazo, filaTaxa, filaLoja, ajusteCupom };
 }
 
 // maquininha: o mesmo pagamento chega pelo e-mail (na hora) e pelo EDI (D-1).
@@ -137,7 +154,8 @@ function _dispCalcular(D) {
     const maqHoje = _dispMaquininha(D.receb, eid, taxa, null)[D.hoje] || { bruto: 0, liquido: 0, formas: {} };
     const prazoHoje = D.prazo.filter(p => p.empresa_id === eid && p.status !== 'cancelado' && _dispMs(p.registrado_em) >= _dispMs(D.iniHoje))
       .reduce((s, p) => s + Number(p.valor_original != null ? p.valor_original : p.valor || 0), 0);
-    const totalHoje = pistaHoje + lojaHoje;
+    const ajCupom = D.ajusteCupom[eid] || {};
+    const totalHoje = pistaHoje + (ajCupom[D.hoje] || 0) + lojaHoje;
     const vendido = {
       total: totalHoje, pix: maqHoje.formas.Pix || 0, debito: maqHoje.formas['Débito'] || 0, credito: maqHoje.formas['Crédito'] || 0,
       prazo: prazoHoje, dinheiro: Math.max(0, totalHoje - maqHoje.bruto - prazoHoje), cartaoLiquido: maqHoje.liquido,
@@ -201,9 +219,12 @@ function _dispCalcular(D) {
           const d = _dispDiaLocal(p.registrado_em);
           prazoDia[d] = (prazoDia[d] || 0) + Number(p.valor_original != null ? p.valor_original : p.valor || 0);
         });
+        // + ajuste do cupom sobre a bomba (22/10/2026). O ajuste é do dia inteiro: no dia do saldo
+        // informado (só conta a pista DEPOIS da hora informada) ele fica de fora para não somar a manhã.
         Object.keys(pistaDia).forEach(d => {
           if (d < diaAnc) return;
-          const din = Math.max(0, pistaDia[d] - ((maq[d] && maq[d].bruto) || 0) - (prazoDia[d] || 0));
+          const ajD = d > diaAnc ? (ajCupom[d] || 0) : 0;
+          const din = Math.max(0, pistaDia[d] + ajD - ((maq[d] && maq[d].bruto) || 0) - (prazoDia[d] || 0));
           r.entradas += din;
           if (d === D.hoje) r.hojeEnt += din;
         });

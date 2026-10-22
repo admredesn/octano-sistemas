@@ -191,6 +191,25 @@ function _monLucroVenda(v, custoMap) {
   }, 0);
 }
 
+// produto de LOJA no cupom: item que não é abastecimento OU linha 'prod-' (produto
+// marcado na lista de pendentes vai no cupom como abastecimento). Mesma régua do
+// F.Caixa (_fcItemLoja) e da view oct_v_turno_venda.loja_cupom.
+function _monItemLoja(it) {
+  if (!it) return false;
+  if (it.tipo !== 'abastecimento' || it._loja) return true;
+  const d = it.dados || {};
+  return d.tipo === 'produto' || String(it.abastecimento_id || d.id || '').startsWith('prod-');
+}
+
+// valor da BOMBA de um item de combustível do cupom (antes do acréscimo/desconto de
+// tabela): _totalOriginal; senão o valor do abastecimento; senão o próprio total
+function _monItemBomba(it) {
+  const n = x => (x === null || x === undefined || x === '') ? null : Number(x);
+  const d = it.dados || {};
+  const b = n(it._totalOriginal) ?? n(d.valor_total);
+  return b != null && !isNaN(b) ? b : Number(it.total || 0);
+}
+
 // PISTA: abastecimentos crus da bomba (oct_pdv_abastecimentos, publicados pelo
 // núcleo). Paginado porque o PostgREST corta em 1000 linhas — 6 dias de um
 // posto movimentado passa disso.
@@ -426,15 +445,21 @@ async function _monVendas(empIds) {
     }
 
     // ---- LOJA (produto não-combustível) + FORMAS, das vendas e da fila ----
-    let lojaValor = 0, lojaLucro = 0;
+    // VENDA PELO CUPOM (22/10/2026, Ronan: "todos tem que seguir o cupom, porque tem
+    // variação de preço no cupom, diferente do que sai na bomba"): o combustível que
+    // virou cupom vale o que o cupom COBROU (acréscimo de tabela a prazo, desconto...);
+    // o que não virou cupom segue pelo valor da bomba. ajusteCupom = cobrado − bomba
+    // dos cupons + (acréscimo − desconto) da fila — mesma régua do F.Caixa.
+    let lojaValor = 0, lojaLucro = 0, ajusteCupom = 0;
     vendas.forEach(v => {
       (v.itens || []).forEach(it => {
         if (!it) return;
-        const ehComb = it.tipo === 'abastecimento';
+        const ehComb = it.tipo === 'abastecimento' && !_monItemLoja(it);
         // nome LEGÍVEL: cadastro do produto; a descrição fiscal (ONU 3475...)
         // só se não houver outro jeito
         const nome = nomeProd[it.produto_id] || it.desc || it.descricao || '—';
         if (ehComb) {
+          ajusteCupom += Number(it.total || 0) - _monItemBomba(it);
           if (!temPista) {                     // fallback: posto sem pista publicada
             const p = prods[nome] || (prods[nome] = { qtd: 0, litro: true });
             p.qtd += Number(it.qtd || 0);
@@ -472,6 +497,7 @@ async function _monVendas(empIds) {
       const n = f.forma_nome || _MON_FORMA[String(f.forma || '').padStart(2, '0')] || 'Outro';
       formas[n] = (formas[n] || 0) + vf;
       if (litros > 0) {
+        ajusteCupom += Number(f.acrescimo || 0) - Number(f.desconto || 0);
         if (!temPista) {
           const nome = f.descricao || '—';
           const p = prods[nome] || (prods[nome] = { qtd: 0, litro: true });
@@ -528,11 +554,15 @@ async function _monVendas(empIds) {
     const totalAntigo = vendas.reduce((s, v) => s + Number(v.valor_total || 0), 0) + filaTotal;
     const volumeAntigo = vendas.reduce((s, v) => s + _monVolVenda(v), 0) + filaVolume;
     const lucroAntigo = vendas.reduce((s, v) => s + _monLucroVenda(v, custoMap), 0);
+    // acréscimo/desconto do cupom é receita (ou abatimento) sem custo a mais: entra
+    // inteiro no total e no lucro
+    const ajuste = temPista ? Math.round(ajusteCupom * 100) / 100 : 0;
     out[eid] = {
       qtd: vendas.length,
       abastQtd: pistaHoje.length,
       temPista,
-      total: temPista ? pistaValor + lojaValor : totalAntigo,
+      ajusteCupom: ajuste,
+      total: temPista ? pistaValor + ajuste + lojaValor : totalAntigo,
       volume: temPista ? pistaLitros : volumeAntigo,
       // LUCRO PELA MESMA FONTE DO TOTAL (correção 07/08/2026).
       // O total já vinha da PISTA (dia inteiro, todo litro que saiu da bomba) e
@@ -544,12 +574,12 @@ async function _monVendas(empIds) {
       // R$985 -> R$3.262 (um terço do real).
       // Agora, com pista publicada: combustível do dia inteiro + loja, menos as
       // taxas de cartão conhecidas. Sem pista, a conta antiga (fila + cupons).
-      lucro: temPista ? (pistaLucro + lojaLucro - taxasTotal)
+      lucro: temPista ? (pistaLucro + ajuste + lojaLucro - taxasTotal)
                       : (lucroApurado + lucroAntigo),
       // quanto do dia saiu A PRAZO — a tela usa para separar o lucro que virou
       // dinheiro do que ficou com o cliente.
       aPrazo: Math.min(Number(prazoPorEmp[eid] || 0),
-                       temPista ? (pistaValor + lojaValor) : totalAntigo),
+                       temPista ? (pistaValor + ajuste + lojaValor) : totalAntigo),
       taxas: taxasTotal,
       apurado: casados.length > 0,
       ultima: temPista && ultimaPista ? { data_venda: ultimaPista } :
@@ -607,7 +637,7 @@ function _monCardVendaPosto(nome, v, tv) {
     </div>
     <div style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'};margin-bottom:8px">${
       v.temPista
-        ? `${v.abastQtd} abastecimento(s) hoje · ${v.qtd} cupom(ns)${v.filaQtd ? ` · <span style="color:#fbbf24">${v.filaQtd} na fila (${_monBRL(v.filaTotal)})</span>` : ''}`
+        ? `${v.abastQtd} abastecimento(s) hoje · ${v.qtd} cupom(ns)${v.filaQtd ? ` · <span style="color:#fbbf24">${v.filaQtd} na fila (${_monBRL(v.filaTotal)})</span>` : ''}${Math.abs(Number(v.ajusteCupom || 0)) > 0.009 ? ` · <span title="diferença do valor cobrado no cupom (acréscimo/desconto de tabela) sobre o valor da bomba — já está no total">cupom ${Number(v.ajusteCupom) > 0 ? '+' : '−'}${_monBRL(Math.abs(v.ajusteCupom))} sobre a bomba</span>` : ''}`
         : `${v.qtd} venda(s) hoje${v.filaQtd ? ` <span style="color:#fbbf24">+ ${v.filaQtd} na fila (${_monBRL(v.filaTotal)})</span>` : ''}`
     } · última ${ultH}</div>
     <div style="border-top:1px solid #1e293b;padding-top:6px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px;overflow:hidden">
