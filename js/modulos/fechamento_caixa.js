@@ -518,8 +518,13 @@ async function fcCarregarDados() {
     if (r._excluido) return;
     const origem = String(r.origem || '').toLowerCase();
     const forma = String(r.forma || '').toLowerCase();
-    // depósito do cofre: vale a régua do vão (ver _turnoDeposito); o resto continua pela janela
-    const tid = origem.includes('cofre') ? _turnoDeposito(r.recebido_em) : _turnoDe(r.recebido_em);
+    // depósito do cofre: vale a régua do vão (ver _turnoDeposito); sangria continua pela janela.
+    // MAQUININHA NO VÃO (22/10/2026, Ronan — AC 15/10, turno 826 aberto às 06:28): 4 vendas de 06:13–06:23
+    // (R$ 579,43) passaram na maquininha com o caixa ainda fechado e não caíam em turno nenhum — o
+    // "Substituir pelo extrato" puxava 131 de 135 transações. Recebimento da maquininha segue a régua da
+    // FILA: no vão entre turnos, vai para o turno que ABRE em seguida (é a venda que ele recebe).
+    const tid = origem.includes('cofre') ? _turnoDeposito(r.recebido_em)
+      : origem.includes('sangria') ? _turnoDe(r.recebido_em) : _turnoFila(r.recebido_em);
     const t = tid && porTurno[tid]; if (!t) return;
     const val = Number(r.valor || 0);
     const depR = (_aj('receb', r.id) || {}).deposito;
@@ -2225,8 +2230,28 @@ function _fcNomeCurto(nome) {
   return [p[0], resto.length ? resto[resto.length - 1] : '', sufixo].filter(Boolean).join(' ');
 }
 
+// OPERADORAS DE FROTA na edição (22/10/2026, Ronan: "quando vou editar o cartão, não aparece a opção alterá-lo para
+// fitcard"): a mesma lista do PDV — Parâmetros › "Operadoras de cartão frota" (frota_operadoras, nomes separados por
+// ";"); em branco = a lista padrão do PDV (FROTA_OPERADORAS em pagamento.js). Os nomes são os que o PDV grava.
+const _FC_FROTA_PADRAO = ['TicketLog', 'FitCard / Prime', 'ValeCard', 'Sem Parar'];
+async function _fcFrotaOperadoras() {
+  const eid = window._fcEmpresaId;
+  const c = window._fcFrotaOpsCache;
+  if (c && c.eid === eid && Date.now() - c.em < 300000) return c.lista;
+  let lista = _FC_FROTA_PADRAO.slice();
+  try {
+    const { data } = await sb.from('oct_parametros').select('valor')
+      .eq('empresa_id', eid).eq('chave', 'frota_operadoras').maybeSingle();
+    const doPosto = String((data && data.valor) || '').split(/[;\r\n]+/)
+      .map(x => x.replace(/\s+/g, ' ').trim()).filter(x => x && !/^outr[ao]s?$/i.test(x));
+    if (doPosto.length) lista = doPosto;
+  } catch (e) { /* sem parâmetro: lista padrão do PDV */ }
+  window._fcFrotaOpsCache = { eid, em: Date.now(), lista };
+  return lista;
+}
+
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
-function fcLancEditar(refTipo, refId) {
+async function fcLancEditar(refTipo, refId) {
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
   const aj = (window._fcConf[k] || {}).ajuste || {};
@@ -2234,7 +2259,8 @@ function fcLancEditar(refTipo, refId) {
   const formas = ['Dinheiro', 'Cartão', 'Crédito', 'Débito', 'Pix', 'Pix CNPJ', 'Cartão Frota', 'Nota a prazo', 'Cheque', 'Outro'];
   const bandAtual = String(v('bandeira') || '');
   const bandeiras = ['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'];
-  if (bandAtual && !bandeiras.includes(bandAtual)) bandeiras.unshift(bandAtual);
+  const bandFrota = await _fcFrotaOperadoras();
+  const _opts = lista => lista.filter(b => b !== bandAtual).map(b => `<option value="${fcEsc(b)}">${fcEsc(b)}</option>`).join('');
   fcModal('✎ Editar lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
@@ -2255,7 +2281,8 @@ function fcLancEditar(refTipo, refId) {
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
            <select id="fcl-bandeira" class="fc-inp2" style="width:200px">
              <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
-             ${bandeiras.filter(b => b !== bandAtual).map(b => `<option value="${b}">${b}</option>`).join('')}
+             <optgroup label="Cartão">${_opts(bandeiras)}</optgroup>
+             <optgroup label="Cartão frota">${_opts(bandFrota)}</optgroup>
            </select>`}
       ${refTipo === 'manual' ? `
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
