@@ -431,7 +431,8 @@ async function fcCarregarDados() {
     if (String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
     // os ITENS não vêm mais nesta consulta (pesavam 1,3 MB); o total por turno
     // entra pela view, logo abaixo deste laço.
-    (Array.isArray(v.pagamentos) ? v.pagamentos : []).forEach(p => {
+    const _pgsV = Array.isArray(v.pagamentos) ? v.pagamentos : [];
+    _pgsV.forEach((p, i) => {
       // RECLASSIFICAÇÃO pelo ✎ (18/08): o ajuste de forma numa venda TRANSMITIDA
       // não muda a nota (fiscal já emitido), mas MUDA o grupo no fechamento —
       // caso real: cupom de cartão FROTA que sai com tpag 03 genérico.
@@ -440,7 +441,7 @@ async function fcCarregarDados() {
       const g = p.haver ? 'haver'   // crédito do cliente (o PDV marca haver:true; o tPag 05 é o mesmo da nota a prazo)
         : (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
-      t.rec[g] = (t.rec[g] || 0) + Number(p.valor || 0);
+      t.rec[g] = (t.rec[g] || 0) + _fcPagValor(_pgsV, p, i, ajV);   // valor editado pelo ✎ (22/10/2026)
     });
   });
   // VENDA DO TURNO ESPELHADO vem da view (soma dos itens do cupom, feita no
@@ -2196,6 +2197,18 @@ function _fcOperadoraFrota(s) {
   return t;
 }
 function _fcRotFrota(operadora) { return _fcOperadoraFrota(operadora) || 'Frota (operadora não informada)'; }
+// VALOR EDITADO NO CUPOM (22/10/2026, Ronan, balão Cheque do caixa 1200: "quando eu edito o valor, ele salva mas não
+// muda aqui"). O ✎ grava ajuste.valor por CUPOM, mas só a FORMA do ajuste era aplicada: a lista, os totais do balão, o
+// recebido do turno e a substituição pelo extrato seguiam no valor original. O valor editado vale para UM pagamento: o de
+// índice ajuste.pag_idx (gravado a partir de agora); sem ele (edições antigas), só se o cupom tem um pagamento só — as 6
+// edições gravadas até 22/10 são todas assim. Cupom com pagamento dividido e edição antiga: fica o original (ambíguo).
+function _fcPagValor(pags, p, i, ajV) {
+  const orig = Number((p && p.valor) || 0);
+  if (!ajV || ajV.valor == null || ajV.valor === '' || isNaN(Number(ajV.valor))) return orig;
+  const n = Array.isArray(pags) ? pags.length : 0;
+  const alvo = ajV.pag_idx != null ? Number(ajV.pag_idx) : (n === 1 ? 0 : -1);
+  return i === alvo ? Math.round(Number(ajV.valor) * 100) / 100 : orig;
+}
 // rótulo de um pagamento do cupom (com o ajuste ✎ por cima): frota = a operadora; o resto, forma + bandeira
 function _fcRotPag(p, ajV) {
   const nome = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
@@ -2285,8 +2298,20 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       ajuste.manual = true;
     } else {
       ajuste = {};
-      if (!isNaN(valor) && Math.abs(valor - Number(base.valor || 0)) > 0.004) ajuste.valor = valor;
+      // 22/10/2026: regravar não pode apagar o que o formulário não mostra (depósito da sangria, lote do extrato,
+      // exclusão) nem a forma já trocada quando se escolhe "(manter: …)" — antes o ajuste recomeçava do zero.
+      const prev = (window._fcConf[k] || {}).ajuste || {};
+      Object.keys(prev).forEach(c => { if (!['valor', 'forma_nome', 'bandeira', 'obs', 'cliente_nome', 'pag_idx'].includes(c)) ajuste[c] = prev[c]; });
+      if (!isNaN(valor) && Math.abs(valor - Number(base.valor || 0)) > 0.004) {
+        ajuste.valor = valor;
+        if (refTipo === 'venda' && base.pag_idx != null) ajuste.pag_idx = base.pag_idx;   // qual pagamento do cupom (_fcPagValor)
+      } else if (prev.valor != null && !isNaN(valor) && Math.abs(valor - Number(prev.valor)) <= 0.004) {
+        // valor já editado antes e não mexido agora (na fila/caixa a base já vem com ele aplicado): continua
+        ajuste.valor = prev.valor;
+        if (prev.pag_idx != null) ajuste.pag_idx = prev.pag_idx;
+      }
       if (forma) ajuste.forma_nome = forma;
+      else if (prev.forma_nome) ajuste.forma_nome = prev.forma_nome;
       if (band && band !== String(base.bandeira || '')) ajuste.bandeira = band;
       if (obs) ajuste.obs = obs;
       // NOTA A PRAZO: o campo que se edita, além do valor, é o CLIENTE — forma e
@@ -2669,7 +2694,7 @@ async function fcNodeDetalhe(tipo) {
     // _apl só cobria caixa/receb; a venda ficava visível mesmo fora das somas)
     const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada')
       .filter(v => { const a = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste; return !(a && a.excluido); });
-    vs.forEach(v => (v.pagamentos || []).forEach(p => {
+    vs.forEach(v => (v.pagamentos || []).forEach((p, iPag) => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
@@ -2677,6 +2702,9 @@ async function fcNodeDetalhe(tipo) {
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
       if (!pertence) return;
+      // valor que vale no caixa: o editado pelo ✎ (22/10/2026), senão o do cupom
+      const vPag = _fcPagValor(v.pagamentos, p, iPag, ajV);
+      const vEditado = Math.abs(vPag - Number(p.valor || 0)) > 0.004;
       // rótulo NORMALIZADO ("Pix", nunca "PIX"): mesma régua da fila, senão o
       // Σ de totais divide a mesma forma em duas linhas (visto 19/08)
       const nomeBase = (ajV && ajV.forma_nome) || p.nome || _fcFormaNome(p.forma);
@@ -2701,20 +2729,21 @@ async function fcNodeDetalhe(tipo) {
       const descItens = its.map(it => amigavel(it.desc || it.cod)).filter(Boolean).join(' + ');
       const litrosCupom = its.filter(it => !_fcItemLoja(it))
         .reduce((s, it) => s + Number(it.qtd || 0), 0);
-      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor,
+      // base = valor ORIGINAL do pagamento (o formulário mostra o editado por cima) + qual pagamento é (pag_idx)
+      window._fcLancBase['venda:' + v.id] = { rotulo: 'Cupom ' + (v.numero ?? '') + (descItens ? ' — ' + descItens : ''), valor: p.valor, pag_idx: iPag,
         forma_nome: gAj === 'frota' ? 'Cartão Frota' : rotF,
         bandeira: gAj === 'frota' ? _fcOperadoraFrota((ajV && ajV.bandeira) || (p.frota && p.frota.operadora) || p.bandeira) : undefined };
       // CHEQUE (10/10/2026 — Florestal): o PDV grava os dados do cheque no pagamento
       const chq = p.cheque && typeof p.cheque === 'object' ? p.cheque : null;
       const chqTxt = chq ? ` <span style="color:#7ea8d8;font-size:0.72rem">🧾 cheque nº ${fcEsc(chq.numero || '?')}${chq.banco ? ' · bco ' + fcEsc(chq.banco) : ''}${chq.emitente ? ' · ' + fcEsc(chq.emitente) : ''}${chq.bom_para ? ' · bom p/ ' + fcEsc(String(chq.bom_para).slice(0, 10).split('-').reverse().join('/')) : ''}</span>` : '';
-      entradas.push({ val: Number(p.valor || 0), hora: v.data_venda, oficial: 1, rows: [
+      entradas.push({ val: vPag, hora: v.data_venda, oficial: 1, rows: [
         _fcRow('venda', v.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHora(v.data_venda)}</td>
           <td class="fc-td"><b style="color:#7ab8f0">C</b> ${fcEsc(descItens) || 'Cupom'} <span style="color:#667;font-size:0.7rem">(cupom ${v.numero ?? ''})</span>${chqTxt}${frotaTxt}</td>
           <td class="fc-td">—</td>
           <td class="fc-td fc-r">${litrosCupom ? fcNum(litrosCupom, 2) + ' L' : '—'}</td>
           <td class="fc-td">${fcEsc(v.cliente_nome || _fcNomeCurto(v.vendedor || v.operador)) || '—'}</td>
           <td class="fc-td">${fcEsc(rotF) || '—'}</td>
-          <td class="fc-td fc-r">${fcMoney(p.valor)}</td>`, `fcCupomResumo('${v.id}')`)] });
+          <td class="fc-td fc-r"${vEditado ? ` title="editado no fechamento — no cupom: R$ ${fcMoney(p.valor)}"` : ''}>${vEditado ? `<span style="color:#667;text-decoration:line-through;font-size:0.72rem">${fcMoney(p.valor)}</span> <b style="color:#f0b45c">${fcMoney(vPag)}</b>` : fcMoney(p.valor)}</td>`, `fcCupomResumo('${v.id}')`)] });
     }));
 
     // 2) fila de transmissão (agrupada por marca — recebimento unificado)
@@ -2833,13 +2862,13 @@ async function fcNodeDetalhe(tipo) {
       const soma1 = (rot, v) => { (totais[rot] = totais[rot] || { n: 0, v: 0 }); totais[rot].n++; totais[rot].v += v; };
       (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)))
         .forEach(f => { const p = _rotParte(f); soma1(p.forma + (p.band ? ' ' + p.band : ''), vfDe(f)); });
-      vs.forEach(v => (v.pagamentos || []).forEach(p => {
+      vs.forEach(v => (v.pagamentos || []).forEach((p, iPag) => {
         const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
         const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
           : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
         const pertence = gAj ? gruposNode0.includes(gAj)
           : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
-        if (pertence) soma1(_fcRotPag(p, ajV), Number(p.valor || 0));
+        if (pertence) soma1(_fcRotPag(p, ajV), _fcPagValor(v.pagamentos, p, iPag, ajV));
       }));
       mans.forEach(m => soma1(_rotMan(m) || 'Manual', Number(m.valor || 0)));
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
@@ -4526,8 +4555,7 @@ async function _fcExtratoAlvos(turnoId, d0) {
       : ajV.forma_nome
       ? _fcGrupoNome(ajV.forma_nome, p.forma)
       : _fcGrupoNome(p.nome || p.forma_nome || p.forma, p.forma);
-    const soma = (pgs || []).filter(p => grupos.includes(grupoPg(p)))
-      .reduce((s, p) => s + Number(p.valor || 0), 0);
+    const soma = (pgs || []).reduce((s, p, i) => grupos.includes(grupoPg(p)) ? s + _fcPagValor(pgs, p, i, ajV) : s, 0);   // valor editado (22/10/2026)
     if (soma > 0) alvos.push({ tipo: 'venda', id: v.id, valor: soma, base: aj['venda:' + v.id] || {} });
   });
 
