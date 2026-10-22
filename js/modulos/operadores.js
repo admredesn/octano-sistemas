@@ -4,9 +4,9 @@
 // Cria o login (Supabase Auth) + perfil em oct_perfis com usuario/email_login,
 // para o operador entrar no PDV digitando só o usuário.
 //
-// Segurança: o signUp normal trocaria a sessão do gerente pela do novo
-// usuário. Para evitar, criamos a conta num client Supabase SECUNDÁRIO e
-// temporário (persistSession:false), preservando a sessão do gerente.
+// Segurança (22/10/2026): o login é criado pela função do banco
+// oct_criar_login_operador (sql/SEG-08), que só o administrador pode chamar.
+// O cadastro livre (signUp) do Supabase está desligado.
 // ============================================================
 
 async function moduloOperadores() {
@@ -407,21 +407,12 @@ async function opSalvar() {
   // e-mail interno derivado do usuário (operador nunca o vê)
   const emailLogin = `${usuario}.${empresaId.slice(0, 8)}@octano.local`;
 
-  // client secundário para NÃO trocar a sessão do gerente.
-  // SUPABASE_URL/ANON_KEY são const globais do config.js (não ficam em window).
-  const _url = (typeof SUPABASE_URL !== 'undefined') ? SUPABASE_URL : (window.SUPABASE_URL || '');
-  const _key = (typeof SUPABASE_ANON_KEY !== 'undefined') ? SUPABASE_ANON_KEY : (window.SUPABASE_ANON_KEY || '');
-  let sb2;
-  try {
-    sb2 = window.supabase.createClient(_url, _key, {
-      auth: { persistSession: false, autoRefreshToken: false, storageKey: 'octano-op-temp' }
-    });
-  } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao iniciar criação: ' + e.message; return; }
-
-  const { data: signUpData, error: errSignUp } = await sb2.auth.signUp({ email: emailLogin, password: octSenhaAuth(senha) });
-  if (errSignUp) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao criar login: ' + errSignUp.message; return; }
-  const novoUid = signUpData?.user?.id;
-  if (!novoUid) { msg.style.color = '#f87171'; msg.textContent = 'Não foi possível obter o ID do novo usuário (verifique confirmação de e-mail no Supabase).'; return; }
+  // 22/10/2026: o login é criado no BANCO (função oct_criar_login_operador, só o
+  // administrador, sql/SEG-08), com a sessão de quem está logado. O cadastro livre do
+  // Supabase (signUp) foi DESLIGADO: com ele, qualquer um com a chave pública criava conta.
+  const { data: novoUid, error: errLogin } = await sb.rpc('oct_criar_login_operador', { p_email: emailLogin, p_senha: octSenhaAuth(senha) });
+  if (errLogin) { msg.style.color = '#f87171'; msg.textContent = 'Erro ao criar login: ' + errLogin.message; return; }
+  if (!novoUid) { msg.style.color = '#f87171'; msg.textContent = 'Não foi possível obter o ID do novo usuário.'; return; }
 
   // grava o perfil vinculado (usando a sessão do gerente, que continua ativa em sb).
   // A coluna 'perfil' tem check constraint que aceita 'master'; o nível de acesso
