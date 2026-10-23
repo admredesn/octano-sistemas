@@ -256,6 +256,7 @@ async function fcCarregarDados() {
     if (a.valor != null) f.valor = a.valor;
     if (a.forma_nome) f.forma_nome = a.forma_nome;
     if (a.bandeira) f.bandeira = a.bandeira;
+    if (a.conta_id) f._conta_id = a.conta_id;   // Pix: conta escolhida no ✎ (23/10/2026)
   });
   ((cRes && cRes.data) || []).forEach(m => {
     const a = _aj('caixa', m.id); if (!a) return;
@@ -418,6 +419,7 @@ async function fcCarregarDados() {
     if (turnosTecnox.has(tid)) return;               // recebimento vem do TecnoX
     const g = _fcGrupoNome(f.forma_nome, f.forma);   // fila: prefere o nome (código vem 99)
     t.rec[g] = (t.rec[g] || 0) + vf;
+    _fcRecConta(t, g, f._conta_id, vf);
   });
   (vRes.data || []).forEach(v => {
     const t = porTurno[v.turno_id]; if (!t) return;
@@ -441,7 +443,9 @@ async function fcCarregarDados() {
       const g = p.haver ? 'haver'   // crédito do cliente (o PDV marca haver:true; o tPag 05 é o mesmo da nota a prazo)
         : (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
-      t.rec[g] = (t.rec[g] || 0) + _fcPagValor(_pgsV, p, i, ajV);   // valor editado pelo ✎ (22/10/2026)
+      const _vp = _fcPagValor(_pgsV, p, i, ajV);   // valor editado pelo ✎ (22/10/2026)
+      t.rec[g] = (t.rec[g] || 0) + _vp;
+      _fcRecConta(t, g, ajV && ajV.conta_id, _vp);
     });
   });
   // VENDA DO TURNO ESPELHADO vem da view (soma dos itens do cupom, feita no
@@ -615,7 +619,7 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null, conta_id: a.conta_id || null, conta_nome: a.conta_nome || null });
     // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
     // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
     if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
@@ -638,6 +642,7 @@ async function fcCarregarDados() {
       if (['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(gR)) {
         t.rec[gR] = (t.rec[gR] || 0) + v;
         t.receita_banco = (t.receita_banco || 0) + v;
+        _fcRecConta(t, gR, a.conta_id, v);
       }
     }
     // SANGRIA LANÇADA À MÃO que virou depósito (🏦 Gerar depósito, 16/10/2026): igual à sangria do PDV —
@@ -664,7 +669,7 @@ async function fcCarregarDados() {
       const GRUPOS_REC = ['dinheiro', 'cartao', 'pix', 'pix_cnpj', 'frota', 'prazo', 'cheque'];
       const chave = GRUPOS_REC.includes(g) ? g : (GRUPOS_REC.includes(a.secao) ? a.secao : 'outros');
       if (chave === 'outros') t.outrosCaixa += v;
-      else t.rec[chave] = (t.rec[chave] || 0) + v;
+      else { t.rec[chave] = (t.rec[chave] || 0) + v; _fcRecConta(t, chave, a.conta_id, v); }
     }
   });
 
@@ -1499,6 +1504,12 @@ async function fcLancIncluir() {
       <input id="fcm-dep-data" type="date" class="fc-inp2" value="${hj.getFullYear()}-${p2(hj.getMonth() + 1)}-${p2(hj.getDate())}">`;
   }
 
+  // CONTA DO PIX (23/10/2026, Ronan: "quando lanço um pix no sistema, tem que deixar escolher em qual conta o pix
+  // caiu"): Pix vai direto para um banco; a conta escolhida vai junto no lançamento e o livro financeiro (✔ Confirmar)
+  // credita cada Pix na conta dele. Vem marcada a conta da forma de pagamento (Formas de Pagamento › conta).
+  let contaPixHtml = '';
+  if (secao === 'pix' || secao === 'pix_cnpj') contaPixHtml = await _fcContaPixHtml('fcm-pix-conta', secao, null);
+
   // pista da janela do turno × lançamentos existentes (valor exato + hora ±2h).
   // SÓ na nota a prazo (31/08): é lá que se amarra o abastecimento ao título;
   // nas outras seções a lista atrapalhava e ainda pagava duas consultas.
@@ -1616,6 +1627,7 @@ async function fcLancIncluir() {
                 </select>${avisoBand}`
              : `<input type="hidden" id="fcm-bandeira" value="">`}`}
       ${depHtml}
+      ${contaPixHtml}
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
@@ -1712,6 +1724,11 @@ async function fcLancIncluirSalvar(secao) {
     // id do cadastro quando veio da busca: é o que liga o título à pessoa no Faturar
     ajuste.cliente_id = (document.getElementById('fcm-cliente-id') || {}).value || null;
     if (!ajuste.descricao && ajuste.cliente_nome) ajuste.descricao = ajuste.cliente_nome;
+  }
+  if (secao === 'pix' || secao === 'pix_cnpj') {
+    const cp = _fcContaPixEscolhida('fcm-pix-conta');
+    if (cp === false) { alert('Escolha em qual conta o Pix caiu.'); return; }
+    if (cp) { ajuste.conta_id = cp.id; ajuste.conta_nome = cp.nome; }
   }
   let depConta = null;
   if (secao === 'deposito') {
@@ -1833,6 +1850,41 @@ async function fcLancExcluir(marcados, alvosDiretos) {
 async function _fcAutor() {
   try { const s = await getSession(); return (s && s.user && (s.user.email || s.user.id)) || null; } catch (e) { return null; }
 }
+// conta padrão do Pix: a da forma de pagamento do grupo (Pix CNPJ / Pix) que aponta uma conta no livro
+async function _fcContaPadraoPix(grupo) {
+  try {
+    const { data } = await sb.from('oct_formas_pagamento').select('nome,cod_sefaz,classificacao,conta_id,ordem,ativo')
+      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true);
+    const f = (data || []).filter(x => x.conta_id && _fcGrupoDaForma(x) === grupo)
+      .sort((a, b) => Number(a.ordem || 0) - Number(b.ordem || 0))[0];
+    return f ? Number(f.conta_id) : null;
+  } catch (e) { return null; }
+}
+// campo "Em qual conta o Pix caiu?" (Incluir e ✎ Editar). marcada = conta já escolhida no lançamento
+async function _fcContaPixHtml(id, grupo, marcada) {
+  // fora: o caixa/cofre e as contas das operadoras de cartão frota ("CARTÃO TICKETLOG - …"): Pix não cai nelas
+  const contas = (await _fcContasDoPosto())
+    .filter(c => String(c.tipo || '') !== 'caixa' && !/^cart[aã]o\s/i.test(String(c.nome || '').trim()));
+  window._fcPixContas = contas;
+  if (!contas.length) {
+    return '<p style="color:#f0b45c;font-size:0.72rem;margin-top:8px">Este posto ainda não tem contas cadastradas em '
+      + 'Conciliação — o Pix fica registrado só aqui no fechamento.</p>';
+  }
+  const sel = marcada != null ? Number(marcada) : await _fcContaPadraoPix(grupo);
+  return `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Em qual conta o Pix caiu? *</label>
+    <select id="${id}" class="fc-inp2" style="width:100%">
+      ${sel == null ? '<option value="">— escolha a conta —</option>' : ''}
+      ${contas.map(c => `<option value="${c.id}" ${Number(c.id) === sel ? 'selected' : ''}>${fcEsc(c.nome)}</option>`).join('')}
+    </select>`;
+}
+// conta escolhida no campo: {id, nome}; null = posto sem contas (campo nao existe); false = campo sem escolha
+function _fcContaPixEscolhida(id) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const c = (window._fcPixContas || []).find(x => Number(x.id) === Number(el.value));
+  return c ? { id: Number(c.id), nome: c.nome } : false;
+}
+
 async function _fcContasDoPosto() {
   try {
     const { data } = await sb.from('oct_fin_contas').select('id,nome,tipo,ativo,ordem')
@@ -2038,6 +2090,14 @@ function _fcGrupoDaForma(f) {
   if (g === 'pix' && /cnpj/i.test(String((f && f.nome) || ''))) return 'pix_cnpj';
   return ['cartao', 'pix', 'cheque'].includes(g) ? g : null;
 }
+// PIX POR CONTA (23/10/2026): quanto do recebido de Pix / Pix CNPJ do turno foi marcado numa conta específica
+// ("Em qual conta o Pix caiu?" no Incluir/✎). O livro financeiro credita esse valor na conta escolhida e o resto do
+// grupo na conta da forma de pagamento, como antes.
+function _fcRecConta(t, g, contaId, v) {
+  if (!contaId || (g !== 'pix' && g !== 'pix_cnpj')) return;
+  const m = ((t.rec_conta = t.rec_conta || {})[g] = t.rec_conta[g] || {});
+  m[contaId] = (m[contaId] || 0) + Number(v || 0);
+}
 function _fcDiaLocal(iso) {
   const d = iso ? new Date(iso) : new Date();
   const p = n => String(n).padStart(2, '0');
@@ -2054,14 +2114,28 @@ function _fcLinhasLivroTurno(t, d, formas, autor, agora) {
   const data = t && t.aberto_em ? _fcDiaLocal(t.aberto_em) : null;   // turno sem abertura: não lança
   const rec = (d && d.rec) || {};
   const linhas = [];
+  const r2 = x => Math.round(Number(x || 0) * 100) / 100;
   Object.keys(_FC_LIVRO_GRUPOS).forEach(g => {
-    const c = contaDoGrupo[g]; const v = Math.round(Number(rec[g] || 0) * 100) / 100;
-    if (!c || !(v >= 0.01) || !data) return;
-    linhas.push({
-      empresa_id: window._fcEmpresaId, conta_id: c.conta_id, data, natureza: 'C', valor: v, tipo: 'venda_caixa',
-      descricao: `CAIXA · turno ${t.numero || ''} · ${_FC_LIVRO_GRUPOS[g]}`.replace(/\s+/g, ' ').trim(),
-      detalhe: [t.operador, 'conferido no F.Caixa'].filter(Boolean).join(' · '),
-      origem: 'fcaixa_turno', origem_id: `${t.id}:${g}`, autor: autor || null, atualizado_em: agora,
+    if (!data) return;
+    // Pix com conta escolhida vai para a conta dele; o resto do grupo, para a conta da forma (23/10/2026)
+    const porConta = {};
+    let marcado = 0;
+    Object.entries(((d && d.rec_conta) || {})[g] || {}).forEach(([cid, val]) => {
+      const vv = r2(val); if (!(vv >= 0.01)) return;
+      porConta[Number(cid)] = r2((porConta[Number(cid)] || 0) + vv); marcado += vv;
+    });
+    const c = contaDoGrupo[g];
+    const resto = r2(Number(rec[g] || 0) - marcado);
+    if (c && resto >= 0.01) porConta[c.conta_id] = r2((porConta[c.conta_id] || 0) + resto);
+    Object.entries(porConta).forEach(([cid, v]) => {
+      // a conta da forma mantem o origem_id de sempre (linhas ja' gravadas/conciliadas continuam sendo achadas)
+      const daForma = c && Number(cid) === Number(c.conta_id);
+      linhas.push({
+        empresa_id: window._fcEmpresaId, conta_id: Number(cid), data, natureza: 'C', valor: v, tipo: 'venda_caixa',
+        descricao: `CAIXA · turno ${t.numero || ''} · ${_FC_LIVRO_GRUPOS[g]}`.replace(/\s+/g, ' ').trim(),
+        detalhe: [t.operador, 'conferido no F.Caixa'].filter(Boolean).join(' · '),
+        origem: 'fcaixa_turno', origem_id: daForma ? `${t.id}:${g}` : `${t.id}:${g}:${cid}`, autor: autor || null, atualizado_em: agora,
+      });
     });
   });
   return linhas;
@@ -2081,7 +2155,8 @@ async function _fcLivroDoTurno(turnoId) {
     // coluna conta_id ainda não existe (SQL-FORMA-CONTA.sql) ou sem permissão: segue sem o livro
     return { lancadas: [], mantidas: [], aviso: /conta_id/.test(String(e.message || '')) ? 'Falta rodar SQL-FORMA-CONTA.sql para o livro financeiro.' : null };
   }
-  if (!formas.some(f => f.conta_id)) return { lancadas: [], mantidas: [], aviso: null };   // nenhuma forma aponta conta: nada a lançar
+  // nenhuma forma aponta conta e nenhum Pix marcado numa conta (23/10/2026): nada a lançar
+  if (!formas.some(f => f.conta_id) && !(d.rec_conta && Object.keys(d.rec_conta).length)) return { lancadas: [], mantidas: [], aviso: null };
   const linhas = _fcLinhasLivroTurno(t, d, formas, await _fcAutor(), new Date().toISOString());
   const { data: atuais } = await sb.from('oct_fin_lancamentos').select('id,origem_id,conciliado,valor,conta_id')
     .eq('origem', 'fcaixa_turno').like('origem_id', turnoId + ':%');
@@ -2261,6 +2336,11 @@ async function fcLancEditar(refTipo, refId) {
   const bandeiras = ['Visa', 'Mastercard', 'Elo', 'Hipercard', 'Amex'];
   const bandFrota = await _fcFrotaOperadoras();
   const _opts = lista => lista.filter(b => b !== bandAtual).map(b => `<option value="${fcEsc(b)}">${fcEsc(b)}</option>`).join('');
+  // Pix: em qual conta caiu (23/10/2026) — no manual de Pix/Pix CNPJ e em qualquer lançamento com forma Pix
+  const grupoPix = ['pix', 'pix_cnpj'].includes(base.secao) ? base.secao
+    : (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(v('forma_nome') || ''), '') : null);
+  const contaPixEd = (refTipo !== 'np' && (grupoPix === 'pix' || grupoPix === 'pix_cnpj'))
+    ? await _fcContaPixHtml('fcl-pix-conta', grupoPix, aj.conta_id != null ? aj.conta_id : null) : '';
   fcModal('✎ Editar lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
@@ -2283,7 +2363,8 @@ async function fcLancEditar(refTipo, refId) {
              <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
              <optgroup label="Cartão">${_opts(bandeiras)}</optgroup>
              <optgroup label="Cartão frota">${_opts(bandFrota)}</optgroup>
-           </select>`}
+           </select>
+           ${contaPixEd}`}
       ${refTipo === 'manual' ? `
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Descrição</label>
       <input id="fcl-desc" value="${fcEsc(aj.descricao || '')}" class="fc-inp2 lg" style="width:100%">` : ''}
@@ -2323,6 +2404,8 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       // edição parecia não salvar: ia parar em obs)
       if (descEl && descEl.value.trim()) ajuste.descricao = descEl.value.trim();
       ajuste.manual = true;
+      const cpM = _fcContaPixEscolhida('fcl-pix-conta');
+      if (cpM) { ajuste.conta_id = cpM.id; ajuste.conta_nome = cpM.nome; }
     } else {
       ajuste = {};
       // 22/10/2026: regravar não pode apagar o que o formulário não mostra (depósito da sangria, lote do extrato,
@@ -2345,6 +2428,8 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       // bandeira nem aparecem no formulário dela.
       const cliEl = document.getElementById('fcl-cliente');
       if (refTipo === 'np' && cliEl && cliEl.value.trim()) ajuste.cliente_nome = cliEl.value.trim();
+      const cpE = _fcContaPixEscolhida('fcl-pix-conta');   // Pix: em qual conta caiu (23/10/2026)
+      if (cpE) { ajuste.conta_id = cpE.id; ajuste.conta_nome = cpE.nome; }
       if (!Object.keys(ajuste).length) ajuste = null;
     }
   }
@@ -2841,7 +2926,7 @@ async function fcNodeDetalhe(tipo) {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
         _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '—'}</td>
-          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}</td>
+          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}${m.conta_nome ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 Pix caiu em ${fcEsc(m.conta_nome)}</span>` : ''}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
           <td class="fc-td">${fcEsc(_rotMan(m)) || '—'}</td>
@@ -2997,8 +3082,9 @@ async function fcNodeDetalhe(tipo) {
         totM += Number(m.valor || 0);
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
         const depN = m.deposito ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 ${_manDepN(m) ? 'sangria depositada' : 'depositado'} em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : '';
+        const pixN = m.conta_nome ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 Pix caiu em ${fcEsc(m.conta_nome)}</span>` : '';
         return _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '✍ manual'}</td>
-          <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}</td>
+          <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}${pixN}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
       });
