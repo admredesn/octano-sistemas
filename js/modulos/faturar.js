@@ -3639,46 +3639,52 @@ function _fatDiretosVisiveis() {
     return true;
   });
 }
-const _FAT_DIRETOS_MAX = 300;
-function _fatDiretosHtml() {
-  const vis = _fatDiretosVisiveis();
+// As linhas entram NA TABELA das faturas liquidadas, no fim, depois de uma faixa própria (v67, 23/10/2026: o quadro
+// separado ficava EMBAIXO da tabela e a janela do Faturar tem altura fixa — ele saía cortado e a Fazenda São Sebastião
+// "não aparecia"). Mesmas colunas da fatura; mostrar/esconder pelos filtros é o _fatDiretosAplicar (data-tid).
+function _fatDiretoLinha(t) {
+  const temRec = (t._recs || []).length > 0;
+  const quem = [...new Set((t._recs || []).map(b => b.autor).filter(Boolean))].join(", ");
+  const formas = [...new Set((t._recs || []).map(b => b.forma).filter(Boolean))].join(" + ");
+  const venc = t.vencimento ? String(t.vencimento).slice(0, 10) : "";
+  return `<tr data-tid="${t.id}" class="fat-dir">
+    <td class="fat-td"></td>
+    <td class="fat-td"><span class="fat-dir-tag" title="Título recebido direto, sem fatura">título</span></td>
+    <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "—"}</td>
+    <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
+    <td class="fat-td">${venc ? _fatData(venc) : "—"}</td>
+    <td class="fat-td" style="color:#4ade80">${_fatData(t._pagoDia) || "—"}</td>
+    <td class="fat-td" style="text-align:center"><span style="color:#4a5160">—</span></td>
+    <td class="fat-td fat-r">${_fatMoney(t._nota)}${t._desc > 0.004 ? `<div style="font-size:0.7rem;color:#f59e0b" title="Desconto dado no recebimento">desc. −${_fatMoney(t._desc)}</div>` : ""}</td>
+    <td class="fat-td">${temRec ? `<span style="color:#4ade80">${_fatBRL(t._entrou)}</span>${formas ? `<div style="font-size:0.7rem;color:#9aa">${_fatEsc(formas)}</div>` : ""}`
+      : `<span style="color:#9aa" title="${_fatEsc(t.observacao || "Quitado sem recebimento lançado no Octano")}">pago no TecnoX</span>`}</td>
+    <td class="fat-td">${temRec ? '<span style="color:#4ade80">✔ Recebido direto</span>' : '<span style="color:#9aa">Baixado no TecnoX</span>'}</td>
+    <td class="fat-td" style="text-align:center">${_fatEsc(String(t.numero_nfe || "—"))}</td>
+    <td class="fat-td" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_fatEsc(quem)}">${_fatEsc(quem) || "—"}</td>
+    <td class="fat-td" style="font-size:0.78rem;white-space:nowrap">${temRec ? _fatOndeCel(t._recs) : '<span style="color:#4a5160">—</span>'}</td>
+    <td class="fat-td"><span style="color:#4a5160">—</span></td>
+    <td class="fat-td" style="white-space:nowrap"><button class="fat-abtn" style="background:#1d4ed8" onclick="fatVerTituloDireto('${t.id}')">👁 Ver</button></td>
+  </tr>`;
+}
+function _fatDiretosLinhas() {
+  const ds = window._fatDiretos || [];
+  if (!ds.length) return "";
+  return `<tr id="fat-dir-sep"><td colspan="15" class="fat-dir-sep" id="fat-dir-sep-txt"></td></tr>` + ds.map(_fatDiretoLinha).join("");
+}
+function _fatDiretosSepHtml(vis) {
   const nTecnox = (window._fatDiretos || []).filter(t => !(t._recs || []).length).length;
-  const botTecnox = nTecnox ? `<button class="fat-abtn" style="background:#334155;margin-left:8px" onclick="fatDiretosTecnox()"
-      title="Títulos que o espelho do TecnoX deu baixa (pagos lá, sem recebimento lançado no Octano)">${window._fatDiretosTecnox ? "Ocultar" : "Mostrar"} os ${nTecnox} baixados pelo TecnoX</button>` : "";
   const tot = vis.reduce((s, t) => s + t._entrou, 0);
-  const linhas = vis.slice(0, _FAT_DIRETOS_MAX).map(t => {
-    const onde = (t._recs || []).length ? _fatOndeCel(t._recs) : '<span style="color:#4a5160">—</span>';
-    const quem = [...new Set((t._recs || []).map(b => b.autor).filter(Boolean))].join(", ");
-    const formas = [...new Set((t._recs || []).map(b => b.forma).filter(Boolean))].join(" + ") || "—";
-    return `<tr>
-      <td class="fat-td">${_fatEsc(String(t.numero_nfe || "—"))}</td>
-      <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "—"}</td>
-      <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
-      <td class="fat-td" style="color:#4ade80">${_fatData(t._pagoDia) || "—"}</td>
-      <td class="fat-td fat-r">${_fatMoney(t._nota)}</td>
-      <td class="fat-td fat-r" style="color:${t._desc > 0.004 ? "#f59e0b" : "#4a5160"}">${t._desc > 0.004 ? "−" + _fatMoney(t._desc) : "—"}</td>
-      <td class="fat-td fat-r" style="color:#4ade80">${(t._recs || []).length ? _fatMoney(t._entrou) : '<span style="color:#9aa" title="${_fatEsc(t.observacao || "Quitado sem recebimento lançado no Octano")}">pago no TecnoX</span>'}</td>
-      <td class="fat-td">${_fatEsc(formas)}</td>
-      <td class="fat-td" style="font-size:0.78rem;white-space:nowrap">${onde}</td>
-      <td class="fat-td" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_fatEsc(quem)}">${_fatEsc(quem) || "—"}</td>
-      <td class="fat-td"><button class="fat-abtn" style="background:#1d4ed8" onclick="fatVerTituloDireto('${t.id}')">👁 Ver</button></td>
-    </tr>`;
-  }).join("");
-  const mais = vis.length > _FAT_DIRETOS_MAX
-    ? `<div style="color:#9aa;font-size:0.76rem;padding:6px 10px">Mostrando ${_FAT_DIRETOS_MAX} de ${vis.length} — use o período de liquidação ou o cliente para ver os outros.</div>` : "";
-  return `<div style="margin:14px 0 4px;padding:0 4px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
-      <span style="color:#f97316;font-weight:700">🧾 Títulos recebidos direto (sem fatura)</span>
-      <span style="color:#9aa;font-size:0.8rem">${vis.length} título(s) · entrou <strong style="color:#4ade80">R$ ${_fatMoney(tot)}</strong> · recebidos no PDV, no F.Caixa ou no 💰 do título${botTecnox}</span></div>
-    <div class="fat-gridwrap" style="max-height:420px"><table class="fat-grid">
-      <thead><tr><th>Nº NF</th><th>Cliente</th><th>Emissão</th><th>Pagamento</th><th class="fat-r">Valor da nota</th><th class="fat-r">Desconto</th>
-        <th class="fat-r">Entrou</th><th>Forma</th><th>Recebido em</th><th>Recebido por</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || '<tr><td colspan="11" style="padding:16px;text-align:center;color:#666">Nenhum título recebido direto neste filtro.</td></tr>'}</tbody>
-    </table></div>${mais}`;
+  const bot = nTecnox ? ` <button class="fat-abtn" style="background:#334155;margin-left:8px" onclick="fatDiretosTecnox()"
+      title="Títulos que o espelho do TecnoX deu baixa (pagos lá, sem recebimento lançado no Octano)">${window._fatDiretosTecnox ? "Ocultar" : "Mostrar"} os ${nTecnox} baixados pelo TecnoX</button>` : "";
+  return `🧾 Títulos recebidos direto (sem fatura) <span style="color:#9aa;font-weight:400;font-size:0.8rem">· ${vis.length ? vis.length + " título(s) · entrou <strong style=\"color:#4ade80\">" + _fatBRL(tot) + "</strong>" : "nenhum neste filtro"} · recebidos no PDV, no F.Caixa ou no 💰 do título</span>${bot}`;
 }
 function fatDiretosTecnox() { window._fatDiretosTecnox = !window._fatDiretosTecnox; _fatDiretosAplicar(); }
 function _fatDiretosAplicar() {
-  const el = document.getElementById("fat-diretos");
-  if (el && window._fatAba === "liquidadas") el.innerHTML = _fatDiretosHtml();
+  if (window._fatAba !== "liquidadas") return;
+  const vis = _fatDiretosVisiveis(), ids = new Set(vis.map(t => t.id));
+  document.querySelectorAll("tr[data-tid]").forEach(tr => { tr.style.display = ids.has(tr.dataset.tid) ? "" : "none"; });
+  const sep = document.getElementById("fat-dir-sep-txt");
+  if (sep) sep.innerHTML = _fatDiretosSepHtml(vis);
 }
 // a janela de detalhe do título procura na lista de títulos da tela (antes do 1º await): o recebido direto entra só
 // nesse instante e a lista volta como estava (título pago não tem botão que procure de novo)
@@ -3785,6 +3791,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   [..._fatSelF()].forEach(id => { if (!idsAqui.has(id)) _fatSelF().delete(id); });
   const bolPorFat = dados.bolPorFat || {}, rec = dados.recebidos || {}, onde = dados.ondePor || {};
   window._fatBolPorFat = bolPorFat;
+  if (status === "liquidada") window._fatDiretos = dados.diretos || [];   // antes das linhas: entram na mesma tabela
   const linhas = faturas.map(fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
     <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
       ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
@@ -3819,13 +3826,11 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
       <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? '<th title="Conta onde caiu (Sicoob, PagBank, Banco do Brasil…) ou o caixa do PDV">Recebido em</th>' : ""}<th>Docs</th><th>Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 15 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
+      <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 15 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}${status === "liquidada" ? _fatDiretosLinhas() : ""}</tbody>
     </table></div>
-    ${status === "liquidada" ? '<div id="fat-diretos"></div>' : ""}
     ${_fatResumoBoletos(faturas, bolPorFat, status)}
     ${_fatRodapeF(faturas, status)}`;
   if (rolagem) { const gw = corpo.querySelector(".fat-gridwrap"); if (gw) gw.scrollTop = rolagem; }
-  if (status === "liquidada") window._fatDiretos = dados.diretos || [];
   _fatAplicarBuscaF();
 
   // algo ainda em andamento no gateway? então a tela se reconfere sozinha
@@ -4650,6 +4655,8 @@ function _fatEstilo() {
   .fat-c-g{display:inline-flex;align-items:center;gap:6px}
   .fat-c-off{opacity:.35}
   .fat-sa{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;background:#2a2010;color:#f0c98a;font-size:10px;border:1px solid #63501f;cursor:help;white-space:nowrap}
+  .fat-dir-sep{background:#1c1309;color:#f97316;font-weight:700;padding:8px 10px !important;border-top:2px solid #7c2d12}
+  .fat-dir-tag{display:inline-block;padding:0 7px;border-radius:9px;background:#2a1a0c;color:#fdba74;font-size:10px;border:1px solid #7c2d12;cursor:help}
   .fat-parc{display:inline-block;margin-left:4px;padding:0 6px;border-radius:9px;background:#2b2140;color:#c4b5fd;font-size:10px;border:1px solid #4c3b78;cursor:help}
   .fat-devs{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #2a2d3e;background:#11141d;min-width:0}
   .fat-devs-bt{background:transparent;border:none;color:#9aa;font-size:11.5px;cursor:pointer;white-space:nowrap;padding:3px 0}
