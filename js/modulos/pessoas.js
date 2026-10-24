@@ -111,6 +111,10 @@ async function abrirFormPessoa(id, empresaId) {
       </div>
       <div class="form-grid">
         <div class="form-group span2"><label>Nome / Razão Social *</label><input id="fpe-nome" type="text" value="${p?.nome||''}" /></div>
+        ${id ? `<div class="form-group span2"><label>Situação</label>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"${pode('pessoas.ativar') ? '' : ' title="Sem permissão para ativar/inativar pessoa"'}>
+            <input id="fpe-ativo" type="checkbox" ${p?.ativo !== false ? 'checked' : ''} ${pode('pessoas.ativar') ? '' : 'disabled'} style="width:auto" />
+            🟢 Cadastro ativo <span style="font-size:0.72rem;color:#888">(desmarcado = inativo: sai das listas do PDV, do F.Caixa e de funcionários)</span></label></div>` : ''}
         <div class="form-group span2" id="fpe-compart-box"></div>
         <div class="form-group span2">
           <label>Classificação (pode marcar mais de uma)</label>
@@ -815,6 +819,11 @@ async function salvarPessoa(id, empresaId) {
     data_nascimento: document.getElementById('fpe-nasc')?.value || null,
     observacoes: document.getElementById('fpe-obs').value.trim() || null,
   };
+
+  // Situação no próprio cadastro (23/10/2026): antes só o botão da coluna Status ativava — quem reativava pelo
+  // cadastro salvava e a pessoa continuava inativa (Luiza, Florestal). Sem a permissão o campo vem travado e não vai.
+  const cxAtivo = document.getElementById('fpe-ativo');
+  if (id && cxAtivo && !cxAtivo.disabled) dados.ativo = cxAtivo.checked;
 
   let error, pessoaId = id, avisoDest = '';
   const _gravar = async (d) => {
