@@ -3666,7 +3666,8 @@ function _fatDiretoLinha(t) {
     <td class="fat-td" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_fatEsc(quem)}">${_fatEsc(quem) || "—"}</td>
     <td class="fat-td" style="font-size:0.78rem;white-space:nowrap">${temRec ? _fatOndeCel(t._recs) : '<span style="color:#4a5160">—</span>'}</td>
     <td class="fat-td"><span style="color:#4a5160">—</span></td>
-    <td class="fat-td" style="white-space:nowrap"><button class="fat-abtn" style="background:#1d4ed8" onclick="fatVerTituloDireto('${t.id}')">👁 Ver</button></td>
+    <td class="fat-td" style="white-space:nowrap"><button class="fat-abtn" style="background:#1d4ed8" onclick="fatVerTituloDireto('${t.id}')">👁 Ver</button>${temRec
+      ? ` <button class="fat-abtn" style="background:#7f1d1d" onclick="fatExcluirTituloDireto('${t.id}')" title="Excluir o recebimento: o título volta para Títulos em Aberto, como estava antes da baixa">🗑 Excluir</button>` : ""}</td>
   </tr>`;
 }
 // chaves de ordenação do título recebido direto (as mesmas colunas da fatura)
@@ -3689,6 +3690,157 @@ function _fatDiretosAplicar() {
   document.querySelectorAll("tr[data-tid]").forEach(tr => { tr.style.display = ids.has(tr.dataset.tid) ? "" : "none"; });
   return vis;
 }
+// ---------- EXCLUIR O RECEBIMENTO DE UM TÍTULO RECEBIDO DIRETO (25/10/2026) ----------
+// Ronan: "tem que dar opção de excluir em todas e voltar para o estado original antes da baixa". Mesmo caminho do
+// "Excluir recebimento" do F.Caixa (fcTitExcluirOk): os recebimentos do título saem, o título volta para Títulos em
+// Aberto com o saldo de antes da baixa, o dinheiro lançado no caixa do PDV diminui (ou sai) e o pagamento da
+// maquininha/Pix volta a ficar sem par. O Livro financeiro tira sozinho o lançamento (oct_fin_sincronizar).
+// TRAVAS: caixa do turno já conferido no F.Caixa, boleto pago no banco, recebimento conciliado com o extrato.
+// A exclusão vem PRIMEIRO; se a volta do título falhar, os recebimentos são reinseridos.
+async function _fatDirExcDados(id) {
+  const n = await sb.from("oct_pdv_notas_prazo").select("*").eq("id", id).maybeSingle();
+  if (n.error || !n.data) return { erro: "Título não encontrado. Atualize a tela." };
+  const r = await sb.from("oct_recebimentos_titulo").select("*").eq("nota_prazo_id", id).order("data_recebimento");
+  if (r.error) return { erro: "Não consegui ler os recebimentos do título: " + r.error.message };
+  const receb = r.data || [];
+  const conciliados = new Set();
+  let turnos = [];
+  if (receb.length) {
+    try {
+      const q = await sb.from("oct_fin_lancamentos").select("origem_id")
+        .eq("origem", "receb_titulo").eq("conciliado", true).in("origem_id", receb.map(x => String(x.id)));
+      (q.data || []).forEach(l => conciliados.add(String(l.origem_id)));
+    } catch (e) { /* sem livro financeiro */ }
+    const tids = [...new Set(receb.map(x => x.turno_id).filter(Boolean))];
+    if (tids.length) {
+      try { turnos = (await sb.from("oct_pdv_turnos").select("id,numero,conferido_em").in("id", tids)).data || []; }
+      catch (e) { turnos = []; }
+    }
+  }
+  return { nota: n.data, receb, conciliados, turnos };
+}
+function _fatDirExcTravas(d) {
+  const t = [];
+  if (!d.receb.length) t.push("Este título não tem recebimento lançado no Octano (foi baixado pelo TecnoX) — não há baixa para excluir aqui.");
+  if (d.nota.fatura_id || d.nota.status === "faturado") t.push("O título já entrou numa <b>fatura</b>. Exclua a fatura antes.");
+  else if (!["pago", "aberto"].includes(String(d.nota.status || ""))) t.push(`O título está como "${_fatEsc(d.nota.status)}" — não sei voltar daqui.`);
+  if (d.receb.some(r => r.boleto_id)) t.push("Um recebimento veio do <b>boleto pago no banco</b> — o dinheiro entrou no banco e isso não se desfaz pelo Octano.");
+  const conc = d.receb.filter(r => d.conciliados.has(String(r.id)));
+  if (conc.length) t.push(`Recebimento já <b>conciliado com o extrato</b> no Livro financeiro:<br>${conc.map(_fatRecLinha).join("<br>")}<br>Desfaça a conciliação no Livro financeiro antes.`);
+  const conf = d.turnos.filter(x => x.conferido_em);
+  if (conf.length) t.push(`O caixa ${conf.map(x => "nº " + (x.numero ?? "?")).join(", ")}, onde o título foi recebido, já foi <b>conferido no F.Caixa</b>. Reabra o caixa lá (🔓) antes.`);
+  return t;
+}
+async function fatExcluirTituloDireto(id) {
+  if (!podeOuAvisa("faturar.excluir_fatura")) return;
+  _fatModal(`<div style="padding:24px;color:#9aa">Conferindo o título...</div>`);
+  const d = await _fatDirExcDados(id);
+  if (d.erro) { _fatFechaModal(); alert(d.erro); return; }
+  window._fatDirExc = { id, n: d.receb.length };
+  const n = d.nota, travas = _fatDirExcTravas(d);
+  const tot = d.receb.reduce((a, r) => a + _fatRecLiq(r), 0);
+  const volta = _fatDirSaldoAntes(n, d.receb);
+  const avisos = [];
+  if (d.receb.some(r => r.turno_id && /dinheiro/i.test(String(r.forma || "")))) avisos.push("Recebido em <b>dinheiro no caixa do PDV</b>: o lançamento do caixa diminui junto (o esperado da gaveta muda).");
+  if (d.receb.some(r => r.recebimento_id)) avisos.push("Um recebimento estava ligado a um pagamento da maquininha/Pix: esse pagamento volta a aparecer sem par na conferência.");
+  const caixa = (cor, fundo, borda, html) =>
+    `<div style="margin-top:10px;background:${fundo};border:1px solid ${borda};border-radius:8px;padding:10px 12px;font-size:0.8rem;color:${cor};line-height:1.45">${html}</div>`;
+  const oQue = `O título <b>${_fatEsc(n.numero_nfe || "")}</b> de <b>${_fatEsc(n.cliente_nome || "")}</b> volta para <b>Títulos em Aberto</b>
+    com <b>${_fatBRL(volta)}</b> a receber, como antes da baixa.<br>Recebimento(s) <b>excluído(s)</b> (${_fatBRL(tot)}):<br>${d.receb.map(_fatRecLinha).join("<br>")}`;
+  _fatModal(`
+    <div style="background:#13151f;color:#f87171;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🗑 Excluir o recebimento — título ${_fatEsc(n.numero_nfe || "")} · ${_fatEsc(n.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:16px 18px;color:#cdd6e0">
+      ${travas.length ? `<div style="font-size:0.84rem;color:#fecaca">Este recebimento não pode ser excluído agora:</div>` : caixa("#cdd6e0", "#13151f", "#2a2d3e", oQue)}
+      ${travas.map(t => caixa("#fecaca", "#2a1215", "#7f1d1d", "⛔ " + t)).join("")}
+      ${travas.length ? "" : avisos.map(a => caixa("#f0c98a", "#2a2010", "#63501f", "⚠ " + a)).join("")}
+      ${travas.length ? `<div style="display:flex;gap:8px;margin-top:14px"><button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Fechar</button></div>` : `
+      <label style="color:#9aa;font-size:0.74rem;display:block;margin-top:14px">Motivo <span style="color:#667">(obrigatório — fica no histórico do título)</span></label>
+      <input id="fdx-motivo" placeholder="ex.: recebimento lançado no cliente errado / cliente não pagou"
+        style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">
+      <div id="fdx-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button id="fdx-ok" class="fat-btn" style="flex:2;background:#991b1b;border-color:#991b1b;color:#fff;font-weight:700"
+          onclick="fatExcluirTituloDiretoOk('${id}')">🗑 Excluir — o título volta para Em Aberto</button>
+      </div>`}
+    </div>`);
+  document.getElementById("fdx-motivo")?.focus();
+}
+// saldo do título ANTES das baixas: cada baixa abate r.valor (recebido + desconto − acréscimo). Título PAGO volta com a soma
+// das baixas — o recebimento pelo PDV deixa o valor cheio no título pago (Engecity 2457: pago com valor 101,85), então somar
+// em cima dobraria; título ainda em aberto (pago em parte) soma as baixas ao saldo. Mesma regra do F.Caixa (fcTitExcluirOk).
+function _fatDirSaldoAntes(n, receb) {
+  const baixas = receb.reduce((a, r) => a + Number(r.valor || 0), 0);
+  return Math.round((n.status === "pago" ? baixas : Number(n.valor || 0) + baixas) * 100) / 100;
+}
+// dinheiro recebido no PDV entrou também como receita no caixa do turno (receber_titulo.js): acha esse lançamento
+async function _fatDirCaixaDoRec(rec) {
+  if (!rec.turno_id || !/dinheiro/i.test(String(rec.forma || ""))) return null;
+  try {
+    const q = await sb.from("oct_pdv_caixa").select("id,tipo,forma,valor,descricao").eq("turno_id", rec.turno_id);
+    const nome = String(rec.cliente_nome || "").trim().toUpperCase();
+    const quanto = Math.round(_fatRecLiq(rec) * 100) / 100;
+    const cands = (q.data || []).filter(c => /receita/i.test(String(c.tipo || "")) &&
+      /^recebimento de (t[ií]tulo|fatura)/i.test(String(c.descricao || "")) &&
+      (!nome || String(c.descricao || "").toUpperCase().includes(nome)));
+    return cands.find(c => Math.abs(Number(c.valor || 0) - quanto) < 0.005)
+      || cands.filter(c => Number(c.valor || 0) >= quanto - 0.005).sort((a, b) => Number(a.valor) - Number(b.valor))[0] || null;
+  } catch (e) { return null; }
+}
+async function fatExcluirTituloDiretoOk(id) {
+  if (!podeOuAvisa("faturar.excluir_fatura")) return;
+  const msg = document.getElementById("fdx-msg"), btn = document.getElementById("fdx-ok");
+  const motivo = (document.getElementById("fdx-motivo")?.value || "").trim();
+  const erro = t => { if (msg) { msg.style.color = "#f87171"; msg.textContent = t; } if (btn) btn.disabled = false; };
+  if (!motivo) return erro("Escreva o motivo — fica registrado no título.");
+  if (btn) btn.disabled = true;
+  if (msg) { msg.style.color = "#9aa"; msg.textContent = "Excluindo..."; }
+  // confere de novo: entre abrir a janela e confirmar, alguém pode ter conferido o caixa / faturado / recebido mais
+  const d = await _fatDirExcDados(id);
+  if (d.erro) return erro(d.erro);
+  if (_fatDirExcTravas(d).length) return erro("Apareceu uma trava agora. Feche e abra de novo para ver.");
+  if (d.receb.length !== (window._fatDirExc || {}).n) return erro("Os recebimentos do título mudaram enquanto a janela estava aberta. Feche e confira.");
+  const n = d.nota, ids = d.receb.map(r => r.id);
+  const caixas = [];
+  for (const r of d.receb) { const c = await _fatDirCaixaDoRec(r); if (c) caixas.push({ c, r }); }
+  const quem = await _fatUsuario();
+  const quando = new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const linha = `[${quando}] Recebimento excluído por ${quem} (Faturar): ${motivo}. ` +
+    d.receb.map(r => `${_fatData(r.data_recebimento)} ${r.forma || ""} R$ ${_fatMoney(_fatRecLiq(r))}${r.autor ? " (" + r.autor + ")" : ""}`).join("; ") + ".";
+  // 1) os recebimentos saem (confere que saíram: sem permissão o PostgREST não dá erro, só não apaga)
+  const d1 = await sb.from("oct_recebimentos_titulo").delete().in("id", ids).select("id");
+  const saiu = (d1.data || []).map(x => x.id);
+  const devolve = async (txt) => {
+    if (saiu.length) await sb.from("oct_recebimentos_titulo").insert(d.receb.filter(r => saiu.includes(r.id)));
+    return erro(txt + " Os recebimentos foram mantidos; nada foi alterado.");
+  };
+  if (d1.error || saiu.length < ids.length) return devolve("Não consegui excluir " + (ids.length > 1 ? "todos os recebimentos" : "o recebimento") + (d1.error ? ": " + d1.error.message : " (sem permissão para apagar)") + ".");
+  // 2) o título volta para em aberto com o saldo de antes da baixa
+  const valor = _fatDirSaldoAntes(n, d.receb);
+  const upd = { status: "aberto", pago_em: null, valor, observacao: (n.observacao ? n.observacao + " | " : "") + linha };
+  const u = await sb.from("oct_pdv_notas_prazo").update(upd).eq("id", n.id).eq("status", n.status).select("id");
+  if (u.error || !(u.data || []).length) return devolve("Não consegui devolver o título" + (u.error ? ": " + u.error.message : " (ele mudou)") + ".");
+  // 3) dinheiro do PDV: o lançamento do caixa diminui (ou sai) — falha aqui só avisa
+  const avisos = [];
+  for (const { c, r } of caixas) {
+    const novo = Math.round((Number(c.valor || 0) - _fatRecLiq(r)) * 100) / 100;
+    const x = novo > 0.005
+      ? await sb.from("oct_pdv_caixa").update({ valor: novo }).eq("id", c.id).select("id")
+      : await sb.from("oct_pdv_caixa").delete().eq("id", c.id).select("id");
+    if (x.error || !(x.data || []).length) avisos.push("o lançamento de dinheiro do caixa NÃO foi ajustado (" + (x.error ? x.error.message : "sem permissão") + ") — confira o esperado da gaveta no F.Caixa");
+  }
+  // 4) pagamento de maquininha/Pix volta a ficar sem par
+  for (const r of d.receb) {
+    if (r.recebimento_id) { try { await sb.from("oct_recebimentos").update({ conciliado: false }).eq("id", r.recebimento_id); } catch (e) { /* o painel mostra assim mesmo */ } }
+  }
+  _fatFechaModal();
+  alert(`Recebimento excluído. O título ${n.numero_nfe || ""} voltou para Títulos em Aberto com ${_fatBRL(valor)} a receber.` +
+    (avisos.length ? "\n\nAtenção: " + avisos.join("; ") + "." : ""));
+  _fatRecarregar();
+}
+
 // a janela de detalhe do título procura na lista de títulos da tela (antes do 1º await): o recebido direto entra só
 // nesse instante e a lista volta como estava (título pago não tem botão que procure de novo)
 function fatVerTituloDireto(id) {
