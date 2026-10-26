@@ -267,6 +267,45 @@ function ctzItensDoCupom(v, filaDoCupom, turnos, empresaId) {
   });
   return out;
 }
+// CAIXA SUBSTITUÍDO PELO EXTRATO (26/10/2026, Ronan: "quando substitui o lançamento do caixa pelo extrato, lá em
+// conferência de cartões também deveria ter substituído"). O F.Caixa (Cartão + Pix › Substituir pelo extrato) marca os
+// cartões/Pix do turno como excluídos e lança uma linha por transação da maquininha em oct_fc_lancamentos
+// (ref_id 'ext-…', ajuste.secao 'cartao'). Aqui a aba segue o caixa: no turno substituído, sai o cartão/Pix dos cupons e
+// da fila e entram as linhas do extrato. Cartão FROTA não é substituído no F.Caixa — continua vindo do cupom.
+function ctzItemDoExtrato(l, turno, empresaId) {
+  const aj = l.ajuste || {};
+  const local = String(aj.recebido_em || '').replace(/(\.\d+)?([+-]\d{2}:?\d{2}|Z)$/, '');   // hora local do extrato
+  return {
+    id: l.ref_id, empresa_id: empresaId, adquirente: 'pagbank', forma: ctzFormaDe({ forma_nome: aj.forma_nome || aj.bandeira || '' }),
+    bandeira: aj.bandeira && !/^pix$/i.test(aj.bandeira) ? aj.bandeira : (/pix/i.test(aj.forma_nome || '') ? 'Pix' : (aj.bandeira || null)),
+    data_venda: _ctzDiaLocal(local), hora: _ctzHora(local), ocorrido_em: local,
+    valor_bruto: Math.round(Number(aj.valor || 0) * 100) / 100, taxa_fila: null,
+    descricao: 'extrato da maquininha', litros: 0, vendedor: (turno && turno.operador) || '', status_fila: 'extrato', nfce: null, origem: 'extrato',
+    turno, turno_num: turno ? turno.numero : null, caixa_confirmado: !!(turno && turno.conferido_em),
+    parcelas: 1, taxa_cobrada: null, data_prevista_pagamento: null, nsu: null, transacao: null,
+  };
+}
+async function ctzAplicarExtratoDoCaixa(itens, turnos, empresaId) {
+  const ids = (turnos || []).map(t => t.id);
+  const linhas = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await sb.from('oct_fc_lancamentos').select('turno_id,ref_tipo,ref_id,ajuste')
+      .in('turno_id', ids.slice(i, i + 100)).like('ref_id', 'ext-%');
+    if (error) return;                                     // sem a tabela/permissão: a aba fica como era
+    linhas.push(...(data || []).filter(l => l.ajuste && l.ajuste.secao === 'cartao' && !l.ajuste.excluido));
+  }
+  if (!linhas.length) return;
+  const subst = new Set(linhas.map(l => l.turno_id));
+  for (let i = itens.length - 1; i >= 0; i--) {
+    const it = itens[i];
+    if (it.forma !== 'frota' && it.turno && subst.has(it.turno.id)) itens.splice(i, 1);
+  }
+  linhas.forEach(l => {
+    const turno = (turnos || []).find(t => t.id === l.turno_id) || null;
+    const it = ctzItemDoExtrato(l, turno, empresaId);
+    if (it.forma && it.valor_bruto > 0 && it.data_venda >= _CTZ.de && it.data_venda <= _CTZ.ate) itens.push(it);
+  });
+}
 function ctzCompletar(it, taxas) {
   const tx = it.transacao;
   if (tx) {
@@ -432,6 +471,7 @@ async function _ctzCarregar() {
     // fila ainda sem cupom, dentro do período da tela
     fila.filter(f => String(f.status || 'fila') === 'fila' && ctzFormaDe(f) && _ctzDiaLocal(f.ocorrido_em) >= _CTZ.de && _ctzDiaLocal(f.ocorrido_em) <= _CTZ.ate)
       .forEach(f => itens.push(ctzItem(f, ctzTurnoDe(f, turnos), _CTZ.taxas, eid)));
+    await ctzAplicarExtratoDoCaixa(itens, turnos, eid);
     itens.sort((a, b) => String(a.ocorrido_em).localeCompare(String(b.ocorrido_em)));
     _CTZ.fora = ctzCasarEdi(itens, txs);
     itens.forEach(it => { ctzCompletar(it, _CTZ.taxas); it.conta = ctzContaDoItem(it, _CTZ.contas, _CTZ.formasFrota); });
@@ -570,7 +610,7 @@ function _ctzRender() {
       <td class="ctz-td"><input type="checkbox" ${marcado ? 'checked' : ''} onclick="event.stopPropagation();ctzSel('${t.id}', event, true)"></td>
       <td class="ctz-td">${_ctzDt(t.data_venda)}</td><td class="ctz-td ctz-mut">${_ctzEsc(t.hora)}</td>
       <td class="ctz-td" style="font-size:0.7rem">${turnoTxt}<br><span class="ctz-mut">${_ctzEsc((t.vendedor || '').split(' ').slice(0, 2).join(' '))}</span></td>
-      <td class="ctz-td ctz-mut" style="font-size:0.7rem" title="${_ctzEsc(t.descricao)}">${t.origem === 'cupom' ? '🧾 ' + _ctzEsc(t.nfce || '') + ' · ' : '⏳ fila · '}${_ctzEsc(t.descricao).slice(0, 18)}${t.litros ? ' · ' + _ctzNum(t.litros, 2) + ' L' : ''}</td>
+      <td class="ctz-td ctz-mut" style="font-size:0.7rem" title="${_ctzEsc(t.descricao)}">${t.origem === 'cupom' ? '🧾 ' + _ctzEsc(t.nfce || '') + ' · ' : t.origem === 'extrato' ? '🏦 ' : '⏳ fila · '}${_ctzEsc(t.descricao).slice(0, 18)}${t.litros ? ' · ' + _ctzNum(t.litros, 2) + ' L' : ''}</td>
       <td class="ctz-td"${t.forma_caixa ? ` title="no caixa: ${_ctzEsc(_CTZ_FORMA[t.forma_caixa] || t.forma_caixa)}"` : ''}>${_CTZ_FORMA[t.forma] || ''}</td><td class="ctz-td"${t.bandeira_caixa ? ` title="no caixa: ${_ctzEsc(t.bandeira_caixa)}"` : ''}>${_ctzEsc(t.bandeira || '')}</td>
       <td class="ctz-td ctz-r">${Number(t.parcelas || 1) > 1 ? t.parcelas + 'x' : '—'}</td>
       <td class="ctz-td ctz-r">${_ctzNum(t.valor_bruto)}</td>
