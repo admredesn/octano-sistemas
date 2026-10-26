@@ -677,6 +677,16 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     // em produção a nota vale: a fatura que já tem NF-e (do Octano ou anexada do TecnoX) não ganha outra
     if (prod && fatura && fatura.nfe_chave)
       throw new Error(`A fatura ${fatura.numero ?? ""} já tem a NF-e nº ${fatura.nfe_numero || String(fatura.nfe_chave).slice(25, 34)}. Uma fatura não leva duas NF-e valendo.`);
+    // CUPOM QUE JÁ VIROU NF-e (26/10/2026: tela Cupom → NF-e do retaguarda, NF-e do PDV — oct_nfe_cupons): a fatura não
+    // emite outra para ele (a mesma venda com duas NF-e)
+    {
+      const ja = [];
+      for (let i = 0; i < chaves.length; i += 80) {
+        const { data: ls } = await sb.from("oct_nfe_cupons").select("cupom_chave,nfe_numero,ambiente").in("cupom_chave", chaves.slice(i, i + 80));
+        (ls || []).filter(l => l.ambiente === "producao" || l.ambiente === cfgNfe.ambiente).forEach(l => ja.push(l));
+      }
+      if (ja.length) throw new Error(`${new Set(ja.map(l => l.cupom_chave)).size} cupom(ns) destes títulos já têm NF-e (nº ${Array.from(new Set(ja.map(l => l.nfe_numero))).join(", ")}). A mesma venda não leva duas NF-e — confira em NF-e › Cupom → NF-e.`);
+    }
     // CUPOM DE HOMOLOGAÇÃO NÃO ENTRA NA REFERÊNCIA DA NF-e DE PRODUÇÃO (17/10/2026, fatura 101 da Bread Life: 9 dos
     // 22 cupons eram NFC-e do Octano em homologação, sem valor fiscal). Decisão do Ronan: a NF-e 5929 sai INTEIRA,
     // com o valor da fatura; só não aponta (NFref / "REFERENTE AOS CUPONS") cupom que a SEFAZ de produção não conhece.

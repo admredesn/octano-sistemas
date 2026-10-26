@@ -94,6 +94,9 @@ async function moduloNfe() {
           <div class="nfe-mov-aba" onclick="navegarPara('nfe_saida')">
             <span class="nfe-mov-aba-ico">📤</span><span>Nota fiscal de saída</span>
           </div>
+          <div class="nfe-mov-aba" onclick="navegarPara('nfe_cupons')">
+            <span class="nfe-mov-aba-ico">🧾</span><span>Cupom → NF-e</span>
+          </div>
         </div>
         <div class="nfe-mov-painel">
 

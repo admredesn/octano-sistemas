@@ -77,6 +77,9 @@ async function moduloNfeSaida() {
           <div class="ns-aba ativo">
             <span class="ns-aba-ico">📤</span><span>Nota fiscal de saída</span>
           </div>
+          <div class="ns-aba" onclick="navegarPara('nfe_cupons')">
+            <span class="ns-aba-ico">🧾</span><span>Cupom → NF-e</span>
+          </div>
         </div>
         <div class="ns-painel" id="ns-conteudo">
           <p style="color:#888;padding:20px">Carregando notas...</p>

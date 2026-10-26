@@ -348,6 +348,7 @@ function navegarPara(modulo){
     nfe:           moduloNfe,
     nfce:          moduloNfce,
     nfe_saida:     moduloNfeSaida,
+    nfe_cupons:    moduloNfeCupons,
     manifestacao:  moduloManifestacao,
     tanques:       moduloTanques,
     monitor:       moduloMonitor,
