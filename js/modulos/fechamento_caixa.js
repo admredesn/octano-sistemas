@@ -4710,6 +4710,25 @@ function _fcPausaQuando(p) {
   } catch (e) { return String(p.desde || ''); }
 }
 
+// A MESMA VENDA PELO E-MAIL E PELO EDI (26/10/2026, AC caixa 838: 186 linhas = 169 do e-mail + 17 repetidas do EDI,
+// R$ 699,99 a mais que o app do PagBank). O núcleo reimportava o EDI sem o filtro de apelidos; a substituição somava as
+// duas. Aqui a venda do EDI que tem par no e-mail (mesmo valor, cartão com cartão / Pix com Pix, até 2 min) sai — cada
+// venda do e-mail absorve no máximo uma do EDI, para duas vendas iguais de verdade não virarem uma.
+function _fcExtratoSemDobro(ext) {
+  const grupo = r => /pix/i.test(String(r.forma || '') + ' ' + String(r.bandeira || '')) ? 'pix' : 'cartao';
+  const ts = r => Date.parse(String(r.recebido_em || '').replace(/([+-]\d{2}:?\d{2}|Z)$/, ''));
+  const emails = ext.filter(r => r.origem === 'pagbank_email').map(r => ({ r, t: ts(r), usado: false }));
+  if (!emails.length) return ext;
+  return ext.filter(r => {
+    if (r.origem !== 'pagbank_edi') return true;
+    const t = ts(r), v = Math.round(Number(r.valor || 0) * 100), g = grupo(r);
+    const par = emails.filter(e => !e.usado && Math.round(Number(e.r.valor || 0) * 100) === v && grupo(e.r) === g && Math.abs(e.t - t) <= 120e3)
+      .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))[0];
+    if (!par) return true;
+    par.usado = true;
+    return false;
+  });
+}
 async function fcExtratoSubstituir() {
   if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
   if (_fcTravado()) return;
@@ -4730,7 +4749,7 @@ async function fcExtratoSubstituir() {
     return;
   }
 
-  const ext = (d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || '')));
+  const ext = _fcExtratoSemDobro((d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || ''))));
   if (!ext.length) {
     alert('Sem retorno da maquininha para este turno.' + N2
       + 'O EDI é D-1 e o e-mail depende da ingestão — se o turno é de hoje, o extrato pode ainda não ter chegado.');
