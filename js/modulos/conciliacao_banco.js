@@ -292,7 +292,7 @@ function _cbRender() {
       <button class="cbl-btn" onclick="cbAplicarPeriodo()">🔍 Pesquisar</button>
       <button class="cbl-btn" onclick="_cbCarregar(true)" title="Traz de novo contas pagas e títulos recebidos">↻ Atualizar</button>
     </div>
-    <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,58fr) minmax(0,42fr);gap:10px;padding:10px 14px">
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:${conta.extrato_banco ? 'minmax(0,58fr) minmax(0,42fr)' : 'minmax(0,1fr)'};gap:10px;padding:10px 14px">
       <div class="cbl-pane">
         <div class="cbl-bar" style="border-radius:0;gap:6px">
           <b style="color:#fdba74">📒 Livro — ${_cbEsc(conta.nome)}</b>
@@ -315,19 +315,17 @@ function _cbRender() {
             ${cortou ? `<tr><td class="cbl-td" colspan="11" style="color:#fbbf24;padding:10px">Mostrando as ${_CB_MAX_LINHAS} primeiras de ${vis.length} linhas — refine pelo período ou pela busca. Os totais abaixo consideram todas.</td></tr>` : ''}
           </tbody></table></div>
       </div>
-      <div class="cbl-pane">
+      ${conta.extrato_banco ? `<div class="cbl-pane">
         <div class="cbl-bar" style="border-radius:0">
-          <b style="color:#60a5fa">🏦 Banco — ${conta.extrato_banco ? 'extrato ' + _cbEsc(conta.nome) : 'sem extrato automático'}</b>
+          <b style="color:#60a5fa">🏦 Banco — extrato ${_cbEsc(conta.nome)}</b>
           <span class="cbl-mut">${_cb.movs.length} movimentos</span>
           ${selMov ? `<span style="flex:1"></span><span class="cbl-mut">selecionado: <b style="color:#e0e0e0">${_cbMoney(_cbSinalMov(selMov))}</b> · marcados no livro: <b style="color:${Math.abs(selSoma - _cbSinalMov(selMov)) < 0.005 ? '#4ade80' : '#fbbf24'}">${_cbMoney(selSoma)}</b></span>` : ''}
         </div>
-        <div class="cbl-scroll" id="cb-scrM">${conta.extrato_banco ? `<table class="cbl-tab">
+        <div class="cbl-scroll" id="cb-scrM"><table class="cbl-tab">
           <colgroup><col style="width:80px"><col><col style="width:78px"><col style="width:100px"><col style="width:76px"></colgroup>
           <thead><tr><th>Data</th><th>Descrição</th><th>Doc</th><th style="text-align:right">Valor</th><th></th></tr></thead>
-          <tbody>${trM || '<tr><td class="cbl-td" colspan="5" style="color:#777;padding:14px">Sem movimentos no período.</td></tr>'}</tbody></table>`
-          : `<p style="padding:18px;color:#7c8698;line-height:1.5">Esta conta não tem extrato automático. O livro ao lado é o controle dela:
-             lance as entradas e saídas e informe o saldo inicial (⚙). As vendas no cartão e Pix da maquininha entram sozinhas na etapa 2.</p>`}</div>
-      </div>
+          <tbody>${trM || '<tr><td class="cbl-td" colspan="5" style="color:#777;padding:14px">Sem movimentos no período.</td></tr>'}</tbody></table></div>
+      </div>` : ''}
     </div>
     <div class="cbl-tot">
       <div><span>Saldo anterior</span><b>${_cbMoney(_cb.saldoAntes)}</b></div>
