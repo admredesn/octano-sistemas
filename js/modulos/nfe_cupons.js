@@ -66,49 +66,75 @@ function _ncupFormasTxt(v) {
 }
 
 // ---------- a NF-e (pura: dá para testar fora do navegador) ----------
-// vendas     linhas de oct_pdv_vendas (itens, nfce_chave, numero, valor_total, placa)
-// dest       { doc, nome, ie, logradouro, numero, bairro, municipio, uf, cep, c_mun }
-// cfg        _fatNfeConfig()   prodSet  chaves dos cupons autorizados em PRODUÇÃO (entram na referência)
-// emp        oct_empresas      prods    oct_produtos do posto (completa o fiscal que o cupom não gravou)
-function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods) {
-  const prod = cfg.ambiente === "producao";
-  const _cst = c => String(c || "").replace(/^0(?=\d\d$)/, "");
-  // o cupom guarda o retrato fiscal da venda; o que faltar vem do cadastro: pelo código, pelo id do produto e — só o %
-  // de biodiesel/etanol anidro — pelo código ANP (Florestal 26/10: diesel S500 vendido com o código antigo ODMB, que
-  // não existe mais; o mesmo diesel é o "6" do cadastro, com 13%; sem o índice a SEFAZ recusa: 908)
+// o cupom guarda o retrato fiscal da venda; o que faltar vem do cadastro: pelo código, pelo id do produto e — só o %
+// de biodiesel/etanol anidro — pelo código ANP (Florestal 26/10: diesel S500 vendido com o código antigo ODMB, que
+// não existe mais; o mesmo diesel é o "6" do cadastro; sem o índice a SEFAZ recusa: 908)
+function _ncupCadastro(prods) {
   const porCod = {}, porId = {}, porAnp = {};
   (prods || []).forEach(p => {
     if (p.codigo != null && (!porCod[String(p.codigo)] || p.ativo !== false)) porCod[String(p.codigo)] = p;
     if (p.id) porId[p.id] = p;
     if (p.cod_anp && Number(p.perc_bio) > 0 && (!porAnp[p.cod_anp] || p.ativo !== false)) porAnp[p.cod_anp] = p;
   });
+  return { porCod, porId, porAnp };
+}
+function _ncupFiscal(fiscal, cods, cad) {
+  const f = Object.assign({}, fiscal || {});
+  cods.forEach(pc => {
+    if (!pc) return;
+    ["ncm", "cest", "unidade", "origem", "cst_icms", "aliq_icms_ad_rem", "cod_anp", "desc_anp", "perc_bio", "nome"].forEach(c => {
+      if ((f[c] == null || f[c] === "") && pc[c] != null && pc[c] !== "") f[c] = pc[c];
+    });
+  });
+  if (!(Number(f.perc_bio) > 0) && f.cod_anp && cad.porAnp[f.cod_anp]) f.perc_bio = cad.porAnp[f.cod_anp].perc_bio;
+  return f;
+}
+// CST como na NF-e do TecnoX da AC: 61 combustível monofásico, 60 etanol (o cadastro da AC traz 10) e loja com ST
+function _ncupCst(f, ncm) {
+  const c0 = String(f.cst_icms || "").replace(/^0(?=\d\d$)/, "");
+  return c0 === "61" ? "61" : ((c0 === "60" || /^2207/.test(ncm)) ? "60" : "90");
+}
+// item da NF-e (sem nItem): base = { cod, desc, f, q, v, manual }
+function _ncupItem(base, prod, emp) {
+  const f = base.f || {}, ncm = _ncupDig(f.ncm), cst = _ncupCst(f, ncm);
+  const comb = (cst === "61" || /^2207/.test(ncm)) && !!f.cod_anp;   // grupo <comb>: gasolina, diesel, etanol
+  const un = (cst === "61" || /^2207/.test(ncm)) ? "L" : (/^(L|LT|LTS|LITRO|LITROS)$/i.test(String(f.unidade || "")) ? "L" : (f.unidade || "UN"));
+  const qCom = Math.round(Number(base.q) * 10000) / 10000, vProd = Math.round(Number(base.v) * 100) / 100;
+  return {
+    cProd: String(base.cod || "") || "ITEM", xProd: _ncupTxt(base.desc || f.nome || "ITEM", 120),
+    cEAN: "SEM GTIN", cEANTrib: "SEM GTIN",
+    ncm, cest: f.cest || null, cfop: "5929",
+    uCom: un, uTrib: un,
+    qCom, vUnCom: qCom ? vProd / qCom : 0, vProd, vDesc: 0,
+    origem: String(f.origem || "0"),
+    cst_icms: cst, aliq_icms: 0, aliq_icms_ad_rem: cst === "61" ? Number(f.aliq_icms_ad_rem || 0) : 0,
+    cst_pis: "49", cst_cofins: "49", aliq_pis: 0, aliq_cofins: 0,
+    ind_combustivel: comb ? "S" : "N", ind_monofasico: "N",
+    // 1229: em HOMOLOGAÇÃO a SEFAZ cobra a monofasia retida no leiaute novo; em produção vai como a NF-e do TecnoX
+    gmono_ret: cst === "61" && !prod,
+    cod_anp: comb ? f.cod_anp : null, desc_anp: comb ? (f.desc_anp || null) : null,
+    perc_bio: cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: (emp && emp.uf) || "MG",
+    manual: !!base.manual,
+  };
+}
+
+// os itens dos cupons, agrupados por produto + preço (como a NF-e consolidada do Faturar)
+function _ncupItensCupons(vendas, prods, emp, prod) {
+  const cad = _ncupCadastro(prods);
   const ordem = vendas.slice().sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")));
-  const semNcm = [], naoFecha = [], semBio = new Set(), grupos = new Map();
+  const semNcm = [], naoFecha = [], grupos = new Map();
   ordem.forEach(v => {
     let somaV = 0;
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
-      const f = Object.assign({}, it.fiscal || {});
-      [porCod[String(it.cod || "")], porId[it.produto_id], porId[f.id]].forEach(pc => {
-        if (!pc) return;
-        ["ncm", "cest", "unidade", "origem", "cst_icms", "aliq_icms_ad_rem", "cod_anp", "desc_anp", "perc_bio"].forEach(c => {
-          if ((f[c] == null || f[c] === "") && pc[c] != null && pc[c] !== "") f[c] = pc[c];
-        });
-      });
-      if (!(Number(f.perc_bio) > 0) && f.cod_anp && porAnp[f.cod_anp]) f.perc_bio = porAnp[f.cod_anp].perc_bio;
+      const f = _ncupFiscal(it.fiscal, [cad.porCod[String(it.cod || "")], cad.porId[it.produto_id], cad.porId[(it.fiscal || {}).id]], cad);
       const q = Number(it.qtd || 0) || 1;
       const total = Math.round(Number(it.total != null ? it.total : q * Number(it.unit || 0)) * 100) / 100;
       if (!(total > 0)) return;
       somaV += total;
       const ncm = _ncupDig(f.ncm);
       if (!ncm) { semNcm.push(`${it.desc || "item"} (cupom ${v.numero})`); return; }
-      // CST como na NF-e do TecnoX da AC: 61 combustível monofásico, 60 etanol (o cadastro da AC traz 10) e loja com ST
-      const c0 = _cst(f.cst_icms);
-      const cst = c0 === "61" ? "61" : ((c0 === "60" || /^2207/.test(ncm)) ? "60" : "90");
-      // diesel B e gasolina C: a SEFAZ exige o índice de mistura (pBio)
-      if (cst === "61" && /^(8201|3201)/.test(String(f.cod_anp || "")) && !(Number(f.perc_bio) > 0)) semBio.add(it.desc || f.nome || "combustível");
-      const preco = Math.round(total / q * 100) / 100;
-      const ch = [String(it.cod || it.desc || ""), ncm, cst, preco.toFixed(2)].join("|");
-      const g = grupos.get(ch) || { it, f, ncm, cst, q: 0, v: 0 };
+      const ch = [String(it.cod || it.desc || ""), ncm, _ncupCst(f, ncm), (Math.round(total / q * 100) / 100).toFixed(2)].join("|");
+      const g = grupos.get(ch) || { cod: it.cod, desc: it.desc, f, q: 0, v: 0 };
       g.q += q; g.v += total;
       grupos.set(ch, g);
     });
@@ -116,32 +142,66 @@ function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods) {
   });
   if (semNcm.length) throw new Error(`Item sem NCM no cadastro: ${semNcm.slice(0, 5).join("; ")}${semNcm.length > 5 ? "…" : ""}. Complete o NCM em Produtos e gere de novo.`);
   if (naoFecha.length) throw new Error(`Os itens não fecham com o valor do cupom: ${naoFecha.slice(0, 5).join("; ")}${naoFecha.length > 5 ? "…" : ""}. Tire esse(s) cupom(ns) da seleção.`);
-  if (semBio.size) throw new Error(`Combustível sem o % de biodiesel/etanol anidro ("% Bio" em Produtos) no cadastro: ${Array.from(semBio).join(", ")}. Complete em Produtos e gere de novo.`);
   if (!grupos.size) throw new Error("Os cupons escolhidos não têm itens com valor.");
-  const itens = [];
-  grupos.forEach(g => {
-    const f = g.f, cst = g.cst, ncm = g.ncm;
-    const comb = (cst === "61" || /^2207/.test(ncm)) && !!f.cod_anp;   // grupo <comb>: gasolina, diesel, etanol
-    const un = (cst === "61" || /^2207/.test(ncm)) ? "L" : (/^(L|LT|LTS|LITRO|LITROS)$/i.test(String(f.unidade || "")) ? "L" : (f.unidade || "UN"));
-    const qCom = Math.round(g.q * 10000) / 10000, vProd = Math.round(g.v * 100) / 100;
-    itens.push({
-      nItem: itens.length + 1, cProd: String(g.it.cod || "") || ("ITEM" + (itens.length + 1)), xProd: _ncupTxt(g.it.desc || f.nome || "ITEM", 120),
-      cEAN: "SEM GTIN", cEANTrib: "SEM GTIN",
-      ncm, cest: f.cest || null, cfop: "5929",
-      uCom: un, uTrib: un,
-      qCom, vUnCom: vProd / qCom, vProd, vDesc: 0,
-      origem: String(f.origem || "0"),
-      cst_icms: cst, aliq_icms: 0, aliq_icms_ad_rem: cst === "61" ? Number(f.aliq_icms_ad_rem || 0) : 0,
-      cst_pis: "49", cst_cofins: "49", aliq_pis: 0, aliq_cofins: 0,
-      ind_combustivel: comb ? "S" : "N", ind_monofasico: "N",
-      // 1229: em HOMOLOGAÇÃO a SEFAZ cobra a monofasia retida no leiaute novo; em produção vai como a NF-e do TecnoX
-      gmono_ret: cst === "61" && !prod,
-      cod_anp: comb ? f.cod_anp : null, desc_anp: comb ? (f.desc_anp || null) : null,
-      perc_bio: cst === "61" && Number(f.perc_bio) > 0 ? Number(f.perc_bio) : null, uf_cons: (emp && emp.uf) || "MG",
+  return Array.from(grupos.values()).map(g => _ncupItem(g, prod, emp));
+}
+
+// produto do cadastro posto à mão na nota
+function _ncupItemDoCadastro(p, q, unit, prods, emp, prod) {
+  const cad = _ncupCadastro(prods);
+  const f = _ncupFiscal({}, [p], cad);
+  return _ncupItem({ cod: p.codigo, desc: p.nome, f, q, v: Number(q) * Number(unit), manual: true }, prod, emp);
+}
+
+// desconto (vDesc) e acréscimo rateados pelo valor de cada item; o acréscimo vai EMBUTIDO no preço (o servidor não manda
+// vOutro — mesma escolha da via da nota a prazo: "acréscimo embutido"). O último item leva o resto do arredondamento.
+function _ncupAjustar(itens, desconto, acrescimo) {
+  const base = itens.reduce((s, i) => s + Number(i.vProd || 0), 0);
+  const ratear = tot => {
+    const cents = Math.round(Number(tot || 0) * 100);
+    if (!cents || !(base > 0)) return itens.map(() => 0);
+    let usado = 0;
+    return itens.map((i, k) => {
+      if (k === itens.length - 1) return (cents - usado) / 100;
+      const c = Math.round(cents * Number(i.vProd) / base); usado += c; return c / 100;
     });
+  };
+  const acr = ratear(acrescimo), des = ratear(desconto);
+  return itens.map((i, k) => {
+    const vProd = Math.round((Number(i.vProd) + acr[k]) * 100) / 100;
+    return Object.assign({}, i, { vProd, vUnCom: i.qCom ? vProd / i.qCom : 0, vDesc: Math.round(des[k] * 100) / 100 });
   });
-  const semAnp = itens.filter(i => i.cst_icms === "61" && !i.cod_anp).map(i => i.xProd);
+}
+
+// vendas     linhas de oct_pdv_vendas (itens, nfce_chave, numero, valor_total, placa)
+// dest       { doc, nome, ie, logradouro, numero, bairro, municipio, uf, cep, c_mun }
+// cfg        _fatNfeConfig()   prodSet  chaves dos cupons autorizados em PRODUÇÃO (entram na referência)
+// emp        oct_empresas      prods    oct_produtos do posto (completa o fiscal que o cupom não gravou)
+// ed         (opcional) o que foi editado na tela: { itens (de _ncupItensCupons + manuais, já com qtd/valor
+//            mexidos), desconto, acrescimo } em R$
+function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods, ed) {
+  const prod = cfg.ambiente === "producao";
+  const base = (ed && Array.isArray(ed.itens)) ? ed.itens : _ncupItensCupons(vendas, prods, emp, prod);
+  if (!base.length) throw new Error("A NF-e ficou sem itens.");
+  const ruins = base.filter(i => !(Number(i.qCom) > 0) || !(Number(i.vProd) > 0)).map(i => i.xProd);
+  if (ruins.length) throw new Error(`Item com quantidade ou valor zerado: ${ruins.join(", ")}.`);
+  const semNcm = base.filter(i => !i.ncm).map(i => i.xProd);
+  if (semNcm.length) throw new Error(`Item sem NCM no cadastro: ${semNcm.join(", ")}. Complete o NCM em Produtos.`);
+  const semAnp = base.filter(i => i.cst_icms === "61" && !i.cod_anp).map(i => i.xProd);
   if (semAnp.length) throw new Error(`Combustível sem código ANP no cadastro: ${semAnp.join(", ")}.`);
+  // diesel B e gasolina C: a SEFAZ exige o índice de mistura (pBio)
+  const semBio = base.filter(i => i.cst_icms === "61" && /^(8201|3201)/.test(String(i.cod_anp || "")) && !(Number(i.perc_bio) > 0)).map(i => i.xProd);
+  if (semBio.length) throw new Error(`Combustível sem o % de biodiesel/etanol anidro ("% Bio" em Produtos) no cadastro: ${semBio.join(", ")}. Complete em Produtos e gere de novo.`);
+  const desconto = Math.round(Number((ed && ed.desconto) || 0) * 100) / 100, acrescimo = Math.round(Number((ed && ed.acrescimo) || 0) * 100) / 100;
+  if (desconto < 0 || acrescimo < 0) throw new Error("Desconto e acréscimo não podem ser negativos.");
+  const itens = _ncupAjustar(base, desconto, acrescimo).map((i, k) => {
+    const o = Object.assign({}, i, { nItem: k + 1 });
+    if (!o.cProd || o.cProd === "ITEM") o.cProd = "ITEM" + (k + 1);
+    delete o.manual;
+    return o;
+  });
+  const estoura = itens.filter(i => i.vDesc >= i.vProd).map(i => i.xProd);
+  if (estoura.length) throw new Error(`O desconto ficou maior que o valor do item: ${estoura.join(", ")}.`);
 
   const e = emp || {};
   const emitente = {
@@ -159,6 +219,10 @@ function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods) {
     municipio: _ncupTxt(dest.municipio), c_mun: _ncupDig(dest.c_mun), uf: _ncupTxt(dest.uf || "MG", 2).toUpperCase(),
     cep: _ncupDig(dest.cep), ie: contrib ? ie : "", ind_ie: contrib ? "1" : "9",
   };
+  // CST 90 para quem não tem IE a SEFAZ recusa (508, teste de homologação 26/10 com um aditivo posto à mão)
+  const cst90 = doc && !contrib ? itens.filter(i => i.cst_icms === "90").map(i => i.xProd) : [];
+  if (cst90.length) throw new Error(`Cliente sem inscrição estadual: a SEFAZ recusa o CST 90 (rejeição 508) em ${cst90.join(", ")}. Informe a IE do cliente ou tire o item (a tributação do produto se acerta em Produtos com o contador).`);
+  const ordem = vendas.slice().sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")));
   const refs = [], nums = [], placas = [];
   ordem.forEach(v => {
     const ch = _ncupDig(v.nfce_chave);
@@ -179,6 +243,7 @@ function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods) {
     inf_complementar: compl.join(" | ").slice(0, 4900),
   };
 }
+function _ncupVNF(nota) { return +nota.itens.reduce((s, i) => s + Number(i.vProd || 0) - Number(i.vDesc || 0), 0).toFixed(2); }
 
 // ---------- tela ----------
 async function moduloNfeCupons() {
@@ -221,6 +286,19 @@ async function moduloNfeCupons() {
       .ncup-linha > div{flex:1;min-width:0}
       .ncup-linha label{display:block;font-size:0.72rem;color:#888;margin-bottom:3px}
       .ncup-linha input{width:100%;box-sizing:border-box;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem}
+      .ncup-sug{position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#13151f;border:1px solid #2a4a6a;border-radius:7px;max-height:300px;overflow:auto;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+      .ncup-sug div{padding:7px 10px;border-bottom:1px solid #1c2130;cursor:pointer;font-size:0.84rem;color:#ddd}
+      .ncup-sug div.ativo,.ncup-sug div:hover{background:#16304a}
+      .ncup-sug span{color:#778}
+      .ncup-aviso{background:#2a2300;border:1px solid #5a4a10;border-radius:7px;padding:8px 12px;color:#fbbf24;font-size:0.8rem;margin-bottom:8px}
+      .ncup-ed{width:100%;border-collapse:collapse;font-size:0.8rem}
+      .ncup-ed th{text-align:left;color:#888;font-weight:500;padding:5px 6px;border-bottom:1px solid #2a2d3e;font-size:0.74rem}
+      .ncup-ed td{padding:4px 6px;border-bottom:1px solid #1a1d2e;color:#ddd}
+      .ncup-ed input{width:100%;box-sizing:border-box;padding:4px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem;text-align:right;font-variant-numeric:tabular-nums}
+      .ncup-ed tr.ncup-manual td:first-child{color:#93c5fd}
+      .ncup-ajuste{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px}
+      .ncup-ajuste label{display:block;font-size:0.72rem;color:#888;margin-bottom:3px}
+      .ncup-ajuste input,.ncup-ajuste select{padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.82rem}
     </style>
     <div class="ns-janela">
       <div class="ns-titulo">
@@ -242,7 +320,8 @@ async function moduloNfeCupons() {
             <div style="font-size:0.8rem;color:#aaa">${_ncupEsc(st.emp.nome || "")} · NF-e em <b style="color:${prodAmb ? "#4ade80" : "#f59e0b"}">${prodAmb ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}</b> · série ${_ncupEsc(st.cfg.serie)}</div>
           </div>
           <div class="ncup-filtros">
-            <div style="flex:1;min-width:220px"><label>Cliente (nome ou CPF/CNPJ)</label><input id="ncup-cli" style="width:100%;box-sizing:border-box" placeholder="ex.: SABOR REAL ou 31960588000159" value="${_ncupEsc(st.cli || "")}"></div>
+            <div style="flex:1;min-width:220px;position:relative"><label>Cliente (código, nome ou CPF/CNPJ)</label><input id="ncup-cli" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="comece a digitar: CEMTAL, 573 ou 22282628…" value="${_ncupEsc(st.cliSel ? st.cliSel.nome : (st.cli || ""))}">
+              <div id="ncup-sug" class="ncup-sug" style="display:none"></div></div>
             <div><label>De</label><input id="ncup-de" type="date" value="${st.de}" max="${hoje}"></div>
             <div><label>Até</label><input id="ncup-ate" type="date" value="${st.ate}" max="${hoje}"></div>
             <div><button class="ncup-btn" onclick="ncupBuscar()">🔍 Buscar</button></div>
@@ -260,9 +339,57 @@ async function moduloNfeCupons() {
         </div>
       </div>
     </div>`;
-  document.getElementById("ncup-cli").addEventListener("keydown", e => { if (e.key === "Enter") ncupBuscar(); });
+  const cli = document.getElementById("ncup-cli");
+  cli.addEventListener("input", () => { st.cliSel = null; clearTimeout(st.sugT); st.sugT = setTimeout(_ncupSugerir, 250); });
+  cli.addEventListener("keydown", _ncupSugTecla);
+  cli.addEventListener("blur", () => setTimeout(() => { const b = document.getElementById("ncup-sug"); if (b) b.style.display = "none"; }, 200));
   if (st.vendas) { _ncupMontarFiltros(); ncupFiltrar(); }
-  else if (st.cli) ncupBuscar();
+  else if (st.cliSel || st.cli) ncupBuscar();
+}
+
+// ---------- cliente: sugestões enquanto digita (código, nome, razão social, CPF/CNPJ) ----------
+async function _ncupSugerir() {
+  const st = window._ncup, el = document.getElementById("ncup-cli"), box = document.getElementById("ncup-sug");
+  if (!el || !box) return;
+  const termo = String(el.value || "").trim().replace(/[,()*%]/g, " ").trim();
+  if (termo.length < 2) { box.style.display = "none"; st.sug = []; return; }
+  const dig = _ncupDig(termo);
+  const conds = [`nome.ilike.%${termo}%`, `razao_social.ilike.%${termo}%`];
+  if (dig.length >= 3) conds.push(`documento.ilike.%${dig}%`);
+  if (/^\d{1,6}$/.test(termo)) conds.push(`tecnox_cod.eq.${termo}`);
+  const pedido = (st.sugN = (st.sugN || 0) + 1);
+  const { data } = await sb.from("oct_pessoas").select("id,nome,razao_social,documento,tecnox_cod")
+    .eq("empresa_id", st.eid).eq("ativo", true).or(conds.join(",")).order("nome").limit(15);
+  if (pedido !== st.sugN) return;   // chegou a resposta de uma tecla antiga
+  st.sug = data || []; st.sugI = -1;
+  box.innerHTML = st.sug.length
+    ? st.sug.map((p, i) => `<div data-i="${i}" onmousedown="_ncupEscolherCliente(${i})">${p.tecnox_cod ? _ncupEsc(p.tecnox_cod) + " · " : ""}${_ncupEsc(p.nome)} <span>${_ncupEsc(_ncupDocFmt(p.documento) || "")}</span></div>`).join("")
+    : '<div style="color:#778;cursor:default">Nenhum cliente com esse nome — Buscar procura nos cupons pelo texto.</div>';
+  box.style.display = "block";
+}
+function _ncupSugTecla(e) {
+  const st = window._ncup, box = document.getElementById("ncup-sug");
+  const aberta = box && box.style.display !== "none" && (st.sug || []).length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!aberta) return;
+    e.preventDefault();
+    st.sugI = Math.max(0, Math.min(st.sug.length - 1, (st.sugI == null ? -1 : st.sugI) + (e.key === "ArrowDown" ? 1 : -1)));
+    box.querySelectorAll("div[data-i]").forEach(d => d.classList.toggle("ativo", Number(d.dataset.i) === st.sugI));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (aberta && st.sugI >= 0) _ncupEscolherCliente(st.sugI);
+    else if (aberta && st.sug.length === 1) _ncupEscolherCliente(0);
+    else { if (box) box.style.display = "none"; ncupBuscar(); }
+  } else if (e.key === "Escape" && box) box.style.display = "none";
+}
+function _ncupEscolherCliente(i) {
+  const st = window._ncup, p = (st.sug || [])[i];
+  if (!p) return;
+  st.cliSel = { id: p.id, nome: p.nome, documento: p.documento, tecnox_cod: p.tecnox_cod };
+  const el = document.getElementById("ncup-cli"), box = document.getElementById("ncup-sug");
+  if (el) el.value = p.nome;
+  if (box) box.style.display = "none";
+  ncupBuscar();
 }
 
 async function _ncupTodas(montar) {
@@ -280,6 +407,7 @@ async function ncupBuscar() {
   const st = window._ncup;
   const lista = document.getElementById("ncup-lista");
   st.cli = String((document.getElementById("ncup-cli") || {}).value || "").trim();
+  if (st.cliSel && st.cli !== st.cliSel.nome) st.cliSel = null;
   st.de = (document.getElementById("ncup-de") || {}).value || st.de;
   st.ate = (document.getElementById("ncup-ate") || {}).value || st.ate;
   if (st.de > st.ate) { lista.innerHTML = '<p style="color:#f87171;padding:16px">A data inicial é depois da final.</p>'; return; }
@@ -288,26 +416,37 @@ async function ncupBuscar() {
   lista.innerHTML = '<p style="color:#888;padding:16px">Buscando os cupons…</p>';
   st.sel = new Set();
   try {
-    const doc = _ncupDig(st.cli), soDigitos = !!st.cli && /^[\d.\-\/\s]+$/.test(st.cli);
+    const cs = st.cliSel;
+    const doc = _ncupDig(cs ? cs.documento : st.cli), soDigitos = !cs && !!st.cli && /^[\d.\-\/\s]+$/.test(st.cli);
+    const de = st.de + "T00:00:00-03:00", ate = st.ate + "T23:59:59.999-03:00";
+    const campos = "id,numero,data_venda,cliente_nome,cliente_cpf,valor_total,nfce_chave,status,itens,pagamentos,placa,odometro,prazo_dados";
     const consulta = () => {
-      let q = sb.from("oct_pdv_vendas")
-        .select("id,numero,data_venda,cliente_nome,cliente_cpf,valor_total,nfce_chave,status,itens,pagamentos,placa,odometro,prazo_dados")
+      let q = sb.from("oct_pdv_vendas").select(campos)
         .eq("empresa_id", st.eid).not("nfce_chave", "is", null).neq("status", "cancelada")
-        .gte("data_venda", st.de + "T00:00:00-03:00").lte("data_venda", st.ate + "T23:59:59.999-03:00")
-        .order("data_venda", { ascending: false });
-      if (soDigitos && doc.length >= 11) q = q.in("cliente_cpf", [doc, _ncupDocFmt(doc)]);
+        .gte("data_venda", de).lte("data_venda", ate).order("data_venda", { ascending: false });
+      if (cs) q = doc.length >= 11 ? q.in("cliente_cpf", [doc, _ncupDocFmt(doc)]) : q.ilike("cliente_nome", `%${cs.nome}%`);
+      else if (soDigitos && doc.length >= 11) q = q.in("cliente_cpf", [doc, _ncupDocFmt(doc)]);
       else if (soDigitos && doc.length >= 3) q = q.ilike("cliente_cpf", `%${doc}%`);
       else if (st.cli) q = q.ilike("cliente_nome", `%${st.cli}%`);
       return q;
     };
-    const [rv, rl, rn] = await Promise.all([
+    // os títulos a prazo do cliente (os mesmos do Faturar): trazem o cupom cuja venda não tem o CPF/CNPJ e o cupom do
+    // TecnoX (CEMTAL/AC 26/10: a fatura tinha 8 títulos e a lista 4)
+    const titulos = (cs || (st.cli && !soDigitos)) ? () => {
+      let q = sb.from("oct_pdv_notas_prazo").select("id,cliente_id,cliente_nome,chave_nfe,numero_nfe,valor,valor_original,forma_nome,registrado_em,status")
+        .eq("empresa_id", st.eid).neq("status", "cancelado").gte("registrado_em", de).lte("registrado_em", ate).order("registrado_em", { ascending: false });
+      return cs ? q.eq("cliente_id", cs.id) : q.ilike("cliente_nome", `%${st.cli}%`);
+    } : null;
+    const [rv, rl, rn, rt] = await Promise.all([
       _ncupTodas(consulta),
       _ncupTodas(() => sb.from("oct_nfe_cupons").select("cupom_chave,nfe_chave,nfe_numero,nfe_serie,ambiente,origem").eq("empresa_id", st.eid).order("criado_em")),
       sb.from("oct_nfce").select("numero,serie,ambiente,cpf_consumidor,valor_total,chave_nfe,data_emissao").eq("empresa_id", st.eid)
-        .eq("modelo", "55").eq("status", "autorizada").gte("data_emissao", st.de + "T00:00:00-03:00").limit(1000),
+        .eq("modelo", "55").eq("status", "autorizada").gte("data_emissao", de).limit(1000),
+      titulos ? _ncupTodas(titulos) : Promise.resolve({ linhas: [] }),
     ]);
     st.vendas = rv.linhas.filter(v => /^\d{44}$/.test(_ncupDig(v.nfce_chave)));
     st.cortou = rv.cortou;
+    await _ncupJuntarTitulos(rt.linhas, campos, doc);
     st.links = {};
     rl.linhas.forEach(l => { (st.links[l.cupom_chave] = st.links[l.cupom_chave] || []).push(l); });
     const comVinculo = new Set(rl.linhas.map(l => l.nfe_chave));
@@ -317,6 +456,62 @@ async function ncupBuscar() {
   } catch (e) {
     lista.innerHTML = `<p style="color:#f87171;padding:16px">Não consegui ler os cupons: ${_ncupEsc(e.message || e)}</p>`;
   }
+}
+
+// títulos do cliente cujo cupom não veio pela busca das vendas:
+//   - cupom do Octano em que a venda ficou sem o CPF/CNPJ  -> entra (cliente = o do título);
+//   - cupom CANCELADO com o título ainda aberto/faturado  -> não entra; a tela avisa (a fatura cobraria venda cancelada);
+//   - cupom do TecnoX: a cópia da venda (status 'tecnox') vem sem chave e com valor 0 -> acha pelo número + data do título
+//     e usa os itens dela com a chave do título (é NFC-e de produção do TecnoX: entra na referência).
+async function _ncupJuntarTitulos(titulos, campos, doc) {
+  const st = window._ncup;
+  st.titCancel = []; st.titSemItens = [];
+  const temChave = new Set(st.vendas.map(v => _ncupDig(v.nfce_chave)));
+  const faltam = (titulos || []).filter(t => /^\d{44}$/.test(_ncupDig(t.chave_nfe)) && !temChave.has(_ncupDig(t.chave_nfe)));
+  if (!faltam.length) return;
+  const nomeDe = t => (st.cliSel && st.cliSel.nome) || t.cliente_nome || "";
+  const porChave = {};
+  const chaves = Array.from(new Set(faltam.map(t => _ncupDig(t.chave_nfe))));
+  for (let i = 0; i < chaves.length; i += 80) {
+    const { data, error } = await sb.from("oct_pdv_vendas").select(campos).eq("empresa_id", st.eid).in("nfce_chave", chaves.slice(i, i + 80));
+    if (error) throw error;
+    (data || []).forEach(v => { const k = _ncupDig(v.nfce_chave); if (!porChave[k] || porChave[k].status === "cancelada") porChave[k] = v; });
+  }
+  const tecnox = [];
+  faltam.forEach(t => {
+    const k = _ncupDig(t.chave_nfe), v = porChave[k];
+    if (!v) { tecnox.push(t); return; }
+    if (temChave.has(k)) return;
+    if (String(v.status || "").toLowerCase() === "cancelada") { st.titCancel.push({ t, v }); return; }
+    temChave.add(k);
+    st.vendas.push(Object.assign({}, v, { cliente_nome: v.cliente_nome || nomeDe(t), cliente_cpf: v.cliente_cpf || doc || "" }));
+  });
+  if (!tecnox.length) return;
+  const nums = Array.from(new Set(tecnox.map(t => Number(_ncupDig(t.numero_nfe) || Number(_ncupDig(t.chave_nfe).slice(25, 34)))).filter(n => n > 0)));
+  const copias = [];
+  for (let i = 0; i < nums.length; i += 100) {
+    const { data, error } = await sb.from("oct_pdv_vendas").select(campos).eq("empresa_id", st.eid).eq("status", "tecnox")
+      .is("nfce_chave", null).in("numero", nums.slice(i, i + 100));
+    if (error) throw error;
+    copias.push(...(data || []));
+  }
+  tecnox.forEach(t => {
+    const k = _ncupDig(t.chave_nfe), n = Number(_ncupDig(t.numero_nfe) || Number(k.slice(25, 34)));
+    const quando = new Date(t.registrado_em).getTime();
+    // o número do TecnoX se repete com o do Octano (outro mês): fica a cópia do mesmo número mais perto da data do título
+    const c = copias.filter(x => Number(x.numero) === n && Math.abs(new Date(x.data_venda).getTime() - quando) < 3 * 86400000)
+      .sort((a, b) => Math.abs(new Date(a.data_venda).getTime() - quando) - Math.abs(new Date(b.data_venda).getTime() - quando))[0];
+    const itens = c && Array.isArray(c.itens) ? c.itens : [];
+    const soma = Math.round(itens.reduce((s, it) => s + Number(it.total != null ? it.total : Number(it.qtd || 0) * Number(it.unit || 0)), 0) * 100) / 100;
+    if (!c || !(soma > 0)) { st.titSemItens.push(t); return; }
+    temChave.add(k);
+    st.vendas.push(Object.assign({}, c, {
+      nfce_chave: k, cliente_nome: nomeDe(t), cliente_cpf: doc || "", valor_total: soma,
+      pagamentos: (Array.isArray(c.pagamentos) && c.pagamentos.length) ? c.pagamentos : [{ nome: t.forma_nome || "NOTA A PRAZO", forma: "05" }],
+      _tecnox: true,
+    }));
+  });
+  st.vendas.sort((a, b) => String(b.data_venda || "").localeCompare(String(a.data_venda || "")));
 }
 
 function _ncupMontarFiltros() {
@@ -374,8 +569,9 @@ function ncupFiltrar() {
   // o que saiu do filtro sai da seleção
   const ids = new Set(vs.filter(v => !_ncupNfeDo(v)).map(v => v.id));
   Array.from(st.sel).forEach(id => { if (!ids.has(id)) st.sel.delete(id); });
+  const avisos = _ncupAvisos();
   if (!vs.length) {
-    el.innerHTML = `<p style="color:#888;padding:16px">Nenhum cupom ${st.mostrarJa ? "" : "disponível "}com esses filtros.${st.vendas.length ? ` (${st.vendas.length} cupom(ns) no período, os outros não batem com o filtro ou já viraram NF-e.)` : ""}</p>`;
+    el.innerHTML = avisos + `<p style="color:#888;padding:16px">Nenhum cupom ${st.mostrarJa ? "" : "disponível "}com esses filtros.${st.vendas.length ? ` (${st.vendas.length} cupom(ns) no período, os outros não batem com o filtro ou já viraram NF-e.)` : ""}</p>`;
     _ncupResumo(); return;
   }
   const disp = vs.filter(v => !_ncupNfeDo(v));
@@ -387,7 +583,8 @@ function ncupFiltrar() {
     const marcado = st.sel.has(v.id);
     const situ = ja
       ? `<span class="ncup-selo" style="background:#0f2a0f;color:#4caf50">NF-e nº ${_ncupEsc(ja.nfe_numero || "?")}${ja.ambiente !== "producao" ? " (homolog.)" : ""}</span>`
-      : (talvez ? `<span class="ncup-selo" style="background:#2a2300;color:#fbbf24" title="Há uma NF-e deste posto com o mesmo valor${_ncupDig(v.cliente_cpf) ? " e cliente" : ""} sem cupom ligado">⚠ talvez NF-e nº ${_ncupEsc(talvez.numero)}</span>` : "");
+      : (talvez ? `<span class="ncup-selo" style="background:#2a2300;color:#fbbf24" title="Há uma NF-e deste posto com o mesmo valor${_ncupDig(v.cliente_cpf) ? " e cliente" : ""} sem cupom ligado">⚠ talvez NF-e nº ${_ncupEsc(talvez.numero)}</span>` : "")
+      + (v._tecnox ? ` <span class="ncup-selo" style="background:#1e2235;color:#a5b4fc" title="Cupom emitido pelo TecnoX: itens da cópia da venda, chave do título">TecnoX</span>` : "");
     return `<tr class="${ja ? "ncup-ja" : ""}${marcado ? " ncup-marcado" : ""}" ${ja ? "" : `onclick="ncupMarcar('${v.id}', event)" style="cursor:pointer"`}>
       <td>${ja ? "" : `<input type="checkbox" ${marcado ? "checked" : ""} onclick="event.stopPropagation();ncupMarcar('${v.id}')">`}</td>
       <td>${_ncupHora(v.data_venda)}</td>
@@ -400,7 +597,7 @@ function ncupFiltrar() {
       <td>${situ}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `
+  el.innerHTML = avisos + `
     <div class="ns-grid-scroll" style="max-height:56vh">
       <table class="ns-tabela ns-grid-tabela ncup-tab">
         <thead class="ns-grid-head"><tr>
@@ -415,6 +612,17 @@ function ncupFiltrar() {
       <span>A NF-e leva o cupom inteiro (todos os itens dele).</span>
     </div>`;
   _ncupResumo();
+}
+
+// títulos do Faturar que não viram cupom na lista (é por isso que a lista pode não bater com a fatura)
+function _ncupAvisos() {
+  const st = window._ncup, out = [];
+  const tit = t => `${_ncupEsc(_ncupDig(t.numero_nfe) || String(Number(_ncupDig(t.chave_nfe).slice(25, 34))))} (R$ ${_ncupMoney(t.valor_original != null && Number(t.valor_original) > 0 ? t.valor_original : t.valor)}, ${t.status === "faturado" ? "faturado" : "em aberto"})`;
+  if ((st.titCancel || []).length)
+    out.push(`<div class="ncup-aviso">⚠ <b>${st.titCancel.length} título(s) do cliente no Faturar são de cupom CANCELADO</b> e não entram na NF-e: ${st.titCancel.map(x => tit(x.t)).join("; ")}. Confira no Faturar — a fatura cobraria uma venda cancelada.</div>`);
+  if ((st.titSemItens || []).length)
+    out.push(`<div class="ncup-aviso">⚠ ${st.titSemItens.length} título(s) sem os itens do cupom no Octano (cupom do TecnoX sem cópia da venda): ${st.titSemItens.map(tit).join("; ")}. Esses só entram adicionando o produto à mão na NF-e.</div>`);
+  return out.join("");
 }
 
 function ncupMarcar(id, ev) {
@@ -465,8 +673,8 @@ async function ncupAbrirEmissao() {
   const m = document.createElement("div");
   m.id = "ncup-modal"; m.className = "ncup-modal";
   m.innerHTML = `
-    <div class="ncup-caixa">
-      <div class="ns-titulo"><h3>NF-e de ${sel.length} cupom(ns) · R$ ${_ncupMoney(tot)}</h3><button class="ns-fechar" onclick="_ncupFechar()">✕</button></div>
+    <div class="ncup-caixa" style="max-width:900px">
+      <div class="ns-titulo"><h3>NF-e de ${sel.length} cupom(ns) · cupons R$ ${_ncupMoney(tot)}</h3><button class="ns-fechar" onclick="_ncupFechar()">✕</button></div>
       <div style="padding:16px">
         <div style="font-size:0.8rem;color:#aaa">NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO (teste)"}</b> · série ${_ncupEsc(st.cfg.serie)} · CFOP 5929 · sem pagamento (está nos cupons)</div>
         <div id="ncup-itens-prev" style="margin-top:10px;font-size:0.8rem;color:#ccc">Montando os itens…</div>
@@ -532,27 +740,173 @@ async function _ncupPreparar(sel) {
     if (error) throw new Error("Não consegui conferir o ambiente dos cupons (" + (error.message || error) + ").");
     (ns || []).forEach(n => { if (n.ambiente === "producao" && n.status !== "cancelada") prodSet.add(String(n.chave_nfe)); });
   }
+  sel.filter(v => v._tecnox).forEach(v => prodSet.add(_ncupDig(v.nfce_chave)));   // NFC-e de produção do TecnoX
   return { prods, prodSet };
 }
 
+// ---------- itens da NF-e: editar quantidade/valor, desconto, acréscimo e produto posto à mão (Ronan 26/10) ----------
+// Começa com os itens dos cupons (agrupados); o que for mexido aqui vai para a NF-e. Desconto = vDesc rateado; acréscimo
+// = embutido no preço dos itens (ver _ncupAjustar).
 async function _ncupPrevia() {
   const st = window._ncup, el = document.getElementById("ncup-itens-prev");
   const sel = _ncupSelecionados();
+  st.ed = null;
   try {
     st.prep = await _ncupPreparar(sel);
-    const nota = _ncupMontarNota(sel, { doc: "", nome: "" }, st.cfg, st.prep.prodSet, st.emp, st.prep.prods);
-    const homolog = sel.length - nota.refs.length;
-    if (el) el.innerHTML = `
-      <table class="ns-tabela" style="font-size:0.78rem">
-        <thead><tr><th>Produto</th><th>CST</th><th style="text-align:right">Qtd</th><th style="text-align:right">Valor (R$)</th></tr></thead>
-        <tbody>${nota.itens.map(i => `<tr><td>${_ncupEsc(i.xProd)}</td><td>${i.cst_icms}</td><td style="text-align:right">${i.qCom.toLocaleString("pt-BR", { maximumFractionDigits: 3 })} ${_ncupEsc(i.uCom)}</td><td style="text-align:right">${_ncupMoney(i.vProd)}</td></tr>`).join("")}</tbody>
-      </table>
-      ${homolog > 0 && st.cfg.ambiente === "producao" ? `<div style="margin-top:8px;background:#2a2300;border-radius:6px;padding:7px 10px;color:#fbbf24;font-size:0.76rem">${homolog} cupom(ns) emitido(s) em homologação: entram no valor da NF-e, mas não na referência (a SEFAZ não os conhece).</div>` : ""}`;
+    const prod = st.cfg.ambiente === "producao";
+    st.ed = {
+      itens: _ncupItensCupons(sel, st.prep.prods, st.emp, prod),
+      desc: "", descT: "R$", acr: "", acrT: "R$",
+      cupons: Math.round(sel.reduce((s, v) => s + Number(v.valor_total || 0), 0) * 100) / 100,
+      homolog: sel.filter(v => !st.prep.prodSet.has(_ncupDig(v.nfce_chave))).length,
+    };
+    _ncupRenderEd();
   } catch (e) {
-    st.prep = null;
+    st.prep = st.prep || null;
     if (el) el.innerHTML = `<span style="color:#f87171">${_ncupEsc(e.message || e)}</span>`;
     const b = document.getElementById("ncup-emitir"); if (b) b.disabled = true;
   }
+}
+
+function _ncupNum(s) {
+  s = String(s == null ? "" : s).replace(/R\$|\s/g, "");
+  if (!s) return 0;
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  const n = Number(s);
+  return isFinite(n) ? n : NaN;
+}
+function _ncupFmtN(n, d) { return Number(n || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function _ncupEdValores() {
+  const ed = window._ncup.ed;
+  const base = Math.round(ed.itens.reduce((s, i) => s + Number(i.vProd || 0), 0) * 100) / 100;
+  const r2 = n => Math.round((isFinite(n) ? n : 0) * 100) / 100;
+  const desc = r2(ed.descT === "%" ? base * _ncupNum(ed.desc) / 100 : _ncupNum(ed.desc));
+  const acr = r2(ed.acrT === "%" ? base * _ncupNum(ed.acr) / 100 : _ncupNum(ed.acr));
+  return { base, desc, acr, total: r2(base - desc + acr) };
+}
+function _ncupEdAtual() {
+  const ed = window._ncup.ed, v = _ncupEdValores();
+  return { itens: ed.itens, desconto: v.desc, acrescimo: v.acr };
+}
+// mexeu na nota depois da conferência: confere de novo antes de emitir
+function _ncupDesconfirmar() {
+  const st = window._ncup;
+  if (!st.confirmar) return;
+  st.confirmar = false;
+  const b = document.getElementById("ncup-emitir");
+  if (b && !b.disabled) b.textContent = `Emitir NF-e em ${st.cfg.ambiente === "producao" ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}`;
+  _ncupMsg("");
+}
+
+function _ncupRenderEd() {
+  const st = window._ncup, ed = st.ed, el = document.getElementById("ncup-itens-prev");
+  if (!el || !ed) return;
+  const linhas = ed.itens.map((i, k) => {
+    const unit = i.qCom ? i.vProd / i.qCom : 0;
+    return `<tr class="${i.manual ? "ncup-manual" : ""}">
+      <td>${_ncupEsc(i.xProd)}${i.manual ? ' <span style="color:#93c5fd;font-size:0.7rem">(à mão)</span>' : ""}</td>
+      <td>${i.cst_icms}</td>
+      <td><input value="${_ncupFmtN(i.qCom, i.uCom === "L" ? 3 : 2)}" onchange="_ncupEdCampo(${k},'q',this.value)" title="${_ncupEsc(i.uCom)}"></td>
+      <td><input value="${_ncupFmtN(unit, 4)}" onchange="_ncupEdCampo(${k},'u',this.value)"></td>
+      <td><input value="${_ncupFmtN(i.vProd, 2)}" onchange="_ncupEdCampo(${k},'v',this.value)"></td>
+      <td style="text-align:center"><button class="ns-btn-linha" style="border-color:#5a2a2a;color:#f87171;margin:0" title="Tirar da NF-e" onclick="_ncupEdTirar(${k})">✕</button></td>
+    </tr>`;
+  }).join("");
+  const manuais = ed.itens.filter(i => i.manual).length;
+  el.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="ncup-ed">
+        <thead><tr><th>Produto</th><th>CST</th><th style="width:100px">Qtd</th><th style="width:110px">Unitário (R$)</th><th style="width:120px">Total (R$)</th><th style="width:34px"></th></tr></thead>
+        <tbody>${linhas || '<tr><td colspan="6" style="color:#888;padding:10px">Nenhum item — adicione um produto.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="ncup-ajuste">
+      <div><label>Desconto</label><div style="display:flex;gap:4px"><input id="ncup-desc" value="${_ncupEsc(ed.desc)}" placeholder="0,00" style="width:90px;text-align:right" oninput="_ncupEdAjuste()">
+        <select id="ncup-desc-t" onchange="_ncupEdAjuste()"><option${ed.descT === "R$" ? " selected" : ""}>R$</option><option${ed.descT === "%" ? " selected" : ""}>%</option></select></div></div>
+      <div><label>Acréscimo</label><div style="display:flex;gap:4px"><input id="ncup-acr" value="${_ncupEsc(ed.acr)}" placeholder="0,00" style="width:90px;text-align:right" oninput="_ncupEdAjuste()">
+        <select id="ncup-acr-t" onchange="_ncupEdAjuste()"><option${ed.acrT === "R$" ? " selected" : ""}>R$</option><option${ed.acrT === "%" ? " selected" : ""}>%</option></select></div></div>
+      <div style="flex:1;min-width:240px;position:relative"><label>Adicionar produto à nota</label>
+        <input id="ncup-addp" autocomplete="off" placeholder="código ou nome do produto" style="width:100%;box-sizing:border-box" oninput="_ncupProdDigitou()" onkeydown="if(event.key==='Escape'){document.getElementById('ncup-addp-sug').style.display='none'}">
+        <div id="ncup-addp-sug" class="ncup-sug" style="display:none"></div></div>
+    </div>
+    <div id="ncup-totais" style="margin-top:10px;font-size:0.84rem;color:#ccc"></div>
+    ${ed.homolog > 0 && st.cfg.ambiente === "producao" ? `<div style="margin-top:8px;background:#2a2300;border-radius:6px;padding:7px 10px;color:#fbbf24;font-size:0.76rem">${ed.homolog} cupom(ns) emitido(s) em homologação: entram no valor da NF-e, mas não na referência (a SEFAZ não os conhece).</div>` : ""}
+    ${manuais ? `<div style="margin-top:6px;background:#16304a;border-radius:6px;padding:7px 10px;color:#93c5fd;font-size:0.76rem">${manuais} produto(s) posto(s) à mão: não estão nos cupons e saem na NF-e com o mesmo CFOP 5929.</div>` : ""}`;
+  _ncupEdTotais();
+}
+function _ncupEdTotais() {
+  const st = window._ncup, el = document.getElementById("ncup-totais");
+  if (!el || !st.ed) return;
+  const v = _ncupEdValores();
+  const dif = Math.round((v.total - st.ed.cupons) * 100) / 100;
+  el.innerHTML = `Produtos R$ ${_ncupMoney(v.base)}${v.desc ? ` − desconto R$ ${_ncupMoney(v.desc)}` : ""}${v.acr ? ` + acréscimo R$ ${_ncupMoney(v.acr)}` : ""}`
+    + ` = <b style="color:#4ade80;font-size:0.95rem">NF-e R$ ${_ncupMoney(v.total)}</b>`
+    + (Math.abs(dif) >= 0.01 ? ` <span style="color:#fbbf24">(${dif > 0 ? "+" : "−"} R$ ${_ncupMoney(Math.abs(dif))} em relação aos cupons)</span>` : ' <span style="color:#888">(igual aos cupons)</span>');
+}
+function _ncupEdCampo(k, campo, val) {
+  const ed = window._ncup.ed, i = ed && ed.itens[k];
+  if (!i) return;
+  const n = _ncupNum(val);
+  if (!(n >= 0)) { _ncupMsg("Número inválido: " + _ncupEsc(val), "#f87171"); _ncupRenderEd(); return; }
+  const unit = i.qCom ? i.vProd / i.qCom : 0;
+  if (campo === "q") { i.qCom = Math.round(n * 10000) / 10000; i.vProd = Math.round(i.qCom * unit * 100) / 100; }
+  else if (campo === "u") i.vProd = Math.round(i.qCom * n * 100) / 100;
+  else i.vProd = Math.round(n * 100) / 100;
+  i.vUnCom = i.qCom ? i.vProd / i.qCom : 0;
+  _ncupDesconfirmar();
+  _ncupRenderEd();
+}
+function _ncupEdTirar(k) {
+  const ed = window._ncup.ed;
+  if (!ed) return;
+  ed.itens.splice(k, 1);
+  _ncupDesconfirmar();
+  _ncupRenderEd();
+}
+function _ncupEdAjuste() {
+  const ed = window._ncup.ed;
+  if (!ed) return;
+  ed.desc = (document.getElementById("ncup-desc") || {}).value || "";
+  ed.descT = (document.getElementById("ncup-desc-t") || {}).value || "R$";
+  ed.acr = (document.getElementById("ncup-acr") || {}).value || "";
+  ed.acrT = (document.getElementById("ncup-acr-t") || {}).value || "R$";
+  _ncupDesconfirmar();
+  _ncupEdTotais();
+}
+
+// produto do cadastro do posto (código ou nome)
+function _ncupProdDigitou() {
+  const st = window._ncup;
+  clearTimeout(st.prodT);
+  st.prodT = setTimeout(async () => {
+    const el = document.getElementById("ncup-addp"), box = document.getElementById("ncup-addp-sug");
+    if (!el || !box) return;
+    const termo = String(el.value || "").trim().replace(/[,()*%]/g, " ").trim();
+    if (termo.length < 1) { box.style.display = "none"; return; }
+    const conds = [`nome.ilike.%${termo}%`];
+    if (/^[\w.-]{1,20}$/.test(termo)) conds.push(`codigo.eq.${termo}`);
+    const pedido = (st.prodN = (st.prodN || 0) + 1);
+    const { data } = await sb.from("oct_produtos")
+      .select("id,codigo,nome,ncm,cest,unidade,origem,cst_icms,aliq_icms_ad_rem,cod_anp,desc_anp,perc_bio,ativo,preco_venda_a")
+      .eq("empresa_id", st.eid).eq("ativo", true).or(conds.join(",")).order("nome").limit(15);
+    if (pedido !== st.prodN) return;
+    st.prodSug = data || [];
+    box.innerHTML = st.prodSug.length
+      ? st.prodSug.map((p, i) => `<div onmousedown="_ncupAddProd(${i})">${_ncupEsc(p.codigo || "")} · ${_ncupEsc(p.nome)} <span>R$ ${_ncupFmtN(p.preco_venda_a, 2)}${p.ncm ? "" : " · sem NCM"}</span></div>`).join("")
+      : '<div style="color:#778;cursor:default">Nenhum produto.</div>';
+    box.style.display = "block";
+  }, 250);
+}
+function _ncupAddProd(i) {
+  const st = window._ncup, p = (st.prodSug || [])[i];
+  if (!p || !st.ed) return;
+  const it = _ncupItemDoCadastro(p, 1, Number(p.preco_venda_a) || 0, (st.prep ? st.prep.prods : []).concat([p]), st.emp, st.cfg.ambiente === "producao");
+  st.ed.itens.push(it);
+  _ncupDesconfirmar();
+  _ncupRenderEd();
+  // já cai na quantidade do produto novo
+  const ins = document.querySelectorAll("#ncup-itens-prev .ncup-ed tbody tr:last-child input");
+  if (ins[0]) { ins[0].focus(); ins[0].select(); }
 }
 
 function _ncupPreencher(p) {
@@ -669,9 +1023,10 @@ async function _ncupEmitir() {
   let nota;
   try {
     if (!st.prep) st.prep = await _ncupPreparar(sel);
-    nota = _ncupMontarNota(sel, dest, cfg, st.prep.prodSet, st.emp, st.prep.prods);
+    if (!st.ed) throw new Error("Os itens da NF-e não foram montados — feche e abra de novo.");
+    nota = _ncupMontarNota(sel, dest, cfg, st.prep.prodSet, st.emp, st.prep.prods, _ncupEdAtual());
   } catch (e) { _ncupMsg(_ncupEsc(e.message || e), "#f87171"); return; }
-  const vNF = +nota.itens.reduce((s, i) => s + i.vProd, 0).toFixed(2);
+  const vNF = _ncupVNF(nota);
 
   // 1º clique: confere (cupom que outra tela transformou enquanto esta estava aberta para aqui); 2º clique: emite
   if (!st.confirmar) {
@@ -690,9 +1045,14 @@ async function _ncupEmitir() {
     } catch (e) { /* sem a conferência: o banco ainda liga tudo depois */ }
     const outroDoc = docCupom.length && docCupom[0] !== doc
       ? `<br><b style="color:#f59e0b">⚠ O CPF/CNPJ da NF-e (${_ncupEsc(_ncupDocFmt(doc))}) é diferente do que está nos cupons (${_ncupEsc(_ncupDocFmt(docCupom[0]))}).</b>` : "";
+    const aj = _ncupEdValores(), manuais = st.ed.itens.filter(i => i.manual).length, dif = Math.round((vNF - st.ed.cupons) * 100) / 100;
+    const mexido = [aj.desc ? `desconto R$ ${_ncupMoney(aj.desc)}` : "", aj.acr ? `acréscimo R$ ${_ncupMoney(aj.acr)}` : "",
+                    manuais ? `${manuais} produto(s) posto(s) à mão` : "",
+                    Math.abs(dif) >= 0.01 ? `${dif > 0 ? "+" : "−"} R$ ${_ncupMoney(Math.abs(dif))} em relação aos cupons (R$ ${_ncupMoney(st.ed.cupons)})` : ""].filter(Boolean);
     st.confirmar = true;
     _ncupMsg(`Conferir: NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO"}</b>, série ${_ncupEsc(cfg.serie)}, `
-      + `R$ ${_ncupMoney(vNF)}, ${nota.itens.length} item(ns), ${sel.length} cupom(ns) (${nota.refs.length} referenciado(s)), para <b>${_ncupEsc(dest.nome)}</b> (${_ncupEsc(_ncupDocFmt(doc))}).${outroDoc}`);
+      + `R$ ${_ncupMoney(vNF)}, ${nota.itens.length} item(ns), ${sel.length} cupom(ns) (${nota.refs.length} referenciado(s)), para <b>${_ncupEsc(dest.nome)}</b> (${_ncupEsc(_ncupDocFmt(doc))}).${outroDoc}`
+      + (mexido.length ? `<br><b style="color:#fbbf24">Alterado na tela: ${_ncupEsc(mexido.join(" · "))}.</b>` : ""));
     btn.textContent = "✔ Confirmar e emitir";
     return;
   }
