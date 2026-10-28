@@ -215,7 +215,7 @@ async function relatorioVendas(aba) {
   const c = document.getElementById('conteudo');
   if (!c) return;
   const st = window._rv;
-  if (aba) { st.aba = aba; st.aberto = null; }
+  if (aba) { st.buscas = st.buscas || {}; st.buscas[st.aba] = st.busca; st.aba = aba; st.aberto = null; st.busca = st.buscas[aba] || ''; }
   if (!st.ini) { const h = _rvDiaLocal(new Date()); st.ini = h.slice(0, 8) + '01'; st.fim = h; }
   const pill = (id, txt, ativo, fn) => `<button onclick="${fn}" style="padding:7px 14px;border-radius:18px;cursor:pointer;font-size:.84rem;font-weight:600;border:1px solid ${ativo ? '#f97316' : '#2a2d3e'};background:${ativo ? '#f97316' : '#13151f'};color:${ativo ? '#fff' : '#9fb3c8'}">${txt}</button>`;
   const atalho = (txt, fn) => `<button onclick="_rvAtalho('${fn}')" style="padding:4px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#9fb3c8;cursor:pointer;font-size:.74rem">${txt}</button>`;
@@ -249,11 +249,20 @@ async function relatorioVendas(aba) {
   _rvRender();
 }
 
+// cada aba tem a sua busca (Ronan 27/10: "sabor" procurado em Cliente seguiu para Período e o mês veio pela metade)
 function _rvAba(id) {
   const st = window._rv;
+  st.buscas = st.buscas || {};
+  st.buscas[st.aba] = st.busca;
   st.aba = id; st.aberto = null;
-  const b = document.getElementById('rv-busca'); if (b) st.busca = b.value;
+  st.busca = st.buscas[id] || '';
   relatorioVendas();
+}
+function _rvLimparBusca() {
+  const st = window._rv;
+  st.busca = ''; st.aberto = null;
+  const b = document.getElementById('rv-busca'); if (b) b.value = '';
+  _rvRender();
 }
 function _rvAtalho(q) {
   const st = window._rv, h = _rvDiaLocal(new Date());
@@ -308,15 +317,22 @@ async function _rvRender() {
     if (document.getElementById('rv-corpo') !== box) return;
     st.tabs = []; st.csvDet = null; st.chaves = [];
     const html = { periodo: _rvPeriodo, funcionario: _rvFuncionario, placa: _rvPlacas, cliente: _rvClientes }[st.aba](D);
-    box.innerHTML = html;
+    // filtro ativo sempre à vista: sem ele o total parece "não veio tudo"
+    const filtros = [st.busca ? `só o que tem “<b>${_rvEsc(st.busca)}</b>”` : '', st.tipo ? (st.tipo === 'comb' ? 'só <b>combustível</b>' : 'só <b>loja</b>') : ''].filter(Boolean);
+    box.innerHTML = (filtros.length ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#16304a;border:1px solid #2563eb;border-radius:8px;padding:8px 12px;color:#bfdbfe;font-size:.84rem;margin-bottom:12px">
+        🔎 Filtrando: ${filtros.join(' · ')} — os totais abaixo NÃO são o período inteiro.
+        ${st.busca ? '<button onclick="_rvLimparBusca()" style="padding:4px 10px;border-radius:6px;border:1px solid #2563eb;background:#0f1d33;color:#bfdbfe;cursor:pointer;font-size:.78rem">✕ Limpar a busca</button>' : ''}
+        ${st.tipo ? '<button onclick="document.getElementById(\'rv-tipo\').value=\'\';_rvFiltro()" style="padding:4px 10px;border-radius:6px;border:1px solid #2563eb;background:#0f1d33;color:#bfdbfe;cursor:pointer;font-size:.78rem">✕ Mostrar tudo</button>' : ''}
+      </div>` : '') + html;
   } catch (e) {
     box.innerHTML = `<p style="color:#f87171">Não consegui montar o relatório: ${_rvEsc(e.message || e)}</p>`;
   }
 }
 
 // ---------- peças de tela ----------
-function _rvCard(t, v, cor, sub) {
-  return `<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:10px;padding:12px 16px;min-width:150px">
+// clique (opcional): o card vira botão (ativo = destacado)
+function _rvCard(t, v, cor, sub, clique, ativo) {
+  return `<div${clique ? ` onclick="${clique}" title="Clique para ver o detalhe"` : ''} style="background:${ativo ? '#1d2235' : '#13151f'};border:1px solid ${ativo ? '#f97316' : '#2a2d3e'};border-radius:10px;padding:12px 16px;min-width:150px${clique ? ';cursor:pointer' : ''}">
     <div style="color:#8a8f98;font-size:.72rem;text-transform:uppercase;letter-spacing:.4px">${t}</div>
     <div style="color:${cor || '#e6e6e6'};font-size:1.15rem;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums">${v}</div>
     ${sub ? `<div style="color:#6b7280;font-size:.72rem;margin-top:2px">${sub}</div>` : ''}</div>`;
@@ -396,10 +412,31 @@ const _RV_COLS_CUPOM = [{ t: 'Data' }, { t: 'Cupom' }, { t: 'Cliente' }, { t: 'O
 // ============================================================
 //  ABA 1 — VENDAS NO PERÍODO
 // ============================================================
+// combustível por CLASSE (a mesma régua do B.I): o cupom diz "OLEO DIESEL S-10", a bomba "DIESEL S10" — somam juntos
+const _RV_CLASSES = { gas_com: 'Gasolina comum', gas_ad: 'Gasolina aditivada', etanol: 'Etanol', s10: 'Diesel S-10', s500: 'Diesel S-500', diesel: 'Diesel' };
+function _rvClasseComb(nome) {
+  const s = _rvNorm(nome);
+  let k = null;
+  if (/ETANOL|ALCOOL/.test(s) && !/MISTURA/.test(s)) k = 'etanol';
+  else if (/GASOLINA|MISTURA DE ETAN/.test(s)) k = /ADIT|ADT|PODIUM|GRID/.test(s) ? 'gas_ad' : 'gas_com';
+  else if (/DIESEL/.test(s)) k = /S[- ]?10|BS10/.test(s) ? 's10' : (/500|BS5/.test(s) ? 's500' : 'diesel');
+  return k ? _RV_CLASSES[k] : (String(nome || '').trim() || 'Combustível');
+}
+function _rvPainel(qual) {
+  const st = window._rv;
+  st.painel = st.painel === qual ? null : qual;
+  _rvRender();
+  if (st.painel) setTimeout(() => { const d = document.getElementById('rv-painel'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 30);
+}
+function _rvBarra(p) {
+  return `<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end"><div style="width:110px;height:8px;background:#1e2233;border-radius:4px;overflow:hidden"><div style="width:${Math.max(0, Math.min(100, p)).toFixed(1)}%;height:100%;background:#f97316"></div></div><span style="min-width:44px">${_rvNum(p, 1)}%</span></div>`;
+}
+
 function _rvPeriodo(D) {
   const st = window._rv;
-  const dias = {}, prods = {}, formas = {};
+  const dias = {}, prods = {}, formas = {}, combs = {};
   const dia = d => (dias[d] = dias[d] || { cupons: 0, litros: 0, comb: 0, loja: 0, sem: 0, semTx: 0, n: 0 });
+  const comb = nome => { const k = _rvClasseComb(nome); return (combs[k] = combs[k] || { nome: k, litros: 0, valor: 0, n: 0, semL: 0, semV: 0 }); };
   let nCup = 0;
   D.cupons.forEach(c => {
     if (c.tecnox) return;                       // a bomba cobre os dias do TecnoX
@@ -408,7 +445,8 @@ function _rvPeriodo(D) {
     let v = 0;
     its.forEach(i => {
       v += i.valor;
-      if (i.tipo === 'comb') { x.comb += i.valor; x.litros += i.qtd; } else x.loja += i.valor;
+      if (i.tipo === 'comb') { x.comb += i.valor; x.litros += i.qtd; const g = comb(i.produto); g.litros += i.qtd; g.valor += i.valor; g.n++; }
+      else x.loja += i.valor;
       const k = _rvNorm(i.produto);
       const p = (prods[k] = prods[k] || { nome: i.produto, qtd: 0, un: i.un, valor: 0, comb: i.tipo === 'comb' });
       p.qtd += i.qtd; p.valor += i.valor;
@@ -417,7 +455,39 @@ function _rvPeriodo(D) {
     _rvFormasDe(c, v).forEach(f => { const m = (formas[f.cat] = formas[f.cat] || { valor: 0, cupons: 0 }); m.valor += f.valor; if (!cats.has(f.cat)) { m.cupons++; cats.add(f.cat); } });
   });
   const sem = _rvSemCupomFiltrado(D);
-  sem.forEach(s => { const x = dia(s.dia); x.litros += s.litros; if (s.tecnoxDia) x.semTx += s.valor; else { x.sem += s.valor; x.n++; } });
+  sem.forEach(s => {
+    const x = dia(s.dia); x.litros += s.litros; if (s.tecnoxDia) x.semTx += s.valor; else { x.sem += s.valor; x.n++; }
+    const g = comb(s.produto); g.litros += s.litros; g.valor += s.valor; g.n++; g.semL += s.litros; g.semV += s.valor;
+  });
+
+  // painel aberto pelo card: combustível (venda e volume por combustível) ou loja (produtos)
+  let painel = '';
+  if (st.painel === 'comb' && st.tipo !== 'loja') {
+    const gl = Object.values(combs).sort((a, b) => b.litros - a.litros);
+    const tL = gl.reduce((s, g) => s + g.litros, 0), tV = gl.reduce((s, g) => s + g.valor, 0);
+    const cP = [{ t: 'Combustível' }, { t: 'Abastecimentos', a: 'r' }, { t: 'Litros', a: 'r' }, { t: '% do volume', a: 'r' }, { t: 'Valor', a: 'r' }, { t: '% do valor', a: 'r' }, { t: 'Preço médio (R$/L)', a: 'r' }, { t: 'Sem cupom', a: 'r' }];
+    const lP = gl.map(g => ({ c: [`<b>${_rvEsc(g.nome)}</b>`, g.n, _rvNum(g.litros, 2) + ' L', _rvBarra(tL ? g.litros / tL * 100 : 0), `<b style="color:#5dca9a">${_rvBRL(g.valor)}</b>`,
+      tV ? _rvNum(g.valor / tV * 100, 1) + '%' : '—', g.litros ? _rvNum(g.valor / g.litros, 3) : '—',
+      g.semV ? `<span style="color:#fbbf24">${_rvNum(g.semL, 2)} L · ${_rvBRL(g.semV)}</span>` : '—'] }));
+    const rP = ['Total', gl.reduce((s, g) => s + g.n, 0), _rvNum(tL, 2) + ' L', '100%', _rvBRL(tV), '100%', tL ? _rvNum(tV / tL, 3) : '—', ''];
+    _rvGuardar('tab', 'Venda por combustível', cP, lP, rP);
+    painel = `<div id="rv-painel" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="color:#e6e6e6;margin:0;font-size:1rem">⛽ Venda e volume por combustível</h3>
+        <button onclick="_rvPainel('comb')" style="padding:5px 11px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#9fb3c8;cursor:pointer;font-size:.78rem">✕ Fechar</button></div>
+      ${_rvTabela(cP, lP, rP)}
+      <p style="color:#6b7280;font-size:.75rem;margin-top:6px">Cupom e bomba somados pelo tipo de combustível. Preço médio = valor ÷ litros (inclui acréscimo de tabela a prazo e desconto).</p></div>`;
+  } else if (st.painel === 'loja' && st.tipo !== 'comb') {
+    const pl = Object.values(prods).filter(p => !p.comb).sort((a, b) => b.valor - a.valor);
+    const tV = pl.reduce((s, p) => s + p.valor, 0);
+    const cP = [{ t: 'Produto' }, { t: 'Quantidade', a: 'r' }, { t: 'Valor', a: 'r' }, { t: '% da loja', a: 'r' }];
+    const lP = pl.map(p => ({ c: [_rvEsc(p.nome), _rvNum(p.qtd, 0) + ' ' + _rvEsc(p.un), `<b style="color:#5dca9a">${_rvBRL(p.valor)}</b>`, _rvBarra(tV ? p.valor / tV * 100 : 0)] }));
+    const rP = [pl.length + ' produto(s)', '', _rvBRL(tV), '100%'];
+    _rvGuardar('tab', 'Venda da loja por produto', cP, lP, rP);
+    painel = `<div id="rv-painel" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="color:#e6e6e6;margin:0;font-size:1rem">🛒 Loja por produto</h3>
+        <button onclick="_rvPainel('loja')" style="padding:5px 11px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#9fb3c8;cursor:pointer;font-size:.78rem">✕ Fechar</button></div>
+      ${_rvTabela(cP, lP, rP, { alt: '50vh' })}</div>`;
+  }
   const ks = Object.keys(dias).sort();
   const T = ks.reduce((t, k) => { const x = dias[k]; ['cupons', 'litros', 'comb', 'loja', 'sem', 'semTx', 'n'].forEach(f => { t[f] += x[f]; }); return t; },
     { cupons: 0, litros: 0, comb: 0, loja: 0, sem: 0, semTx: 0, n: 0 });
@@ -456,12 +526,15 @@ function _rvPeriodo(D) {
   return `${_rvAvisoTecnox(D)}
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
       ${_rvCard('Vendido', _rvBRL(total), '#5dca9a', `${_rvDiaBr(st.ini)} a ${_rvDiaBr(st.fim)}`)}
-      ${st.tipo !== 'loja' ? _rvCard('Combustível', _rvBRL(T.comb + T.sem + T.semTx), '#e6e6e6', _rvNum(T.litros, 2) + ' L') : ''}
-      ${st.tipo !== 'comb' ? _rvCard('Loja', _rvBRL(T.loja), '#e6e6e6') : ''}
+      ${st.tipo !== 'loja' ? _rvCard('Combustível', _rvBRL(T.comb + T.sem + T.semTx), '#e6e6e6',
+        _rvNum(T.litros, 2) + ` L · <span style="color:#f97316">${st.painel === 'comb' ? '▾' : '▸'} por combustível</span>`, "_rvPainel('comb')", st.painel === 'comb') : ''}
+      ${st.tipo !== 'comb' ? _rvCard('Loja', _rvBRL(T.loja), '#e6e6e6',
+        `<span style="color:#f97316">${st.painel === 'loja' ? '▾' : '▸'} por produto</span>`, "_rvPainel('loja')", st.painel === 'loja') : ''}
       ${_rvCard('Cupons', nCup, '#e6e6e6', nCup ? 'ticket médio ' + _rvBRL((T.comb + T.loja) / nCup) : '')}
       ${T.sem ? _rvCard('Sem cupom', _rvBRL(T.sem), '#fbbf24', T.n + ' abastecimento(s) pela bomba') : ''}
       ${T.semTx ? _rvCard('Dias do TecnoX', _rvBRL(T.semTx), '#a78bfa', 'pela bomba') : ''}
     </div>
+    ${painel}
     ${_rvTabela(cols, linhas, rod, { alt: '46vh' })}
     <p style="color:#6b7280;font-size:.75rem;margin:6px 0 16px">Clique num dia para ver os cupons. Valor = o que o cupom cobrou (acréscimo de tabela e desconto inclusos); o que saiu da bomba e não virou cupom entra pelo valor da bomba.</p>
     ${det}
