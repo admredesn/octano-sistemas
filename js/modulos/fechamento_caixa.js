@@ -619,7 +619,7 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null, conta_id: a.conta_id || null, conta_nome: a.conta_nome || null });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null, conta_id: a.conta_id || null, conta_nome: a.conta_nome || null, titulo_id: a.titulo_id || null });
     // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
     // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
     if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
@@ -1724,6 +1724,8 @@ async function fcLancIncluirSalvar(secao) {
     // id do cadastro quando veio da busca: é o que liga o título à pessoa no Faturar
     ajuste.cliente_id = (document.getElementById('fcm-cliente-id') || {}).value || null;
     if (!ajuste.descricao && ajuste.cliente_nome) ajuste.descricao = ajuste.cliente_nome;
+    if (!ajuste.cliente_id && !confirm('Cliente fora do cadastro: a nota entra no caixa, mas NÃO vira título no Faturar.' + N2
+      + 'Para ir ao Faturar, escolha o cliente na lista que aparece ao digitar o nome. Continuar sem título?')) return;
   }
   if (secao === 'pix' || secao === 'pix_cnpj') {
     const cp = _fcContaPixEscolhida('fcm-pix-conta');
@@ -1743,11 +1745,19 @@ async function fcLancIncluirSalvar(secao) {
     depConta = contaId;
   }
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+  // nota a prazo com cliente do cadastro: vira TÍTULO no Faturar (antes ficava só no F.Caixa)
+  if (secao === 'prazo' && ajuste.cliente_id) {
+    try { ajuste.titulo_id = await _fcTituloDoManual(window._fcTurnoAtual, ajuste); }
+    catch (e) { alert('Não consegui criar o título no Faturar: ' + (e.message || e) + N2 + 'Nada foi lançado.'); return; }
+  }
   const { error } = await sb.from('oct_fc_lancamentos').insert({
     empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
     ref_tipo: 'manual', ref_id: refId, conferido: false, ajuste,
   });
-  if (error) { alert('Erro: ' + error.message); return; }
+  if (error) {
+    if (ajuste.titulo_id) await sb.from('oct_pdv_notas_prazo').delete().eq('id', ajuste.titulo_id).eq('status', 'aberto');
+    alert('Erro: ' + error.message); return;
+  }
   // livro financeiro do depósito: Caixa → conta (como o 🏦 Gerar depósito da sangria) — vai para a Conciliação
   if (secao === 'deposito' && depConta) {
     try {
@@ -1807,12 +1817,20 @@ async function fcLancExcluir(marcados, alvosDiretos) {
     if (foco) alvos = [foco.dataset.fcref];
   }
   if (!alvos.length) { alert('Marque (☑) ou clique num lançamento antes de excluir.'); return; }
-  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez; os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.`)) return;
+  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez (nota a prazo à mão: o título dela sai do Faturar junto); os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.`)) return;
   for (const k of alvos) {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
     try {
       if (refTipo === 'manual') {
         const ajM = ((window._fcConf || {})[k] || {}).ajuste || {};
+        if (ajM.titulo_id) {            // nota a prazo à mão: o título dela no Faturar sai junto (só se ainda em aberto)
+          const lv = await _fcTituloManualLivre(ajM.titulo_id);
+          if (!lv.livre) { alert('A nota de ' + (ajM.cliente_nome || 'cliente') + ' (' + fcMoney(ajM.valor) + ') não foi excluída: o título dela no Faturar ' + lv.motivo + '.' + N2 + 'Resolva no Faturar primeiro.'); return; }
+          if (!lv.sumiu) {
+            const { error: eT } = await sb.from('oct_pdv_notas_prazo').delete().eq('id', ajM.titulo_id).eq('status', 'aberto');
+            if (eT) { alert('Não consegui tirar o título do Faturar: ' + eT.message); return; }
+          }
+        }
         if (ajM.deposito) {             // depósito lançado à mão: as duas pernas do livro saem junto
           const { data: concM } = await sb.from('oct_fin_lancamentos').select('id,conciliado')
             .eq('origem', 'fcaixa_deposito').in('origem_id', [k + ':D', k + ':C']);
@@ -2371,7 +2389,7 @@ async function fcLancEditar(refTipo, refId) {
       <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Observação</label>
       <input id="fcl-obs" value="${fcEsc(aj.obs || '')}" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
-        ${(window._fcConf[k] || {}).ajuste ? '<button class="fc-btn" onclick="fcLancSalvar(\'' + refTipo + '\',\'' + refId + '\',true)">↩ Desfazer edição</button>' : ''}
+        ${(window._fcConf[k] || {}).ajuste && refTipo !== 'manual' ? '<button class="fc-btn" onclick="fcLancSalvar(\'' + refTipo + '\',\'' + refId + '\',true)">↩ Desfazer edição</button>' : ''}
         <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
         <button class="fc-btn azul" style="flex:1" onclick="fcLancSalvar('${refTipo}','${refId}')">💾 Salvar</button>
       </div>
@@ -2406,6 +2424,17 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       ajuste.manual = true;
       const cpM = _fcContaPixEscolhida('fcl-pix-conta');
       if (cpM) { ajuste.conta_id = cpM.id; ajuste.conta_nome = cpM.nome; }
+      // nota a prazo à mão: o valor novo vai também para o título no Faturar (só se ainda em aberto)
+      const antes = (window._fcConf[k] || {}).ajuste || {};
+      if (antes.titulo_id && Math.abs(Number(ajuste.valor || 0) - Number(antes.valor || 0)) > 0.004) {
+        const lv = await _fcTituloManualLivre(antes.titulo_id);
+        if (!lv.livre) { alert('Valor não alterado: o título desta nota no Faturar ' + lv.motivo + '.' + N2 + 'Resolva no Faturar primeiro.'); return; }
+        if (!lv.sumiu) {
+          const vN = Math.round(Number(ajuste.valor) * 100) / 100;
+          const { error: eT } = await sb.from('oct_pdv_notas_prazo').update({ valor: vN, valor_original: vN }).eq('id', antes.titulo_id).eq('status', 'aberto');
+          if (eT) { alert('Não consegui alterar o título no Faturar: ' + eT.message); return; }
+        }
+      }
     } else {
       ajuste = {};
       // 22/10/2026: regravar não pode apagar o que o formulário não mostra (depósito da sangria, lote do extrato,
@@ -2926,7 +2955,7 @@ async function fcNodeDetalhe(tipo) {
       window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
       entradas.push({ val: Number(m.valor || 0), hora: m.recebido_em || '9999', oficial: 1, rows: [
         _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '—'}</td>
-          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}${m.conta_nome ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 Pix caiu em ${fcEsc(m.conta_nome)}</span>` : ''}</td>
+          <td class="fc-td">✍ ${fcEsc(m.descricao) || 'manual'}${_fcManDep(m) ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : ''}${m.conta_nome ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 Pix caiu em ${fcEsc(m.conta_nome)}</span>` : ''}${m.secao === 'prazo' ? (m.titulo_id ? ' <span style="color:#7ee2a0;font-size:0.72rem">📄 título no Faturar</span>' : ' <span style="color:#f0b45c;font-size:0.72rem" title="Lançado sem cliente do cadastro (ou antes de 29/10/2026): não está no Faturar">sem título no Faturar</span>') : ''}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">—</td>
           <td class="fc-td">${fcEsc(_rotMan(m)) || '—'}</td>
@@ -4434,6 +4463,35 @@ async function _fcRespSalvar(turnoId, dif) {
   }
   fcModalFechar();
   await _fcConfirmarGravar(turnoId, nome, querVale ? pid : '');
+}
+
+// NOTA A PRAZO lançada à mão vira TÍTULO (29/10/2026, Ronan: "criei uma notinha do geraldo sebastiao que não estava
+// dentro do octano, e ela não foi para fatura"): o ✍ ficava só no F.Caixa e o Faturar lê oct_pdv_notas_prazo. Data =
+// a do caixa. A observação NÃO leva "do TecnoX": o F.Caixa soma só o ✍ (o título não entra em rec.prazo de novo).
+async function _fcTituloDoManual(turnoId, a) {
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
+  const valor = Math.round(Number(a.valor || 0) * 100) / 100;
+  const obs = 'Nota a prazo lançada à mão no F.Caixa — caixa ' + (t.numero != null ? t.numero : '') + ' (' + (_fcData(t.aberto_em) || '') + ')'
+    + (a.descricao && a.descricao !== a.cliente_nome ? ' — ' + a.descricao : '') + ' — por ' + (await _fcAutor());
+  const { data, error } = await sb.from('oct_pdv_notas_prazo').insert({
+    empresa_id: window._fcEmpresaId, turno_id: turnoId,
+    cliente_id: a.cliente_id, cliente_nome: a.cliente_nome,
+    valor, valor_original: valor, forma_nome: 'Nota a prazo', status: 'aberto',
+    registrado_em: t.aberto_em || new Date().toISOString(), criado_em: new Date().toISOString(),
+    observacao: obs,
+  }).select('id').single();
+  if (error) throw error;
+  return data.id;
+}
+// o título da nota manual ainda pode mudar/sair? (em aberto, sem fatura e sem recebimento parcial)
+async function _fcTituloManualLivre(id) {
+  const { data: n } = await sb.from('oct_pdv_notas_prazo').select('id,status,fatura_id,valor,valor_original').eq('id', id).maybeSingle();
+  if (!n) return { livre: true, sumiu: true };
+  if (n.status !== 'aberto' || n.fatura_id || Math.abs(Number(n.valor || 0) - Number(n.valor_original || 0)) > 0.004)
+    return { livre: false, motivo: n.fatura_id || n.status === 'faturado' ? 'já está numa fatura' : (n.status !== 'aberto' ? 'está ' + n.status : 'tem recebimento parcial') };
+  const { data: rec } = await sb.from('oct_recebimentos_titulo').select('id').eq('nota_prazo_id', id).limit(1);
+  if ((rec || []).length) return { livre: false, motivo: 'tem recebimento' };
+  return { livre: true };
 }
 
 // Gera o TÍTULO A FATURAR da diferença, no nome do funcionário responsável.
