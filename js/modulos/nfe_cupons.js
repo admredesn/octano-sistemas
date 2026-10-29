@@ -329,6 +329,8 @@ async function moduloNfeCupons() {
           <div class="ncup-filtros">
             <div><label>Forma de pagamento</label><select id="ncup-forma" onchange="ncupFiltrar()"><option value="">Todas</option></select></div>
             <div style="min-width:220px"><label>Produto</label><select id="ncup-prod" onchange="ncupFiltrar()" style="max-width:320px"><option value="">Todos</option></select></div>
+            <div><label>Valor (R$)</label><input id="ncup-valor" autocomplete="off" inputmode="decimal" style="width:170px" placeholder="50,09 · 50 · 40 a 60" title="50,09 = exatamente esse valor · 50 = de 50,00 a 50,99 · 40 a 60 = a faixa. Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.valor || "")}"></div>
+            <div><label>Nº do cupom</label><input id="ncup-num" autocomplete="off" inputmode="numeric" style="width:170px" placeholder="16276 · 16270 a 16278" title="Um número, vários separados por vírgula ou espaço, ou uma faixa (16270 a 16278). Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.num || "")}"></div>
             <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label></div>
           </div>
           <div id="ncup-lista"><p style="color:#888;padding:16px">Informe o cliente e/ou o período e clique em Buscar.</p></div>
@@ -343,6 +345,11 @@ async function moduloNfeCupons() {
   cli.addEventListener("input", () => { st.cliSel = null; clearTimeout(st.sugT); st.sugT = setTimeout(_ncupSugerir, 250); });
   cli.addEventListener("keydown", _ncupSugTecla);
   cli.addEventListener("blur", () => setTimeout(() => { const b = document.getElementById("ncup-sug"); if (b) b.style.display = "none"; }, 200));
+  ["ncup-valor", "ncup-num"].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener("input", () => { clearTimeout(st.valT); st.valT = setTimeout(ncupFiltrar, 200); });
+    el.addEventListener("keydown", _ncupBuscaTecla);
+  });
   if (st.vendas) { _ncupMontarFiltros(); ncupFiltrar(); }
   else if (st.cliSel || st.cli) ncupBuscar();
 }
@@ -548,14 +555,67 @@ function _ncupTalvez(v) {
     && String(n.data_emissao || "") >= String(v.data_venda || "")) || null;
 }
 
-function _ncupVisiveis() {
+// valor digitado: "1.234,56", "50,09", "50.09", "R$ 50" -> número (null = não é valor)
+function _ncupNum(s) {
+  let t = String(s || "").replace(/R\$|\s/gi, "");
+  if (!/^\d[\d.,]*$/.test(t)) return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (/\.\d{3}$/.test(t)) t = t.replace(/\./g, "");
+  const n = Number(t);
+  return isFinite(n) ? n : null;
+}
+// busca por valor: "50,09" = exatamente; "50" = de 50,00 a 50,99; "40 a 60" / "40-60" = a faixa. null = sem busca; {erro} = não entendi
+function _ncupFaixa(txt) {
+  const t = String(txt || "").trim();
+  if (!t) return null;
+  const p = t.split(/\s+(?:a|at[eé])\s+|\s*[-–]\s*/i).filter(Boolean);
+  const ns = p.map(_ncupNum);
+  if (!p.length || p.length > 2 || ns.some(n => n == null)) return { erro: true };
+  if (p.length === 2) return { min: Math.min(ns[0], ns[1]), max: Math.max(ns[0], ns[1]) };
+  return /[.,]\d{1,2}$/.test(p[0]) ? { min: ns[0], max: ns[0] } : { min: ns[0], max: ns[0] + 0.99 };
+}
+function _ncupFaixaTxt(fx) {
+  return fx.min === fx.max ? `valor R$ ${_ncupMoney(fx.min)}` : `valor de R$ ${_ncupMoney(fx.min)} a R$ ${_ncupMoney(fx.max)}`;
+}
+// nº do cupom: "16276", "16270, 16276" (ou espaço) = esses; "16270 a 16278" / "16270-16278" = a faixa. null = sem busca
+function _ncupNumeros(txt) {
+  const t = String(txt || "").trim();
+  if (!t) return null;
+  const f = t.match(/^(\d+)\s*(?:a|at[eé]|-|–)\s*(\d+)$/i);
+  if (f) { const a = Number(f[1]), b = Number(f[2]); return { min: Math.min(a, b), max: Math.max(a, b) }; }
+  const p = t.split(/[\s,;]+/).filter(Boolean);
+  if (!p.every(x => /^\d+$/.test(x))) return { erro: true };
+  return { lista: new Set(p.map(Number)) };
+}
+function _ncupNumerosTxt(fn) {
+  return fn.lista ? `cupom ${Array.from(fn.lista).join(", ")}` : `cupom ${fn.min} a ${fn.max}`;
+}
+// Enter no valor / nº: sobrou um cupom disponível -> marca e deixa o campo pronto p/ a próxima busca
+function _ncupBuscaTecla(e) {
+  const st = window._ncup, el = e.target;
+  if (e.key === "Escape") { el.value = ""; ncupFiltrar(); return; }
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  clearTimeout(st.valT);
+  ncupFiltrar();
+  const disp = _ncupVisiveis().filter(v => !_ncupNfeDo(v));
+  if (disp.length === 1 && (_ncupFaixa(st.valor) || _ncupNumeros(st.num))) { st.sel.add(disp[0].id); ncupFiltrar(); el.select(); }
+}
+
+// semBusca: a busca por valor / nº não conta (o cupom marcado continua marcado enquanto se procura o próximo)
+function _ncupVisiveis(semBusca) {
   const st = window._ncup;
   st.forma = (document.getElementById("ncup-forma") || {}).value || "";
   st.prod = (document.getElementById("ncup-prod") || {}).value || "";
   st.mostrarJa = !!(document.getElementById("ncup-ja") || {}).checked;
+  st.valor = (document.getElementById("ncup-valor") || {}).value || "";
+  st.num = (document.getElementById("ncup-num") || {}).value || "";
+  const fx = semBusca ? null : _ncupFaixa(st.valor), fn = semBusca ? null : _ncupNumeros(st.num);
   return (st.vendas || []).filter(v => {
     if (st.forma && !_ncupFormas(v).includes(st.forma)) return false;
     if (st.prod && !(Array.isArray(v.itens) ? v.itens : []).some(it => String(it.desc || "") === st.prod)) return false;
+    if (fx && !fx.erro) { const n = Number(v.valor_total || 0); if (n < fx.min - 0.005 || n > fx.max + 0.005) return false; }
+    if (fn && !fn.erro) { const n = Number(v.numero); if (fn.lista ? !fn.lista.has(n) : (n < fn.min || n > fn.max)) return false; }
     if (!st.mostrarJa && _ncupNfeDo(v)) return false;
     return true;
   });
@@ -566,12 +626,20 @@ function ncupFiltrar() {
   const el = document.getElementById("ncup-lista");
   if (!el || !st.vendas) return;
   const vs = _ncupVisiveis();
-  // o que saiu do filtro sai da seleção
-  const ids = new Set(vs.filter(v => !_ncupNfeDo(v)).map(v => v.id));
+  // o que saiu do filtro sai da seleção (a busca por valor / nº não tira: marca-se um, procura-se o próximo)
+  const ids = new Set(_ncupVisiveis(true).filter(v => !_ncupNfeDo(v)).map(v => v.id));
   Array.from(st.sel).forEach(id => { if (!ids.has(id)) st.sel.delete(id); });
+  const fx = _ncupFaixa(st.valor), fn = _ncupNumeros(st.num);
+  const inpV = document.getElementById("ncup-valor"), inpN = document.getElementById("ncup-num");
+  if (inpV) inpV.style.borderColor = fx && fx.erro ? "#f87171" : "";
+  if (inpN) inpN.style.borderColor = fn && fn.erro ? "#f87171" : "";
+  const buscas = [fx && !fx.erro ? _ncupFaixaTxt(fx) : "", fn && !fn.erro ? _ncupNumerosTxt(fn) : ""].filter(Boolean).join(" · ");
+  const faixa = (buscas ? ` · ${buscas}` : "")
+    + (fx && fx.erro ? ` · <span style="color:#f87171">valor não entendido (ex.: 50,09 · 50 · 40 a 60)</span>` : "")
+    + (fn && fn.erro ? ` · <span style="color:#f87171">nº não entendido (ex.: 16276 · 16270, 16276 · 16270 a 16278)</span>` : "");
   const avisos = _ncupAvisos();
   if (!vs.length) {
-    el.innerHTML = avisos + `<p style="color:#888;padding:16px">Nenhum cupom ${st.mostrarJa ? "" : "disponível "}com esses filtros.${st.vendas.length ? ` (${st.vendas.length} cupom(ns) no período, os outros não batem com o filtro ou já viraram NF-e.)` : ""}</p>`;
+    el.innerHTML = avisos + `<p style="color:#888;padding:16px">Nenhum cupom ${st.mostrarJa ? "" : "disponível "}com esses filtros${buscas ? ` (${buscas})` : ""}.${st.vendas.length ? ` (${st.vendas.length} cupom(ns) no período, os outros não batem com o filtro ou já viraram NF-e.)` : ""}</p>`;
     _ncupResumo(); return;
   }
   const disp = vs.filter(v => !_ncupNfeDo(v));
@@ -608,7 +676,7 @@ function ncupFiltrar() {
       </table>
     </div>
     <div style="display:flex;justify-content:space-between;color:#888;font-size:0.76rem;padding:6px 2px">
-      <span>${vs.length} cupom(ns) · R$ ${_ncupMoney(tot)} · ${disp.length} disponível(is)${vs.length > MAX ? ` · mostrando ${MAX} — refine a busca` : ""}${st.cortou ? " · ⚠ busca cortada em 15 mil: diminua o período" : ""}</span>
+      <span>${vs.length} cupom(ns) · R$ ${_ncupMoney(tot)} · ${disp.length} disponível(is)${faixa}${vs.length > MAX ? ` · mostrando ${MAX} — refine a busca` : ""}${st.cortou ? " · ⚠ busca cortada em 15 mil: diminua o período" : ""}</span>
       <span>A NF-e leva o cupom inteiro (todos os itens dele).</span>
     </div>`;
   _ncupResumo();
@@ -650,6 +718,8 @@ function _ncupResumo() {
   let aviso = "";
   if (docs.length > 1) aviso = ` <span style="color:#f87171">· cupons de ${docs.length} clientes diferentes: uma NF-e é de um cliente só</span>`;
   else if (sel.length > _NCUP_MAX_REFS) aviso = ` <span style="color:#f87171">· no máximo ${_NCUP_MAX_REFS} cupons por NF-e</span>`;
+  const vis = new Set(_ncupVisiveis().map(v => v.id)), fora = sel.filter(v => !vis.has(v.id)).length;
+  if (fora) aviso += ` <span style="color:#93c5fd">· ${fora} marcado(s) fora da lista (busca por valor / nº)</span>`;
   r.innerHTML = `<b style="color:#e0e0e0">${sel.length}</b> cupom(ns) escolhido(s) · <b style="color:#4ade80">R$ ${_ncupMoney(tot)}</b>${aviso}`;
   b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS;
 }
