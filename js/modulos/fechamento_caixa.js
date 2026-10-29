@@ -685,7 +685,21 @@ async function fcCarregarDados() {
     const livres = (t.manuais || []).filter(m => String(m.id || '').indexOf('ext-') === 0).map(m => ({
       c: Math.round(Number(m.valor || 0) * 100), usado: false,
       pix: (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(m.forma_nome || ''), '') : '') === 'pix' }));
+    // TÍTULO PAGO NO CARTÃO FROTA JÁ LANÇADO À MÃO NO BALÃO 🚛 (29/10/2026, Ronan, Florestal caixa 1205: a fatura 27 da AFLORA
+    // foi paga na Ticket Log — a frota de R$ 2.072,06 (fatura 2.006,06 + 66,00 de juros) foi lançada à mão no balão E o PDV
+    // gravou o recebimento; o mesmo dinheiro contava 2× e virava "sobra" de 1.949,58). O título de frota que casa com um
+    // lançamento manual de frota (mesmo valor, com ou sem os juros; cada lançamento casa uma vez) já está no Cartão Frota.
+    const frotaMan = (t.manuais || []).filter(m => m.secao === 'frota').map(m => ({ c: Math.round(Number(m.valor || 0) * 100), usado: false }));
     fora.forEach(f => {
+      if (f.g === 'frota' && frotaMan.length) {
+        const alvos = [Math.round(f.dinheiro * 100), Math.round(f.valor * 100)];
+        const m = frotaMan.find(l => !l.usado && alvos.includes(l.c));
+        if (m) {
+          m.usado = true; f.x._na_frota = true;
+          t.titulos_na_frota = Math.round(((t.titulos_na_frota || 0) + f.valor) * 100) / 100;
+          return;
+        }
+      }
       if (livres.length && (f.g === 'cartao' || f.g === 'pix')) {
         const alvos = [Math.round(f.dinheiro * 100), Math.round(f.valor * 100)];
         const m = livres.find(l => !l.usado && l.pix === (f.g === 'pix') && alvos.includes(l.c));
@@ -3328,7 +3342,7 @@ function fcNodeMov(tipo) {
     const ts = d.titulos_lst || [];
     const linhas = ts.map(x => `<tr><td class="fc-td">${_fcData(x.data_recebimento)}</td>
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
-      <td class="fc-td">${fcEsc(x.forma) || '—'}</td>
+      <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
       <td class="fc-td fc-r">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${x.id ? `<button class="fc-btn" title="Excluir este recebimento (o título/fatura volta para em aberto)" onclick="fcTitExcluirAbrir('${fcEsc(String(x.id))}')" style="padding:2px 8px;color:#f87171">🗑</button>` : ''}</td></tr>`);
