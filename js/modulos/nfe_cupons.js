@@ -644,8 +644,8 @@ function ncupFiltrar() {
   }
   const disp = vs.filter(v => !_ncupNfeDo(v));
   const tot = vs.reduce((s, v) => s + Number(v.valor_total || 0), 0);
-  const MAX = 600;
-  const linhas = vs.slice(0, MAX).map(v => {
+  // todos os cupons do período (antes cortava em 600: SEVEN 29/09–29/10 tem 1.637 e a lista parava em 21/10)
+  const linhas = vs.map(v => {
     const ja = _ncupNfeDo(v), talvez = !ja && _ncupTalvez(v);
     const itens = (Array.isArray(v.itens) ? v.itens : []).map(it => `${_ncupEsc(it.desc || "")} <span style="color:#777">${Number(it.qtd || 0).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}</span>`).join(" · ");
     const marcado = st.sel.has(v.id);
@@ -653,7 +653,7 @@ function ncupFiltrar() {
       ? `<span class="ncup-selo" style="background:#0f2a0f;color:#4caf50">NF-e nº ${_ncupEsc(ja.nfe_numero || "?")}${ja.ambiente !== "producao" ? " (homolog.)" : ""}</span>`
       : (talvez ? `<span class="ncup-selo" style="background:#2a2300;color:#fbbf24" title="Há uma NF-e deste posto com o mesmo valor${_ncupDig(v.cliente_cpf) ? " e cliente" : ""} sem cupom ligado">⚠ talvez NF-e nº ${_ncupEsc(talvez.numero)}</span>` : "")
       + (v._tecnox ? ` <span class="ncup-selo" style="background:#1e2235;color:#a5b4fc" title="Cupom emitido pelo TecnoX: itens da cópia da venda, chave do título">TecnoX</span>` : "");
-    return `<tr class="${ja ? "ncup-ja" : ""}${marcado ? " ncup-marcado" : ""}" ${ja ? "" : `onclick="ncupMarcar('${v.id}', event)" style="cursor:pointer"`}>
+    return `<tr data-id="${_ncupEsc(v.id)}" class="${ja ? "ncup-ja" : ""}${marcado ? " ncup-marcado" : ""}" ${ja ? "" : `onclick="ncupMarcar('${v.id}', event)" style="cursor:pointer"`}>
       <td>${ja ? "" : `<input type="checkbox" ${marcado ? "checked" : ""} onclick="event.stopPropagation();ncupMarcar('${v.id}')">`}</td>
       <td>${_ncupHora(v.data_venda)}</td>
       <td><b>${_ncupEsc(v.numero)}</b></td>
@@ -676,7 +676,7 @@ function ncupFiltrar() {
       </table>
     </div>
     <div style="display:flex;justify-content:space-between;color:#888;font-size:0.76rem;padding:6px 2px">
-      <span>${vs.length} cupom(ns) · R$ ${_ncupMoney(tot)} · ${disp.length} disponível(is)${faixa}${vs.length > MAX ? ` · mostrando ${MAX} — refine a busca` : ""}${st.cortou ? " · ⚠ busca cortada em 15 mil: diminua o período" : ""}</span>
+      <span>${vs.length} cupom(ns) · R$ ${_ncupMoney(tot)} · ${disp.length} disponível(is)${faixa}${st.cortou ? " · ⚠ busca cortada em 15 mil: diminua o período" : ""}</span>
       <span>A NF-e leva o cupom inteiro (todos os itens dele).</span>
     </div>`;
   _ncupResumo();
@@ -697,7 +697,16 @@ function ncupMarcar(id, ev) {
   const st = window._ncup;
   if (ev && ev.target && /^(INPUT|BUTTON|A)$/.test(ev.target.tagName)) return;
   if (st.sel.has(id)) st.sel.delete(id); else st.sel.add(id);
-  ncupFiltrar();
+  // só a linha muda: redesenhar a lista inteira a cada clique ficava lento com milhares de cupons e voltava a rolagem ao topo
+  const tr = Array.from(document.querySelectorAll("#ncup-lista tr[data-id]")).find(t => t.dataset.id === String(id));
+  if (!tr) { ncupFiltrar(); return; }
+  const m = st.sel.has(id);
+  tr.classList.toggle("ncup-marcado", m);
+  const cb = tr.querySelector("input[type=checkbox]");
+  if (cb) cb.checked = m;
+  const todos = document.querySelector("#ncup-lista thead input[type=checkbox]");
+  if (todos) { const disp = _ncupVisiveis().filter(v => !_ncupNfeDo(v)); todos.checked = disp.length > 0 && disp.every(v => st.sel.has(v.id)); }
+  _ncupResumo();
 }
 function ncupMarcarTodos(marcar) {
   const st = window._ncup;
