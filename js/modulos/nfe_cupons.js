@@ -320,7 +320,7 @@ async function moduloNfeCupons() {
             <div style="font-size:0.8rem;color:#aaa">${_ncupEsc(st.emp.nome || "")} · NF-e em <b style="color:${prodAmb ? "#4ade80" : "#f59e0b"}">${prodAmb ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}</b> · série ${_ncupEsc(st.cfg.serie)}</div>
           </div>
           <div class="ncup-filtros">
-            <div style="flex:1;min-width:220px;position:relative"><label>Cliente (código, nome ou CPF/CNPJ)</label><input id="ncup-cli" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="comece a digitar: CEMTAL, 573 ou 22282628…" value="${_ncupEsc(st.cliSel ? st.cliSel.nome : (st.cli || ""))}">
+            <div style="flex:1;min-width:220px;position:relative"><label>Cliente (código, nome ou CPF/CNPJ) ou nº do cupom</label><input id="ncup-cli" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="comece a digitar: CEMTAL, 573, 22282628… ou o nº do cupom" value="${_ncupEsc(st.cliSel ? st.cliSel.nome : (st.cli || ""))}">
               <div id="ncup-sug" class="ncup-sug" style="display:none"></div></div>
             <div><label>De</label><input id="ncup-de" type="date" value="${st.de}" max="${hoje}"></div>
             <div><label>Até</label><input id="ncup-ate" type="date" value="${st.ate}" max="${hoje}"></div>
@@ -433,7 +433,9 @@ async function ncupBuscar() {
         .gte("data_venda", de).lte("data_venda", ate).order("data_venda", { ascending: false });
       if (cs) q = doc.length >= 11 ? q.in("cliente_cpf", [doc, _ncupDocFmt(doc)]) : q.ilike("cliente_nome", `%${cs.nome}%`);
       else if (soDigitos && doc.length >= 11) q = q.in("cliente_cpf", [doc, _ncupDocFmt(doc)]);
-      else if (soDigitos && doc.length >= 3) q = q.ilike("cliente_cpf", `%${doc}%`);
+      // número curto (não é CPF/CNPJ inteiro): pedaço do documento OU o nº do cupom (SEVEN 29/10: "15565" aqui não achava o cupom)
+      else if (soDigitos && doc.length >= 3) q = q.or(`cliente_cpf.ilike.%${doc}%,numero.eq.${Number(doc)}`);
+      else if (soDigitos && doc.length) q = q.eq("numero", Number(doc));
       else if (st.cli) q = q.ilike("cliente_nome", `%${st.cli}%`);
       return q;
     };
@@ -591,13 +593,14 @@ function _ncupNumerosTxt(fn) {
   return fn.lista ? `cupom ${Array.from(fn.lista).join(", ")}` : `cupom ${fn.min} a ${fn.max}`;
 }
 // Enter no valor / nº: sobrou um cupom disponível -> marca e deixa o campo pronto p/ a próxima busca
-function _ncupBuscaTecla(e) {
+async function _ncupBuscaTecla(e) {
   const st = window._ncup, el = e.target;
   if (e.key === "Escape") { el.value = ""; ncupFiltrar(); return; }
   if (e.key !== "Enter") return;
   e.preventDefault();
   clearTimeout(st.valT);
-  ncupFiltrar();
+  if (!st.vendas) await ncupBuscar();   // ainda não buscou: Enter busca o período e já filtra
+  else ncupFiltrar();
   const disp = _ncupVisiveis().filter(v => !_ncupNfeDo(v));
   if (disp.length === 1 && (_ncupFaixa(st.valor) || _ncupNumeros(st.num))) { st.sel.add(disp[0].id); ncupFiltrar(); el.select(); }
 }
