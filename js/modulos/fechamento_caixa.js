@@ -48,7 +48,13 @@ function _fcGrupoNome(nome, cod) {
 function fcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fcMoney(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fcNum(v, casas) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: casas || 0, maximumFractionDigits: casas || 0 }); }
-function _fcData(v) { return v ? new Date(v).toLocaleDateString('pt-BR') : ''; }
+// data PURA 'AAAA-MM-DD' (data_recebimento do título) vira meia-noite UTC no new Date → 21h do dia anterior em Brasília
+// (29/10/2026, Ronan: recebimento de 29/10 aparecia 28/10 em Títulos Recebidos) — formata direto, sem fuso
+function _fcData(v) {
+  if (!v) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+  return m ? m[3] + '/' + m[2] + '/' + m[1] : new Date(v).toLocaleDateString('pt-BR');
+}
 function _fcHora(v) { return v ? new Date(v).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
 // hora p/ campos do NÚCLEO (fila/receb/pista/vales/cancelamentos): gravados em
 // hora LOCAL com +00:00 falso — exibir direto pelo _fcHora deslocava 3h (20/08).
