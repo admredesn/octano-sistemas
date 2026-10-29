@@ -991,8 +991,14 @@ function _ncupAddProd(i) {
   if (ins[0]) { ins[0].focus(); ins[0].select(); }
 }
 
+// trocou de cliente: o que veio do cadastro anterior (nome, IE, endereço) não fica na NF-e do outro
+function _ncupLimparDest() {
+  ["ncup-nome", "ncup-ie", "ncup-lgr", "ncup-nro", "ncup-bairro", "ncup-cep", "ncup-mun", "ncup-uf", "ncup-cmun"]
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+}
 function _ncupPreencher(p) {
   const st = window._ncup, emp = st.emp || {};
+  if (st.pessoa && st.pessoa.id !== p.id) _ncupLimparDest();
   st.pessoa = p;
   const set = (id, val) => { const el = document.getElementById(id); if (el && val != null && String(val).trim() !== "") el.value = String(val).trim(); };
   set("ncup-doc", _ncupDig(p.documento)); set("ncup-nome", p.razao_social || p.nome); set("ncup-ie", p.ie);
@@ -1052,11 +1058,158 @@ async function _ncupBuscarCliente() {
       lista = esc ? [esc] : [];
     }
     st.achados = lista;
-    if (!lista.length) { _ncupPadraoPosto(); if (a) a.innerHTML = '<span style="color:#f59e0b">Não achei no cadastro — preencha os dados abaixo.</span>'; return; }
+    if (!lista.length) {
+      if (st.pessoa && (doc.length === 11 || doc.length === 14) && _ncupDig(st.pessoa.documento) !== doc) _ncupLimparDest();
+      if (doc.length === 11 || doc.length === 14) st.pessoa = null;
+      _ncupPadraoPosto();
+      if (a) a.innerHTML = '<span style="color:#f59e0b">Não achei no cadastro.</span>'
+        + (typeof pode !== "function" || pode("pessoas.incluir")
+          ? ' <button class="ncup-btn" style="padding:4px 12px;font-size:0.78rem;margin-left:6px" onclick="_ncupCadAbrir()">➕ Cadastrar cliente</button> <span style="color:#888">ou preencha os dados abaixo só para esta NF-e.</span>'
+          : ' <span style="color:#888">Preencha os dados abaixo (sem permissão para cadastrar pessoa).</span>');
+      return;
+    }
     if (lista.length === 1) { _ncupPreencher(lista[0]); return; }
     if (a) a.innerHTML = lista.map((p, i) => `<div onclick="_ncupPreencher(window._ncup.achados[${i}])" style="padding:5px 4px;border-bottom:1px solid #2a2d3e;cursor:pointer;color:#e0e0e0">${_ncupEsc(p.nome)} <span style="color:#888">${_ncupEsc(p.documento || "")} · ${_ncupEsc(p.cidade || "")}</span></div>`).join("");
   } catch (e) {
     if (a) a.innerHTML = `<span style="color:#f87171">Erro na busca: ${_ncupEsc(e.message || e)}</span>`;
+  }
+}
+
+// ---------- cliente sem cadastro: janela de cadastro rápido (Ronan 29/10, SEVEN: CNPJ 08913064000195 não cadastrado) ----------
+// CNPJ já vem da Receita (rota /cnpj do servidor = as fontes do cadastro de Pessoas). Salva em oct_pessoas como CLIENTE
+// deste posto (o código 10001+ vem do gatilho do banco) e preenche a NF-e com ele. O resto (prazo, frota…) fica em Pessoas.
+function _ncupCadFechar() { const m = document.getElementById("ncup-cad"); if (m) m.remove(); }
+function _ncupCadMsg(html, cor) { const el = document.getElementById("ncad-msg"); if (el) { el.style.color = cor || "#aaa"; el.innerHTML = html; } }
+function _ncupCadAbrir() {
+  if (!podeOuAvisa("pessoas.incluir")) return;
+  const v = id => String((document.getElementById(id) || {}).value || "").trim();
+  const doc = _ncupDig(v("ncup-doc"));
+  const inp = (id, rot, extra) => `<div style="${(extra && extra.w) || ""}"><label>${rot}</label><input id="${id}" ${(extra && extra.attr) || ""}></div>`;
+  _ncupCadFechar();
+  const m = document.createElement("div");
+  m.id = "ncup-cad"; m.className = "ncup-modal"; m.style.zIndex = "9100";
+  m.innerHTML = `
+    <div class="ncup-caixa" style="max-width:680px">
+      <div class="ns-titulo"><h3>➕ Cadastrar cliente</h3><button class="ns-fechar" onclick="_ncupCadFechar()">✕</button></div>
+      <div style="padding:16px">
+        <div class="ncup-linha" style="align-items:flex-end">
+          ${inp("ncad-doc", "CPF/CNPJ *", { attr: 'inputmode="numeric" placeholder="só números"' })}
+          <div style="flex:0 0 auto"><button class="ncup-btn" onclick="_ncupCadReceita()" title="Buscar os dados do CNPJ na Receita">🔍 Receita</button></div>
+        </div>
+        <div id="ncad-rf" style="font-size:0.78rem;margin-top:4px;min-height:1em"></div>
+        <div class="ncup-linha">${inp("ncad-nome", "Nome / razão social *")}${inp("ncad-ie", "Inscrição estadual", { w: "flex:0 0 160px", attr: 'placeholder="vazio ou ISENTO"' })}</div>
+        <div class="ncup-linha">${inp("ncad-tel", "Telefone")}${inp("ncad-zap", "WhatsApp", { attr: 'placeholder="DDD + número"' })}${inp("ncad-email", "E-mail")}</div>
+        <div class="ncup-linha">${inp("ncad-cep", "CEP *", { w: "flex:0 0 120px", attr: 'inputmode="numeric"' })}${inp("ncad-lgr", "Endereço (rua, fazenda…) *")}${inp("ncad-nro", "Número", { w: "flex:0 0 90px", attr: 'placeholder="S/N"' })}</div>
+        <div class="ncup-linha">${inp("ncad-bairro", "Bairro")}${inp("ncad-mun", "Município *")}${inp("ncad-uf", "UF *", { w: "flex:0 0 60px", attr: 'maxlength="2"' })}</div>
+        <div style="margin-top:8px;font-size:0.74rem;color:#778">Entra como <b>cliente</b> deste posto, com código novo. Venda a prazo, frota e faturamento: completar depois em Pessoas.</div>
+        <div id="ncad-msg" style="margin-top:10px;font-size:0.84rem;min-height:1.2em"></div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button class="ncup-btn" style="flex:1;background:#1a1d2e;border-color:#2a2d3e;color:#aaa" onclick="_ncupCadFechar()">Cancelar</button>
+          <button id="ncad-salvar" class="ncup-btn ncup-emitir" style="flex:2" onclick="_ncupCadSalvar()">💾 Salvar e usar na NF-e</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(m);
+  // o que já foi digitado na NF-e vem junto
+  const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+  set("ncad-doc", doc); set("ncad-nome", v("ncup-nome")); set("ncad-ie", v("ncup-ie")); set("ncad-lgr", v("ncup-lgr"));
+  set("ncad-nro", v("ncup-nro")); set("ncad-bairro", v("ncup-bairro")); set("ncad-cep", v("ncup-cep"));
+  set("ncad-mun", v("ncup-mun")); set("ncad-uf", v("ncup-uf"));
+  document.getElementById("ncad-cep").addEventListener("change", _ncupCadCep);
+  document.getElementById("ncad-doc").addEventListener("change", () => { if (_ncupDig(document.getElementById("ncad-doc").value).length === 14) _ncupCadReceita(); });
+  if (doc.length === 14) _ncupCadReceita();
+  else document.getElementById(doc.length === 11 ? "ncad-nome" : "ncad-doc").focus();
+}
+// CNPJ -> Receita: preenche nome, endereço, contato e IE (a Receita manda; o resto fica como está)
+async function _ncupCadReceita() {
+  const cnpj = _ncupDig((document.getElementById("ncad-doc") || {}).value);
+  const rf = document.getElementById("ncad-rf");
+  if (cnpj.length !== 14) { if (rf) rf.innerHTML = '<span style="color:#888">CPF não tem consulta pública: preencha à mão.</span>'; return; }
+  if (rf) rf.innerHTML = '<span style="color:#888">Buscando o CNPJ na Receita…</span>';
+  try {
+    const r = await fetch(`${_ncupSefaz()}/cnpj/${cnpj}`);
+    if (!document.getElementById("ncup-cad")) return;
+    if (!r.ok) {
+      if (rf) rf.innerHTML = `<span style="color:#f59e0b">${r.status === 404 ? "CNPJ não encontrado na Receita." : "A consulta de CNPJ não respondeu agora — preencha à mão ou tente de novo em 1 minuto."}</span>`;
+      return;
+    }
+    const d = await r.json();
+    window._ncup.cadRf = { cnpj, fantasia: String(d.nome_fantasia || "").trim() };
+    const set = (id, val) => { const el = document.getElementById(id); if (el && val != null && String(val).trim()) el.value = String(val).trim(); };
+    const tipo = String(d.descricao_tipo_de_logradouro || "").trim(), lgr = String(d.logradouro || "").trim();
+    const rua = tipo && lgr && !_ncupNorm(lgr).startsWith(_ncupNorm(tipo)) ? `${tipo} ${lgr}` : lgr;
+    set("ncad-nome", d.razao_social || d.nome_fantasia);
+    set("ncad-lgr", [rua, d.complemento].filter(x => String(x || "").trim()).join(", "));
+    set("ncad-nro", d.numero); set("ncad-bairro", d.bairro); set("ncad-mun", d.municipio); set("ncad-uf", d.uf);
+    const cep = _ncupDig(d.cep);
+    if (cep.length === 8) set("ncad-cep", cep.replace(/(\d{5})(\d{3})/, "$1-$2"));
+    const tel = _ncupDig(d.ddd_telefone_1);
+    if (tel.length >= 10) set("ncad-tel", tel.replace(/^(\d{2})(\d+)$/, "($1) $2"));
+    set("ncad-email", d.email);
+    set("ncad-ie", d.inscricao_estadual);
+    const sit = String(d.descricao_situacao_cadastral || "").toUpperCase();
+    if (rf) rf.innerHTML = `<span style="color:#4ade80">✓ Dados da Receita${d._fonte ? " (" + _ncupEsc(d._fonte) + ")" : ""}${d.nome_fantasia ? " · " + _ncupEsc(d.nome_fantasia) : ""}. Confira e salve.</span>`
+      + (sit && sit !== "ATIVA" ? ` <b style="color:#f87171">CNPJ ${_ncupEsc(sit)} na Receita — a SEFAZ pode recusar a NF-e.</b>` : "")
+      + (d.inscricao_estadual ? "" : ' <span style="color:#888">IE não informada: confira (contribuinte de ICMS precisa da IE).</span>');
+  } catch (e) {
+    if (rf) rf.innerHTML = '<span style="color:#f59e0b">Não consegui consultar o CNPJ agora — preencha à mão.</span>';
+  }
+}
+async function _ncupCadCep() {
+  const cep = _ncupDig((document.getElementById("ncad-cep") || {}).value);
+  if (cep.length !== 8) return;
+  try {
+    const j = await (await fetch(`https://viacep.com.br/ws/${cep}/json/`)).json();
+    if (!j || j.erro) { _ncupCadMsg("CEP não encontrado — confira.", "#f59e0b"); return; }
+    const vazio = id => !String((document.getElementById(id) || {}).value || "").trim();
+    if (vazio("ncad-lgr") && j.logradouro) document.getElementById("ncad-lgr").value = j.logradouro;
+    if (vazio("ncad-bairro") && j.bairro) document.getElementById("ncad-bairro").value = j.bairro;
+    if (vazio("ncad-mun") && j.localidade) document.getElementById("ncad-mun").value = j.localidade;
+    if (vazio("ncad-uf") && j.uf) document.getElementById("ncad-uf").value = j.uf;
+  } catch (e) { /* sem ViaCEP: segue à mão */ }
+}
+async function _ncupCadSalvar() {
+  if (!podeOuAvisa("pessoas.incluir")) return;
+  const st = window._ncup, btn = document.getElementById("ncad-salvar");
+  const v = id => String((document.getElementById(id) || {}).value || "").trim();
+  const doc = _ncupDig(v("ncad-doc"));
+  const falta = [];
+  if (doc.length !== 11 && doc.length !== 14) falta.push("CPF/CNPJ");
+  if (!v("ncad-nome")) falta.push("nome");
+  if (_ncupDig(v("ncad-cep")).length !== 8) falta.push("CEP");
+  if (!v("ncad-lgr")) falta.push("endereço");
+  if (!v("ncad-mun")) falta.push("município");
+  if (!/^[A-Za-z]{2}$/.test(v("ncad-uf"))) falta.push("UF");
+  if (falta.length) { _ncupCadMsg("Falta: " + falta.join(", ") + ".", "#f87171"); return; }
+  const campos = "id,empresa_id,nome,razao_social,documento,ie,endereco,num_endereco,bairro,cidade,uf,cep,tecnox_cod";
+  btn.disabled = true; _ncupCadMsg("Salvando…");
+  try {
+    // já cadastrado neste posto (outra tela, ou cadastrado enquanto esta estava aberta): usa o cadastro, não duplica
+    const { data: ja } = await sb.from("oct_pessoas").select(campos).eq("empresa_id", st.eid).in("documento", [doc, _ncupDocFmt(doc)]).limit(1);
+    if (ja && ja.length) {
+      _ncupCadFechar(); _ncupPreencher(ja[0]); _ncupDesconfirmar();
+      const a = document.getElementById("ncup-achados");
+      if (a) a.innerHTML += ' <span style="color:#93c5fd">— já estava cadastrado neste posto.</span>';
+      return;
+    }
+    const nome = v("ncad-nome"), rf = st.cadRf && st.cadRf.cnpj === doc ? st.cadRf : null;
+    const { data: p, error } = await sb.from("oct_pessoas").insert({
+      empresa_id: st.eid, nome, razao_social: doc.length === 14 ? nome : null, nome_fantasia: (rf && rf.fantasia) || null, documento: doc,
+      ie: v("ncad-ie") || null, telefone: v("ncad-tel") || null, whatsapp: v("ncad-zap") || null, email: v("ncad-email") || null,
+      endereco: v("ncad-lgr"), num_endereco: v("ncad-nro") || null, bairro: v("ncad-bairro") || null,
+      cep: v("ncad-cep"), cidade: v("ncad-mun"), uf: v("ncad-uf").toUpperCase(),
+      classificacoes: ["cliente"], tipo: "cliente", ativo: true,
+      observacoes: "Cadastrado na emissão de NF-e de cupons (retaguarda)",
+    }).select(campos).single();
+    if (error) throw error;
+    _ncupCadFechar();
+    _ncupPreencher(p);
+    _ncupDesconfirmar();
+    const a = document.getElementById("ncup-achados");
+    if (a) a.innerHTML += ` <span style="color:#4ade80">— cadastrado agora${p.tecnox_cod ? " (código " + _ncupEsc(p.tecnox_cod) + ")" : ""}.</span>`;
+  } catch (e) {
+    btn.disabled = false;
+    _ncupCadMsg("Não consegui salvar: " + _ncupEsc(e.message || e), "#f87171");
   }
 }
 
