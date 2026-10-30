@@ -1004,15 +1004,15 @@ function _ncupPreencher(p) {
   set("ncup-doc", _ncupDig(p.documento)); set("ncup-nome", p.razao_social || p.nome); set("ncup-ie", p.ie);
   set("ncup-lgr", p.endereco); set("ncup-nro", p.num_endereco); set("ncup-bairro", p.bairro);
   set("ncup-cep", p.cep); set("ncup-mun", p.cidade); set("ncup-uf", p.uf || emp.uf || "MG");
-  // mesmo município do posto -> o IBGE do posto; outro município -> pelo CEP (ViaCEP)
+  // mesmo município do posto -> o IBGE do posto; outro município -> pelo CEP (ViaCEP); CEP errado/vazio -> Receita
   if (p.cidade && _ncupNorm(p.cidade) === _ncupNorm(emp.cidade) && emp.c_mun) set("ncup-cmun", emp.c_mun);
   else if (p.cidade) {
     const c = document.getElementById("ncup-cmun"), cep = document.getElementById("ncup-cep");
     if (c) c.value = "";
     if (cep && !_ncupDig(p.cep) && _ncupDig(cep.value) === _ncupDig(emp.cep)) cep.value = "";   // não fica o CEP do posto
-    if (_ncupDig(p.cep).length === 8) _ncupCep();
   }
   _ncupPadraoPosto();
+  _ncupCompletarEndereco();
   const a = document.getElementById("ncup-achados");
   if (a) a.innerHTML = `<span style="color:#4ade80">✓ ${_ncupEsc(p.nome)}</span>`
     + (p.empresa_id && p.empresa_id !== st.eid ? ' <span style="color:#60a5fa">— cadastro de outro posto</span>' : "")
@@ -1230,6 +1230,42 @@ async function _ncupCep() {
   } catch (e) { /* sem ViaCEP: digita o IBGE */ }
 }
 
+// cadastro com CEP errado/vazio ou sem IBGE (Ronan 30/10, AC: JLS com CEP de 9 dígitos travava a NF-e): CEP bom -> ViaCEP;
+// o que ainda faltar vem da Receita pelo CNPJ (a rota /cnpj traz CEP e código IBGE). Só completa se o município bate com o
+// da Receita (outro município = endereço de entrega, não mexe). Na emissão o CEP corrigido vai pro cadastro do posto.
+async function _ncupCompletarEndereco() {
+  const el = id => document.getElementById(id);
+  const val = id => String((el(id) || {}).value || "").trim();
+  const ok = () => _ncupDig(val("ncup-cep")).length === 8 && _ncupDig(val("ncup-cmun")).length === 7;
+  if (ok()) return;
+  if (_ncupDig(val("ncup-cep")).length === 8) await _ncupCep();
+  if (ok()) return;
+  const cnpj = _ncupDig(val("ncup-doc"));
+  if (cnpj.length !== 14) return;
+  const msg = el("ncup-msg"), AGUARDA = "Completando CEP e código IBGE pela Receita…";
+  if (msg && !msg.textContent.trim()) _ncupMsg(AGUARDA, "#888");
+  // não apaga mensagem de outro (conferência, falta…); só a própria, ou quando trocou campo (aí a conferência já caiu)
+  const fim = (html, cor, forca) => { if (msg && (forca || !msg.textContent.trim() || msg.textContent === AGUARDA)) _ncupMsg(html, cor); };
+  try {
+    const r = await fetch(`${_ncupSefaz()}/cnpj/${cnpj}`);
+    if (!el("ncup-modal") || _ncupDig(val("ncup-doc")) !== cnpj) return;   // fechou ou trocou de cliente
+    if (!r.ok) { fim(""); return; }
+    const d = await r.json();
+    const cepRf = _ncupDig(d.cep), ibge = _ncupDig(d.codigo_municipio_ibge);
+    const mun = val("ncup-mun");
+    if (mun && d.municipio && _ncupNorm(mun) !== _ncupNorm(d.municipio)) {
+      fim(`Na Receita o município é ${_ncupEsc(d.municipio)}/${_ncupEsc(d.uf || "")} (CEP ${cepRf.length === 8 ? cepRf.replace(/(\d{5})(\d{3})/, "$1-$2") : "—"}): confira CEP e código IBGE.`, "#f59e0b");
+      return;
+    }
+    const feito = [], troca = (id, v) => { el(id).value = v; el(id).dispatchEvent(new Event("input")); };
+    if (_ncupDig(val("ncup-cep")).length !== 8 && cepRf.length === 8) { troca("ncup-cep", cepRf.replace(/(\d{5})(\d{3})/, "$1-$2")); feito.push("CEP"); }
+    if (_ncupDig(val("ncup-cmun")).length !== 7 && ibge.length === 7) { troca("ncup-cmun", ibge); feito.push("código IBGE"); }
+    if (!mun && d.municipio) troca("ncup-mun", String(d.municipio).trim());
+    if (!val("ncup-uf") && d.uf) troca("ncup-uf", String(d.uf).trim().toUpperCase());
+    fim(feito.length ? `✓ ${feito.join(" e ")} pela Receita — confira.` : "", "#4ade80", feito.length > 0);
+  } catch (e) { fim(""); }
+}
+
 function _ncupLerDest() {
   const g = id => String((document.getElementById(id) || {}).value || "").trim();
   return { doc: g("ncup-doc"), nome: g("ncup-nome"), ie: g("ncup-ie"), logradouro: g("ncup-lgr"), numero: g("ncup-nro"),
@@ -1248,7 +1284,8 @@ async function _ncupEmitir() {
   if (doc.length !== 11 && doc.length !== 14) falta.push("CPF/CNPJ");
   if (!dest.nome) falta.push("nome");
   if (!dest.logradouro) falta.push("endereço");
-  if (_ncupDig(dest.cep).length !== 8) falta.push("CEP");
+  const nCep = _ncupDig(dest.cep).length;
+  if (nCep !== 8) falta.push(nCep ? `CEP (está com ${nCep} dígitos; o CEP tem 8)` : "CEP");
   if (!dest.municipio) falta.push("município");
   if (!/^[A-Za-z]{2}$/.test(dest.uf)) falta.push("UF");
   if (_ncupDig(dest.c_mun).length !== 7) falta.push("código IBGE do município (7 dígitos)");
@@ -1342,13 +1379,16 @@ async function _ncupEmitir() {
       });
       if (ei) avisos.push("não gravou no histórico de notas (" + (ei.message || ei) + ")");
     } catch (e) { avisos.push("não gravou no histórico de notas"); }
-    // cadastro do cliente DESTE posto sem endereço: guarda o que foi digitado (só os campos vazios)
+    // cadastro do cliente DESTE posto sem endereço: guarda o que foi digitado (só os campos vazios; o CEP também se o do
+    // cadastro não tem 8 dígitos — 30/10, JLS no AC com 9)
     try {
       const p = st.pessoa;
       if (p && p.id && p.empresa_id === st.eid) {
         const { data: atual } = await sb.from("oct_pessoas").select("endereco,num_endereco,bairro,cidade,uf,cep").eq("id", p.id).maybeSingle();
-        const patch = {}, novo = { endereco: dest.logradouro, num_endereco: dest.numero, bairro: dest.bairro, cidade: dest.municipio, uf: dest.uf.toUpperCase(), cep: dest.cep };
+        const patch = {}, novo = { endereco: dest.logradouro, num_endereco: dest.numero, bairro: dest.bairro, cidade: dest.municipio, uf: dest.uf.toUpperCase(),
+          cep: _ncupDig(dest.cep).replace(/^(\d{5})(\d{3})$/, "$1-$2") };
         Object.keys(novo).forEach(k => { if (atual && !String(atual[k] || "").trim() && String(novo[k] || "").trim()) patch[k] = novo[k]; });
+        if (atual && String(atual.cep || "").trim() && _ncupDig(atual.cep).length !== 8) patch.cep = novo.cep;
         if (Object.keys(patch).length) await sb.from("oct_pessoas").update(patch).eq("id", p.id);
       }
     } catch (e) { /* o cadastro fica como estava; a nota já saiu */ }
