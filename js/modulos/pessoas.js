@@ -3,6 +3,22 @@
 // MODULO PESSOAS — cadastro de fornecedores e clientes (grid)
 // ============================================================
 
+// SÓ O MASTER DESBLOQUEIA O CRÉDITO (30/10/2026, Ronan: "nem o gerente vai conseguir
+// desbloquear"). O banco também barra (SQL-TRAVA-DESBLOQUEIO-CREDITO.sql); aqui a caixa
+// já vem travada e diz o caminho: bloqueio por fatura sai sozinho quando o título é quitado.
+function _pessoaDesbloqueioTravado(p) {
+  return !!(p && p.credito_bloqueado) && typeof PERM !== 'undefined' && PERM.carregado && !PERM.legado && !PERM.master;
+}
+
+function _pessoaAvisoBloqueio(p) {
+  if (!p || !p.credito_bloqueado) return '';
+  const trav = _pessoaDesbloqueioTravado(p);
+  const txt = p.credito_bloqueio_origem === 'fatura'
+    ? 'Bloqueado por fatura vencida. Para voltar a comprar a prazo, o cliente deve quitar integralmente o título — a liberação é automática.' + (trav ? ' Só o master desbloqueia à mão.' : '')
+    : (trav ? 'Só o master pode desbloquear.' : '');
+  return txt ? `<span style="display:block;font-size:0.72rem;color:#f59e0b;margin-top:4px;font-weight:normal">${txt}</span>` : '';
+}
+
 async function moduloPessoas() {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando...</p>';
@@ -166,7 +182,7 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Prazo de pagamento (dias) <span style="font-size:0.72rem;color:#888">(vencimento proposto ao faturar)</span></label><input id="fpe-prazo-dias" type="number" step="1" min="0" max="365" value="${p?.prazo_dias ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
         <div class="form-group"><label>Vencimento em dia fixo do mês <span style="font-size:0.72rem;color:#888">(preenchido, vale no lugar do prazo; sábado, domingo ou feriado = dia útil anterior)</span></label><input id="fpe-venc-dia" type="number" step="1" min="1" max="31" value="${p?.venc_dia ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
-        <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} style="width:auto" /> 🚫 Crédito bloqueado</label></div>
+        <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} ${_pessoaDesbloqueioTravado(p)?'disabled':''} style="width:auto" /> 🚫 Crédito bloqueado</label>${_pessoaAvisoBloqueio(p)}</div>
         <!-- TABELA DE PREÇO no cadastro (modelo TecnoX 17/08): o vínculo
              cliente→negociação é escolhido AQUI, não dentro da tabela. -->
         <div class="form-group"><label>💲 Tabela de preço (negociação)</label>
