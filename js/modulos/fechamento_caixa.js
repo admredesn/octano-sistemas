@@ -3237,16 +3237,32 @@ function _fcEhGente(p) {
             .test(String(p.nome || ''));
 }
 
+// FUNCIONÁRIOS DO POSTO = os do cadastro dele E os COMPARTILHADOS com ele (30/10/2026, Ronan: "a luiza nonaka esta como
+// funcionaria no seven, mas o nome dela não aparece para lançar falta ou sobra de caixa" — o cadastro dela é do Florestal,
+// compartilhado com AC, SEVEN e Tijuco; a lista só olhava empresa_id e ignorava o compartilhamento, que a tela de Pessoas
+// já considera). Mesma pessoa em dois cadastros (mesmo CPF): fica uma vez, a do próprio posto.
+async function _fcFuncionariosDoPosto() {
+  const eid = window._fcEmpresaId;
+  const r = await sb.from('oct_pessoas').select('id,nome,documento,empresa_id')
+    .or(`empresa_id.eq.${eid},compartilhado_com.cs.{${eid}}`).eq('ativo', true)
+    .contains('classificacoes', ['funcionario']).order('nome');
+  if (r.error) throw r.error;
+  const vistos = new Map();
+  (r.data || []).filter(_fcEhGente).forEach(p => {
+    const k = String(p.documento || '').replace(/\D/g, '') || ('nome:' + String(p.nome || '').trim().toUpperCase());
+    const ja = vistos.get(k);
+    if (!ja || (ja.empresa_id !== eid && p.empresa_id === eid)) vistos.set(k, p);
+  });
+  return [...vistos.values()].sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR'));
+}
+
 // lança a falta (vale: pessoa deve) ou sobra (haver) para o responsável escolhido
 async function fcDifResponsavel(dif) {
   const cache = window._fcCache || {};
   const t = (cache.turnos || []).find(x => x.id === window._fcTurnoAtual) || {};
   let pessoas = [];
   try {
-    const r = await sb.from('oct_pessoas').select('id,nome,documento')
-      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
-      .contains('classificacoes', ['funcionario']).order('nome');
-    pessoas = (r.data || []).filter(_fcEhGente);
+    pessoas = await _fcFuncionariosDoPosto();   // do posto + compartilhados (30/10/2026)
   } catch (e) {}
   if (!pessoas.length) { alert('Nenhum funcionário ativo no cadastro de Pessoas.'); return; }
   fcModal('👷 Lançar diferença para o responsável', `
@@ -4408,10 +4424,7 @@ async function _fcModalResponsavel(turnoId, dif) {
     // CLASSIFICACOES, nao `tipo`: o frentista costuma ser tipo='cliente'
     // (compra fiado aqui) com 'funcionario' na classificacao. Mesmo criterio de
     // fcDifResponsavel.
-    const r = await sb.from('oct_pessoas').select('id,nome,documento')
-      .eq('empresa_id', window._fcEmpresaId).eq('ativo', true)
-      .contains('classificacoes', ['funcionario']).order('nome');
-    pessoas = (r.data || []).filter(_fcEhGente);
+    pessoas = await _fcFuncionariosDoPosto();   // do posto + compartilhados (30/10/2026)
   } catch (e) { /* segue sem cadastro: dá para registrar o nome mesmo assim */ }
   window._fcRespPessoas = pessoas;
 
