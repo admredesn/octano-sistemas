@@ -799,6 +799,7 @@ async function processarXmlNfe(xml,nomeArquivo,manifestadaId){
     const achado=r.produto;
     it.produtoExistente=achado?{id:achado.id,nome:achado.nome,codigo:achado.codigo,estoque:achado.estoque,via:r.via}:null;
   }
+  nfeXmlDados.produtosEmpresa=lista;   // para "vincular a outro produto" na tela (nfeEscolherProduto)
   // a nota e' de OUTRA empresa? Os produtos acima sao procurados no cadastro da empresa ativa.
   const _cEmp=String((typeof _empresa!=='undefined'&&_empresa&&_empresa.cnpj)||'').replace(/\D/g,'');
   const _cDest=String(d.destCnpj||'').replace(/\D/g,'');
@@ -986,6 +987,9 @@ function renderPreviewNfe(){
                   ${it.produtoExistente
                     ? `<div style="font-size:0.72rem;color:#4caf50;margin-bottom:3px">✓ Já cadastrado:<br><strong>${it.produtoExistente.nome}</strong>${it.produtoExistente.via?`<br><span style="font-size:0.66rem;color:#888">encontrado pelo ${it.produtoExistente.via}</span>`:''}</div>`
                     : `<input id="prod-nome-${i}" type="text" value="${it.descricao}" style="width:130px;padding:4px 6px;border-radius:4px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.78rem" />`}
+                  <div id="prod-vinc-${i}" style="font-size:0.7rem;color:#4caf50;margin-top:3px"></div>
+                  <input list="nfe-prods-lista" id="prod-busca-${i}" placeholder="🔎 vincular a outro produto…" onchange="nfeEscolherProduto(${i},this.value)"
+                    style="width:180px;margin-top:3px;padding:3px 6px;border-radius:4px;border:1px dashed #2a5a3a;background:#0f1117;color:#9be29b;font-size:0.72rem" />
                 </td>
                 <td>
                   <input type="hidden" id="prod-existente-${i}" value="${it.produtoExistente?it.produtoExistente.id:''}" />
@@ -998,6 +1002,7 @@ function renderPreviewNfe(){
               </tr>`).join('')}
           </tbody>
         </table>
+        <datalist id="nfe-prods-lista">${nfeListaProdutosVincular(d)}</datalist>
       </div>
 
       ${d.itens.some(it=>it.precisaTanque)?`<div style="background:#0f1117;border:1px solid #f97316;border-radius:8px;padding:10px;margin-bottom:16px;font-size:0.82rem;color:#f97316">⚠️ Vincule cada combustível ao tanque correspondente.</div>`:''}
@@ -1009,6 +1014,35 @@ function renderPreviewNfe(){
       </div>
     </div>
   `;
+}
+
+// VINCULAR A QUALQUER PRODUTO JÁ CADASTRADO (30/10/2026, Ronan: "tem que ter a opção de associar a um produto que já
+// existe"). O casamento automático só acha pelo código do fornecedor ou pelo nome IGUAL; o mesmo óleo cadastrado com
+// outro nome ("MOBIL 5W40" × "MOBIL SUPER 3000 X3 5W40 24X1L", Florestal NF 29505) ficava "Cadastrar novo" e
+// duplicava o produto. A busca da linha lista os produtos ativos do posto; escolhido, a linha vira "Vincular ao existente".
+function nfeListaProdutosVincular(d){
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  d.prodsPorRotulo={};
+  return (d.produtosEmpresa||[]).slice().sort((a,b)=>String(a.nome||'').localeCompare(String(b.nome||''),'pt-BR')).map(p=>{
+    const rot=`${String(p.nome||'').trim()} · cód ${p.codigo||'—'} · estoque ${Number(p.estoque||0)}`;
+    d.prodsPorRotulo[rot]=p;
+    return `<option value="${esc(rot)}"></option>`;
+  }).join('');
+}
+
+function nfeEscolherProduto(i,rotulo){
+  const d=nfeXmlDados;
+  const p=d&&(d.prodsPorRotulo||{})[rotulo];
+  if(!p||!d.itens[i])return;                     // ainda digitando, ou texto que não é da lista
+  d.itens[i].produtoExistente={id:p.id,nome:p.nome,codigo:p.codigo,estoque:p.estoque,via:'escolha manual'};
+  document.getElementById(`prod-existente-${i}`).value=p.id;
+  const sel=document.getElementById(`prod-acao-${i}`);
+  if(sel){
+    if(![...sel.options].some(o=>o.value==='vincular'))sel.insertAdjacentHTML('afterbegin','<option value="vincular">Vincular ao existente</option>');
+    sel.value='vincular';
+  }
+  const st=document.getElementById(`prod-vinc-${i}`);
+  if(st)st.textContent=`✓ Vai vincular a: ${p.nome}${p.codigo?` (cód ${p.codigo})`:''}`;
 }
 
 function cancelarNfe(){nfeXmlDados=null;document.getElementById('nfe-preview').style.display='none';document.getElementById('nfe-importar').style.display='none';}
