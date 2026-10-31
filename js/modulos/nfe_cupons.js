@@ -233,7 +233,10 @@ function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods, ed) {
   const compl = [];
   if (nums.length === 1) compl.push("NOTA FISCAL REFERENTE A NFCE: " + nums[0]);
   else if (nums.length > 1) compl.push("NOTA FISCAL REFERENTE AOS CUPONS: " + nums.join(", "));
-  if (placas.length) compl.push((placas.length > 1 ? "Placas: " : "Placa: ") + placas.slice(0, 20).join(", ") + (placas.length > 20 ? "…" : ""));
+  // observações digitadas na tela (31/10: "preciso poder editar as obs da nota, incluir a placa"); sem o campo, a
+  // placa gravada nos cupons, como antes
+  if (typeof dest.obs === "string") { if (dest.obs.trim()) compl.push(dest.obs.trim()); }
+  else if (placas.length) compl.push((placas.length > 1 ? "Placas: " : "Placa: ") + placas.slice(0, 20).join(", ") + (placas.length > 20 ? "…" : ""));
   return {
     numero: 0, serie: cfg.serie, modelo: "55",
     natureza_op: "LANC DOC FISCAL REGISTRADO EM ECF", mod_frete: "9",
@@ -244,6 +247,22 @@ function _ncupMontarNota(vendas, dest, cfg, prodSet, emp, prods, ed) {
   };
 }
 function _ncupVNF(nota) { return +nota.itens.reduce((s, i) => s + Number(i.vProd || 0) - Number(i.vDesc || 0), 0).toFixed(2); }
+
+// texto inicial das observações: placa(s) e, num cupom só, o KM — o que o cupom gravou (venda ou ficha da nota a prazo)
+function _ncupObsPadrao(vendas) {
+  const placas = [], kms = [];
+  vendas.forEach(v => {
+    const pd = v.prazo_dados || {};
+    const pl = String(v.placa || pd.placa || "").trim().toUpperCase();
+    if (pl && !placas.includes(pl)) placas.push(pl);
+    const km = String(v.odometro || pd.km || pd.odometro || "").replace(/\D/g, "");
+    if (km && Number(km) > 0) kms.push(km);
+  });
+  const p = [];
+  if (placas.length) p.push((placas.length > 1 ? "Placas: " : "Placa: ") + placas.slice(0, 20).join(", "));
+  if (vendas.length === 1 && kms.length === 1) p.push("KM: " + kms[0]);
+  return p.join(" ");
+}
 
 // ---------- tela ----------
 async function moduloNfeCupons() {
@@ -336,7 +355,10 @@ async function moduloNfeCupons() {
           <div id="ncup-lista"><p style="color:#888;padding:16px">Informe o cliente e/ou o período e clique em Buscar.</p></div>
           <div class="ncup-rodape">
             <div id="ncup-resumo" style="color:#aaa;font-size:0.84rem">Nenhum cupom escolhido.</div>
-            <button id="ncup-gerar" class="ncup-btn ncup-emitir" onclick="ncupAbrirEmissao()" disabled>📄 Gerar NF-e</button>
+            <div style="display:flex;gap:8px">
+              <button class="ncup-btn" onclick="ncupNfesEmitidas()" title="NF-e geradas por esta tela: DANFE e cancelamento">📋 NF-e emitidas</button>
+              <button id="ncup-gerar" class="ncup-btn ncup-emitir" onclick="ncupAbrirEmissao()" disabled>📄 Gerar NF-e</button>
+            </div>
           </div>
         </div>
       </div>
@@ -760,6 +782,9 @@ async function ncupAbrirEmissao() {
       <div style="padding:16px">
         <div style="font-size:0.8rem;color:#aaa">NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO (teste)"}</b> · série ${_ncupEsc(st.cfg.serie)} · CFOP 5929 · sem pagamento (está nos cupons)</div>
         <div id="ncup-itens-prev" style="margin-top:10px;font-size:0.8rem;color:#ccc">Montando os itens…</div>
+        <div class="ncup-linha"><div style="flex:1"><label>Observações da nota — placa, KM, motorista… (saem nas informações complementares)</label>
+          <textarea id="ncup-obs" rows="2" maxlength="1500" placeholder="ex.: Placa: ABC1D23 KM: 70181"
+            style="width:100%;box-sizing:border-box;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem;font-family:inherit;resize:vertical"></textarea></div></div>
         <div class="ncup-linha" style="align-items:flex-end">
           ${inp("ncup-doc", "CPF/CNPJ do cliente *", { attr: 'inputmode="numeric" placeholder="só números"' })}
           <div style="flex:0 0 auto"><button class="ncup-btn" onclick="_ncupBuscarCliente()">🔍 Buscar</button></div>
@@ -785,8 +810,9 @@ async function ncupAbrirEmissao() {
     if (c && c.value === String(emp.c_mun || "")) c.value = "";
     if (cep && _ncupDig(cep.value) === _ncupDig(emp.cep)) cep.value = "";
   });
+  document.getElementById("ncup-obs").value = _ncupObsPadrao(sel);
   // mexeu nos dados depois da conferência: confere de novo antes de emitir
-  m.querySelectorAll("input").forEach(el => el.addEventListener("input", () => {
+  m.querySelectorAll("input, textarea").forEach(el => el.addEventListener("input", () => {
     if (!st.confirmar) return;
     st.confirmar = false;
     const b = document.getElementById("ncup-emitir");
@@ -1269,7 +1295,8 @@ async function _ncupCompletarEndereco() {
 function _ncupLerDest() {
   const g = id => String((document.getElementById(id) || {}).value || "").trim();
   return { doc: g("ncup-doc"), nome: g("ncup-nome"), ie: g("ncup-ie"), logradouro: g("ncup-lgr"), numero: g("ncup-nro"),
-           bairro: g("ncup-bairro"), cep: g("ncup-cep"), municipio: g("ncup-mun"), uf: g("ncup-uf"), c_mun: g("ncup-cmun") };
+           bairro: g("ncup-bairro"), cep: g("ncup-cep"), municipio: g("ncup-mun"), uf: g("ncup-uf"), c_mun: g("ncup-cmun"),
+           obs: document.getElementById("ncup-obs") ? g("ncup-obs") : undefined };
 }
 
 // ---------- emissão ----------
@@ -1324,6 +1351,8 @@ async function _ncupEmitir() {
     st.confirmar = true;
     _ncupMsg(`Conferir: NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO"}</b>, série ${_ncupEsc(cfg.serie)}, `
       + `R$ ${_ncupMoney(vNF)}, ${nota.itens.length} item(ns), ${sel.length} cupom(ns) (${nota.refs.length} referenciado(s)), para <b>${_ncupEsc(dest.nome)}</b> (${_ncupEsc(_ncupDocFmt(doc))}).${outroDoc}`
+      + (nota.refs.length ? "" : `<br><b style="color:#f59e0b">⚠ Nenhum cupom de produção na referência${prod ? " (cupons de homologação não valem fiscalmente)" : ""}.</b>`)
+      + `<br><span style="color:#aaa">Observações: ${_ncupEsc(nota.inf_complementar || "—")} (+ tributos aproximados)</span>`
       + (mexido.length ? `<br><b style="color:#fbbf24">Alterado na tela: ${_ncupEsc(mexido.join(" · "))}.</b>` : ""));
     btn.textContent = "✔ Confirmar e emitir";
     return;
@@ -1416,6 +1445,131 @@ async function _ncupEmitir() {
   } catch (e) {
     _ncupMsg("Erro: " + _ncupEsc(e.message || e) + " — confira na lista de NF-e antes de tentar de novo.", "#f87171");
     reabrir();
+  }
+}
+
+// ---------- NF-e emitidas por esta tela: DANFE e CANCELAR (31/10, NF-e 805 do AC: "não aparece em lugar nenhum para
+// cancelar" — a lista da Nota fiscal de saída só mostra oct_nfe_saida, e esta tela grava em oct_nfce). Cancela como a
+// Nota fiscal de saída: certificado do posto + a senha salva neste navegador (tela Empresa). A SEFAZ só aceita até 24 h
+// depois da autorização. Cancelada, o gatilho do banco solta os cupons e eles voltam para a lista.
+async function ncupNfesEmitidas() {
+  const st = window._ncup;
+  _ncupFechar();
+  const m = document.createElement("div");
+  m.id = "ncup-modal"; m.className = "ncup-modal";
+  m.innerHTML = `
+    <div class="ncup-caixa" style="max-width:1000px">
+      <div class="ns-titulo"><h3>NF-e emitidas · ${_ncupEsc(st.emp.nome || "")} · últimos 60 dias</h3><button class="ns-fechar" onclick="_ncupFechar()">✕</button></div>
+      <div style="padding:16px"><div id="ncup-nfes" style="font-size:0.82rem;color:#aaa">Carregando…</div>
+        <div id="ncup-cancel"></div><div id="ncup-msg" style="margin-top:10px;font-size:0.84rem;min-height:1.2em"></div></div>
+    </div>`;
+  document.body.appendChild(m);
+  try {
+    const desde = new Date(Date.now() - 60 * 86400000).toISOString();
+    const { data, error } = await sb.from("oct_nfce").select("id,numero,serie,ambiente,status,valor_total,cpf_consumidor,chave_nfe,protocolo,data_emissao,motivo_rejeicao")
+      .eq("empresa_id", st.eid).eq("modelo", "55").gte("data_emissao", desde).order("data_emissao", { ascending: false }).limit(300);
+    if (error) throw error;
+    st.nfes = data || [];
+    const docs = Array.from(new Set(st.nfes.map(n => _ncupDig(n.cpf_consumidor)).filter(Boolean)));
+    const nomes = {};
+    if (docs.length) {
+      const { data: ps } = await sb.from("oct_pessoas").select("nome,documento").eq("empresa_id", st.eid).in("documento", docs.concat(docs.map(_ncupDocFmt)));
+      (ps || []).forEach(p => { nomes[_ncupDig(p.documento)] = p.nome; });
+    }
+    const el = document.getElementById("ncup-nfes");
+    if (!st.nfes.length) { el.innerHTML = "Nenhuma NF-e nos últimos 60 dias."; return; }
+    const agora = Date.now();
+    el.innerHTML = `<div style="max-height:52vh;overflow:auto"><table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:#888;text-align:left;font-size:0.74rem"><th style="padding:6px">Nº / série</th><th>Emissão</th><th>Ambiente</th><th>Cliente</th><th style="text-align:right">Valor</th><th>Situação</th><th></th></tr></thead>
+      <tbody>${st.nfes.map(n => {
+        const d = _ncupDig(n.cpf_consumidor), canc = String(n.status) === "cancelada";
+        const horas = (agora - new Date(n.data_emissao).getTime()) / 3600000;
+        const podeCanc = String(n.status) === "autorizada" && n.chave_nfe && n.protocolo;
+        return `<tr style="border-top:1px solid #23263a">
+          <td style="padding:6px;color:#e0e0e0">${_ncupEsc(n.numero)} / ${_ncupEsc(n.serie)}</td>
+          <td>${_ncupEsc(new Date(n.data_emissao).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }))}</td>
+          <td style="color:${n.ambiente === "producao" ? "#4ade80" : "#f59e0b"}">${n.ambiente === "producao" ? "produção" : "homologação"}</td>
+          <td>${_ncupEsc(nomes[d] || "")} <span style="color:#777">${_ncupEsc(_ncupDocFmt(d))}</span></td>
+          <td style="text-align:right;color:#e0e0e0">R$ ${_ncupMoney(n.valor_total)}</td>
+          <td style="color:${canc ? "#f87171" : "#4ade80"}" title="${_ncupEsc(canc ? (n.motivo_rejeicao || "") : "")}">${canc ? "cancelada" : _ncupEsc(n.status)}</td>
+          <td style="white-space:nowrap;text-align:right">
+            <button class="ncup-btn" style="padding:4px 9px;font-size:0.76rem" onclick="_ncupDanfeDe('${n.id}')">📄 DANFE</button>
+            ${podeCanc ? `<button class="ncup-btn" style="padding:4px 9px;font-size:0.76rem;background:#3a1414;border-color:#7f1d1d;color:#fca5a5" onclick="_ncupCancelarForm('${n.id}')"
+              title="${horas > 24 ? "Passou de 24 h da autorização: a SEFAZ costuma recusar" : "Cancelar na SEFAZ"}">✕ Cancelar${horas > 24 ? " (+24 h)" : ""}</button>` : ""}
+          </td></tr>`;
+      }).join("")}</tbody></table></div>`;
+  } catch (e) {
+    document.getElementById("ncup-nfes").innerHTML = `<span style="color:#f87171">Não consegui ler as NF-e: ${_ncupEsc(e.message || e)}</span>`;
+  }
+}
+
+async function _ncupDanfeDe(id) {
+  _ncupMsg("Buscando o XML…");
+  const { data, error } = await sb.from("oct_nfce").select("xml_autorizado").eq("id", id).single();
+  if (error || !data || !data.xml_autorizado) { _ncupMsg("XML desta NF-e indisponível.", "#f87171"); return; }
+  window._ncup.ultimoXml = data.xml_autorizado;
+  _ncupDanfe();
+}
+
+function _ncupCancelarForm(id) {
+  if (!podeOuAvisa("nfe_saida.cancelar")) return;
+  const n = (window._ncup.nfes || []).find(x => x.id === id);
+  if (!n) return;
+  const el = document.getElementById("ncup-cancel");
+  el.innerHTML = `
+    <div style="margin-top:12px;padding:12px;border:1px solid #7f1d1d;border-radius:8px;background:#1a1010">
+      <div style="color:#fca5a5;font-weight:600;margin-bottom:6px">Cancelar a NF-e nº ${_ncupEsc(n.numero)} (${n.ambiente === "producao" ? "PRODUÇÃO" : "homologação"}, R$ ${_ncupMoney(n.valor_total)})</div>
+      <label style="font-size:0.74rem;color:#888">Justificativa (15 a 255 caracteres)</label>
+      <input id="ncup-just" maxlength="255" style="width:100%;box-sizing:border-box;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem"
+        placeholder="ex.: NF-e emitida com dados incorretos">
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="ncup-btn" style="flex:1;background:#1a1d2e;border-color:#2a2d3e;color:#aaa" onclick="document.getElementById('ncup-cancel').innerHTML=''">Desistir</button>
+        <button id="ncup-cancel-btn" class="ncup-btn" style="flex:2;background:#7f1d1d;border-color:#991b1b;color:#fff" onclick="_ncupCancelar('${n.id}')">✕ Cancelar na SEFAZ</button>
+      </div>
+    </div>`;
+  document.getElementById("ncup-just").focus();
+}
+
+async function _ncupCancelar(id) {
+  if (!podeOuAvisa("nfe_saida.cancelar")) return;
+  const st = window._ncup, n = (st.nfes || []).find(x => x.id === id);
+  if (!n) return;
+  const just = String((document.getElementById("ncup-just") || {}).value || "").trim();
+  if (just.length < 15) { _ncupMsg("A justificativa precisa de no mínimo 15 caracteres.", "#f87171"); return; }
+  const senha = (typeof getCertSenha === "function") ? getCertSenha() : null;
+  if (!st.emp.cert_path) { _ncupMsg("Certificado do posto não configurado (tela Empresa).", "#f87171"); return; }
+  if (!senha) { _ncupMsg("A senha do certificado não está salva neste navegador (tela Empresa).", "#f87171"); return; }
+  if (!confirm(`Cancelar a NF-e nº ${n.numero} em ${n.ambiente === "producao" ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}?\n\nEsta ação é IRREVERSÍVEL e fica registrada na SEFAZ.`)) return;
+  const btn = document.getElementById("ncup-cancel-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = "0.6"; }
+  _ncupMsg("📡 Enviando o cancelamento à SEFAZ…", "#aaa");
+  try {
+    const { data: cb, error: ec } = await sb.storage.from("octano-certs").download(st.emp.cert_path);
+    if (ec || !cb) throw new Error("não baixei o certificado do posto");
+    const bytes = new Uint8Array(await cb.arrayBuffer());
+    let bin = ""; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    const resp = await fetch(`${_ncupSefaz()}/cancelar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chave: n.chave_nfe, protocolo: n.protocolo, justificativa: just, cnpj: _ncupDig(st.emp.cnpj),
+                             cert_base64: btoa(bin), cert_senha: senha, ambiente: n.ambiente }),
+    });
+    const r = await resp.json().catch(() => ({ erro: "resposta inválida do servidor (HTTP " + resp.status + ")" }));
+    if (!r.ok) {
+      _ncupMsg(`❌ SEFAZ não cancelou${r.cstat_evento || r.cstat_lote ? " (" + _ncupEsc(r.cstat_evento || r.cstat_lote) + ")" : ""}: ${_ncupEsc(r.xmotivo || r.erro || "sem detalhe")}`, "#f87171");
+      if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
+      return;
+    }
+    const { error: eu } = await sb.from("oct_nfce").update({ status: "cancelada", atualizado_em: new Date().toISOString(),
+      motivo_rejeicao: `${just} (cancelamento prot. ${r.protocolo_cancelamento || "?"}, ${new Date().toLocaleDateString("pt-BR")})` }).eq("id", n.id);
+    // os cupons desta NF-e voltam para a lista (o banco solta o vínculo ao marcar cancelada)
+    Object.keys(st.links || {}).forEach(k => { st.links[k] = st.links[k].filter(l => l.nfe_chave !== n.chave_nfe); });
+    if (st.vendas) ncupFiltrar();
+    await ncupNfesEmitidas();
+    _ncupMsg(`✓ NF-e nº ${_ncupEsc(n.numero)} CANCELADA na SEFAZ (protocolo ${_ncupEsc(r.protocolo_cancelamento || "—")}).`
+      + (eu ? ` ⚠ Não marquei no sistema (${_ncupEsc(eu.message || eu)}) — avise o suporte.` : " Os cupons dela voltaram para a lista."), eu ? "#f59e0b" : "#4ade80");
+  } catch (e) {
+    _ncupMsg("Erro ao cancelar: " + _ncupEsc(e.message || e) + " — confira na lista antes de tentar de novo.", "#f87171");
+    if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
   }
 }
 
