@@ -76,6 +76,8 @@
     { t: 'Prêmio do app (pontos dos clientes)', onde: '📣 Marketing', m: 'marketing', k: 'premio app pontos cliente trocar' },
     { t: 'Fretes — CT-e recebidos e custo do frete por litro', onde: 'Manifestação › 🚚 Fretes (CT-e)', m: 'manifestacao', acao: 'cteAbrir',
       k: 'frete fretes cte ct-e conhecimento de transporte transportadora transportadoras custo por litro carga sped d100 conferencia' },
+    { t: 'Haver por cliente — crédito adiantado e vales', onde: 'Relatórios › 💳 Haver por cliente', m: 'relatorios', acao: 'relatorioHaver',
+      k: 'haver credito adiantado credito do cliente saldo vale troco pendente conta corrente extrato' },
   ];
 
   function norm(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
