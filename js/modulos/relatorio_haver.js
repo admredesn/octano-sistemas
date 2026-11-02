@@ -10,9 +10,8 @@
 //    − consumo (cupom pago com o crédito) / vale    = abate / o cliente deve ao posto
 //  "Posição em" soma só o que foi lançado até o fim daquele dia (fechamento do mês).
 //
-//  À parte: oct_pessoas.credito_adiantamento é o saldo que veio do cadastro do
-//  TecnoX na migração. NÃO entra no saldo (o PDV não o enxerga); aparece só para
-//  alguém decidir se lança no PDV.
+//  NÃO usa oct_pessoas.credito_adiantamento: é o val_credito_adiantamento do TecnoX
+//  copiado na importação — resíduo, não haver (Ronan, 02/11: "ufv não tem credito haver").
 //
 //  Registra-se sozinho na Central de Relatórios (RELATORIOS_REG, relatorios.js).
 // ============================================================
@@ -99,9 +98,6 @@ async function relatorioHaverCarregar() {
       const { data } = await sb.from('oct_pessoas').select('id,nome,documento,tecnox_cod').in('id', ids.slice(i, i + 100));
       (data || []).forEach(p => { pessoas[p.id] = p; });
     }
-    // saldo que veio do TecnoX no cadastro (não está em oct_vales)
-    const { data: legado } = await sb.from('oct_pessoas').select('id,nome,documento,tecnox_cod,credito_adiantamento')
-      .eq('empresa_id', eid).neq('credito_adiantamento', 0).order('nome');
 
     const porPessoa = {};
     vales.forEach(v => {
@@ -118,7 +114,7 @@ async function relatorioHaverCarregar() {
       g.linhas.push(Object.assign({}, v, { _saldo: Math.round(g.saldo * 100) / 100 }));
     });
     Object.values(porPessoa).forEach(g => { g.saldo = Math.round(g.saldo * 100) / 100; });
-    window._rhv = { lista: Object.values(porPessoa), legado: (legado || []).filter(p => Math.abs(Number(p.credito_adiantamento || 0)) >= 0.005), ate };
+    window._rhv = { lista: Object.values(porPessoa), ate };
     relatorioHaverDesenhar();
   } catch (e) {
     box.innerHTML = `<p style="color:#f87171">Não consegui montar o relatório: ${_rhvEsc(e.message || e)}</p>`;
@@ -160,16 +156,6 @@ function relatorioHaverDesenhar() {
       <td style="${td};text-align:center;color:#9ca3af">${g.linhas.length}</td>
     </tr>`).join('');
 
-  const legado = d.legado.length ? `
-    <div style="margin-top:22px;border:1px dashed #3a3f55;border-radius:8px;padding:12px 14px">
-      <div style="color:#fbbf24;font-weight:600;font-size:.88rem">Saldo que veio do cadastro do TecnoX (não está no saldo acima)</div>
-      <p style="color:#8a8f98;font-size:.76rem;margin:4px 0 8px">Valor de "crédito adiantado" que o cliente tinha no TecnoX quando o cadastro foi importado. O PDV não usa esse número: se ainda valer, lance no PDV em F7 › Vale / Haver.</p>
-      <table style="border-collapse:collapse;font-size:.8rem">
-        ${d.legado.map(p => `<tr><td style="padding:3px 14px 3px 0;color:#cbd5e1">${p.tecnox_cod ? _rhvEsc(p.tecnox_cod) + ' · ' : ''}${_rhvEsc(p.nome)}</td>
-          <td style="padding:3px 0;text-align:right;color:${_rhvCor(Number(p.credito_adiantamento))};font-variant-numeric:tabular-nums">${_relBRL(p.credito_adiantamento)}</td></tr>`).join('')}
-      </table>
-    </div>` : '';
-
   box.innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
       ${card('O posto deve aos clientes', _relBRL(deve), '#4ade80', 'Soma dos saldos positivos: crédito que os clientes ainda vão consumir')}
@@ -189,8 +175,7 @@ function relatorioHaverDesenhar() {
         <tbody>${corpo}</tbody>
       </table>
     </div>` : `<p style="color:#888">${todos.length ? 'Nenhum cliente com esse filtro.' : 'Nenhum lançamento de vale/haver neste posto até ' + _rhvDataBR(d.ate) + '.'}</p>`}
-    <p style="color:#6b7280;font-size:.75rem;margin-top:8px">Saldo <span style="color:#4ade80">verde</span> = o posto deve ao cliente (crédito a consumir). <span style="color:#f87171">Vermelho</span> = o cliente deve ao posto. Lançar crédito ou acertar: PDV › F7 › Vale / Haver.</p>
-    ${legado}`;
+    <p style="color:#6b7280;font-size:.75rem;margin-top:8px">Saldo <span style="color:#4ade80">verde</span> = o posto deve ao cliente (crédito a consumir). <span style="color:#f87171">Vermelho</span> = o cliente deve ao posto. Lançar crédito ou acertar: PDV › F7 › Vale / Haver.</p>`;
 }
 
 // abre/fecha o extrato do cliente logo abaixo da linha
