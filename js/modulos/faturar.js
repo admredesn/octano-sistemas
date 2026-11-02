@@ -3207,6 +3207,7 @@ function _fatVisiveisF() {
     if (!entre(_fatIsoLocal(f.emissao || f.criado_em), F.de, F.ate)) return false;
     if (!entre(_fatIsoLocal(f.vencimento), F.vde, F.vate)) return false;
     if (liq && !entre(_fatIsoLocal(f.liquidado_em), F.lde, F.late)) return false;
+    if (liq && window._fatEsconderConf && f.conferido) return false;     // conferência: só o que falta
     return true;
   });
 }
@@ -3238,6 +3239,13 @@ function _fatAplicarBuscaF() {
   const bt = document.getElementById("fatf-btn-todas");
   if (bt) bt.textContent = `☑ Marcar todas (${vis.length})`;
   _fatSelFSync();
+  if (window._fatAba === "liquidadas") {
+    // a conta da conferência vale para o filtro da tela, com ou sem as conferidas escondidas
+    const esc = window._fatEsconderConf; window._fatEsconderConf = false;
+    const vF = _fatVisiveisF(), vT = _fatDiretosVisiveis();
+    window._fatEsconderConf = esc;
+    _fatConfSync(vF, vT);
+  }
 }
 
 // rodapé da lista de faturas (como no TecnoX): seleção à esquerda, ações em lote à direita
@@ -3246,6 +3254,9 @@ function _fatRodapeF(faturas, status) {
     `<button id="${id}" disabled onclick="${fn}" style="background:${cor};border:none;border-radius:6px;
       padding:7px 13px;color:#fff;font-size:12px;font-weight:600;cursor:pointer"
       class="fat-lote">${rot}</button>`;
+  // Liquidadas: a caixinha é de CONFERÊNCIA (gravada), não de seleção — o rodapé conta o que já foi conferido (02/11/2026)
+  if (status === "liquidada") return `<div class="fat-rodape">
+    <span id="fatf-confinfo" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;font-size:12px;color:#9aa"></span></div>`;
   return `<div class="fat-rodape">
     <span style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">
       <button class="fat-btn mini" id="fatf-btn-todas" onclick="fatSelTodasF(true)">☑ Marcar todas (${faturas.length})</button>
@@ -3732,7 +3743,7 @@ async function _fatBuscarFaturas(status) {
 async function _fatTitulosDiretos(eid) {
   try {
     const r = await _fatTodas(() => sb.from("oct_pdv_notas_prazo")
-      .select("id,cliente_id,cliente_nome,numero_nfe,valor,valor_original,registrado_em,criado_em,pago_em,forma_nome,status,observacao,vencimento")
+      .select("id,cliente_id,cliente_nome,numero_nfe,valor,valor_original,registrado_em,criado_em,pago_em,forma_nome,status,observacao,vencimento,conferido,conferido_por,conferido_em")
       .eq("empresa_id", eid).eq("status", "pago").is("fatura_id", null)
       .order("pago_em", { ascending: false }).order("id"));
     if (r.error) return [];
@@ -3766,6 +3777,7 @@ function _fatDiretosVisiveis() {
     if (F.cli && t.cliente_id !== F.cli) return false;
     if (!entre(_fatIsoLocal(t.registrado_em || t.criado_em), F.de, F.ate)) return false;
     if (!entre(t._pagoDia ? String(t._pagoDia).slice(0, 10) : null, F.lde, F.late)) return false;
+    if (window._fatEsconderConf && t.conferido) return false;
     return true;
   });
 }
@@ -3777,8 +3789,8 @@ function _fatDiretoLinha(t) {
   const quem = [...new Set((t._recs || []).map(b => b.autor).filter(Boolean))].join(", ");
   const formas = [...new Set((t._recs || []).map(b => b.forma).filter(Boolean))].join(" + ");
   const venc = t.vencimento ? String(t.vencimento).slice(0, 10) : "";
-  return `<tr data-tid="${t.id}" class="fat-dir">
-    <td class="fat-td"></td>
+  return `<tr data-tid="${t.id}" class="fat-dir${t.conferido ? " fat-conf-ok" : ""}">
+    <td class="fat-td" style="text-align:center">${_fatConfCel("t", t)}</td>
     <td class="fat-td"><span class="fat-dir-tag" title="Título recebido direto, sem fatura">título</span></td>
     <td class="fat-td">${_fatCodHtml(t.cliente_id)}${_fatEsc(t.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(t.registrado_em || t.criado_em)}</td>
@@ -3810,6 +3822,50 @@ const _FAT_ORD_DIR = {
   usuario:    t => [...new Set((t._recs || []).map(b => b.autor).filter(Boolean))].join(", "),
 };
 function fatDiretosTecnox() { window._fatDiretosTecnox = !window._fatDiretosTecnox; _fatAplicarBuscaF(); }
+
+// ---------- CONFERÊNCIA DAS LIQUIDADAS (02/11/2026) ----------
+// Ronan: "aqui tem que ter um checkbox, em todos para irmos marcando ao longo da conferência". Cada linha da aba
+// Faturas Liquidadas (fatura ou título recebido direto) ganha a caixinha de CONFERIDO, gravada no banco
+// (oct_faturas / oct_pdv_notas_prazo: conferido, conferido_por, conferido_em) — vale para todos e no dia seguinte.
+// O rodapé conta conferidas × falta conferir; "Esconder conferidas" deixa na tela só o que falta.
+function _fatConfCel(tipo, x) {
+  const tit = x.conferido
+    ? `Conferido${x.conferido_por ? " por " + x.conferido_por : ""}${x.conferido_em ? " em " + new Date(x.conferido_em).toLocaleString("pt-BR") : ""} — clique para desmarcar`
+    : "Marcar como conferido";
+  return `<input type="checkbox" id="fatc-${tipo}-${x.id}" ${x.conferido ? "checked" : ""} title="${_fatEsc(tit)}"
+    onchange="fatConferir('${tipo}','${x.id}',this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:#16a34a">`;
+}
+async function fatConferir(tipo, id, marcado) {
+  const cx = document.getElementById(`fatc-${tipo}-${id}`);
+  if (!podeOuAvisa("faturar.receber_fatura")) { if (cx) cx.checked = !marcado; return; }
+  let quem = null;
+  try { const s = await getSession(); quem = (s && s.user && (s.user.email || s.user.id)) || null; } catch (e) { /* segue sem autor */ }
+  const patch = { conferido: !!marcado, conferido_por: marcado ? quem : null, conferido_em: marcado ? new Date().toISOString() : null };
+  const { error } = await sb.from(tipo === "f" ? "oct_faturas" : "oct_pdv_notas_prazo").update(patch).eq("id", id);
+  if (error) {
+    if (cx) cx.checked = !marcado;
+    alert("Não salvou a conferência: " + error.message);
+    return;
+  }
+  const lista = tipo === "f" ? (window._fatFaturas || []) : (window._fatDiretos || []);
+  const x = lista.find(r => r.id === id);
+  if (x) Object.assign(x, patch);
+  const tr = cx && cx.closest("tr");
+  if (tr) tr.classList.toggle("fat-conf-ok", !!marcado);
+  if (cx && x) cx.outerHTML = _fatConfCel(tipo, x);
+  _fatAplicarBuscaF();
+}
+function fatEsconderConferidas() { window._fatEsconderConf = !window._fatEsconderConf; _fatAplicarBuscaF(); }
+// rodapé da aba Liquidadas: quanto já foi conferido do que está na tela
+function _fatConfSync(visF, visT) {
+  const el = document.getElementById("fatf-confinfo");
+  if (!el) return;
+  const linhas = visF.map(f => ({ ok: !!f.conferido, v: _fatLiquido(f) })).concat(visT.map(t => ({ ok: !!t.conferido, v: Number(t._nota || 0) })));
+  const ok = linhas.filter(l => l.ok), falta = linhas.filter(l => !l.ok);
+  const soma = a => a.reduce((s, l) => s + l.v, 0);
+  el.innerHTML = `☑ Conferidas: <b style="color:#4ade80">${ok.length}</b> (R$ ${_fatMoney(soma(ok))}) · falta conferir: <b style="color:#f59e0b">${falta.length}</b> (R$ ${_fatMoney(soma(falta))})`
+    + ` <button class="fat-abtn" style="background:#334155;margin-left:6px" onclick="fatEsconderConferidas()">${window._fatEsconderConf ? "Mostrar as conferidas" : "Esconder as conferidas"}</button>`;
+}
 // mostra/esconde os títulos pelos filtros; devolve os visíveis (entram no resumo de cima)
 function _fatDiretosAplicar() {
   if (window._fatAba !== "liquidadas") return [];
@@ -4078,9 +4134,9 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   const bolPorFat = dados.bolPorFat || {}, rec = dados.recebidos || {}, onde = dados.ondePor || {};
   window._fatBolPorFat = bolPorFat;
   if (status === "liquidada") window._fatDiretos = dados.diretos || [];   // antes das linhas: entram na mesma tabela
-  const linhaF = fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}">
-    <td class="fat-td" style="text-align:center"><input type="checkbox" id="fatf-chk-${fatr.id}"
-      ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')"></td>
+  const linhaF = fatr => `<tr data-fid="${fatr.id}" data-busca="${_fatEsc(_fatNorm((fatr.cliente_nome || "") + " " + (fatr.numero ?? "")))}"${status === "liquidada" && fatr.conferido ? ' class="fat-conf-ok"' : ""}>
+    <td class="fat-td" style="text-align:center">${status === "liquidada" ? _fatConfCel("f", fatr) : `<input type="checkbox" id="fatf-chk-${fatr.id}"
+      ${_fatSelF().has(fatr.id) ? "checked" : ""} onchange="fatToggleF('${fatr.id}')">`}</td>
     <td class="fat-td">${fatr.numero ?? "—"}${fatr.parcela_de ? ` <span class="fat-parc" title="Parcela ${fatr.parcela_num} de ${fatr.parcela_total} da fatura ${fatr._origNum ?? ""}">${fatr._origNum ?? "?"}/${fatr.parcela_num}</span>` : ""}${fatr.auto_gerada ? ` <span title="Gerada pelo fechamento automático" style="font-size:0.85em">🤖</span>` : ""}${fatr.auto_erro ? ` <span title="${_fatEsc(fatr.auto_erro)}" style="color:#f0b45c;cursor:help">⚠</span>` : ""}</td>
     <td class="fat-td">${_fatCodHtml(fatr.cliente_id)}${_fatEsc(fatr.cliente_nome) || "—"}</td>
     <td class="fat-td">${_fatData(fatr.emissao)}</td>
@@ -4123,7 +4179,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   }
   corpo.innerHTML = `
     <div class="fat-gridwrap"><table class="fat-grid">
-      <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)"></th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? '<th title="Conta onde caiu (Sicoob, PagBank, Banco do Brasil…) ou o caixa do PDV">Recebido em</th>' : ""}<th>Docs</th><th>Ações</th></tr></thead>
+      <thead><tr><th style="width:34px;text-align:center">${status === "liquidada" ? '<span title="Conferido: marque cada linha ao conferir (fica gravado, com quem e quando)" style="font-size:11px;cursor:help">Conf.</span>' : '<input type="checkbox" id="fatf-chk-todas" title="Marcar/desmarcar todas as faturas da lista" onchange="fatSelTodasF(this.checked)">'}</th>${_fatTh("Nº","numero",window._fatOrdF,"fatOrdenarF")}${_fatTh("Cliente","cliente",window._fatOrdF,"fatOrdenarF")}${_fatTh("Emissão","emissao",window._fatOrdF,"fatOrdenarF")}${_fatTh("Vencimento","vencimento",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? _fatTh("Liquidação","liquidacao",window._fatOrdF,"fatOrdenarF") : ""}${_fatTh("Atraso","atraso",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh("Valor","valor",window._fatOrdF,"fatOrdenarF",'class="fat-r"')}<th>Recebido/Saldo</th><th>Status</th>${_fatTh("Nº NF","nf",window._fatOrdF,"fatOrdenarF",'style="text-align:center"')}${_fatTh(status === "liquidada" ? "Recebido por" : "Usuário","usuario",window._fatOrdF,"fatOrdenarF")}${status === "liquidada" ? '<th title="Conta onde caiu (Sicoob, PagBank, Banco do Brasil…) ou o caixa do PDV">Recebido em</th>' : ""}<th>Docs</th><th>Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="${status === "liquidada" ? 15 : 13}" style="padding:22px;text-align:center;color:#666">Nenhuma fatura ${status === "aberta" ? "em aberto" : "liquidada"}.</td></tr>`}</tbody>
     </table></div>
     ${_fatResumoBoletos(faturas, bolPorFat, status)}
@@ -4970,6 +5026,7 @@ function _fatEstilo() {
   .fat-c-off{opacity:.35}
   .fat-sa{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;background:#2a2010;color:#f0c98a;font-size:10px;border:1px solid #63501f;cursor:help;white-space:nowrap}
   .fat-dir-tag{display:inline-block;padding:0 7px;border-radius:9px;background:#2a1a0c;color:#fdba74;font-size:10px;border:1px solid #7c2d12;cursor:help}
+  tr.fat-conf-ok > td{background:rgba(22,163,74,.08)}
   .fat-parc{display:inline-block;margin-left:4px;padding:0 6px;border-radius:9px;background:#2b2140;color:#c4b5fd;font-size:10px;border:1px solid #4c3b78;cursor:help}
   .fat-devs{display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #2a2d3e;background:#11141d;min-width:0}
   .fat-devs-bt{background:transparent;border:none;color:#9aa;font-size:11.5px;cursor:pointer;white-space:nowrap;padding:3px 0}
