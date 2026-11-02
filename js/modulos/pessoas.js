@@ -836,6 +836,15 @@ async function salvarPessoa(id, empresaId) {
     observacoes: document.getElementById('fpe-obs').value.trim() || null,
   };
 
+  // Cadastro de OUTRO posto, compartilhado com este (02/11/2026): o dono e o compartilhamento não mudam daqui.
+  // Antes o salvar mandava empresa_id = posto aberto e compartilhado_com = [] (aqui não há as caixas): a Luiza,
+  // do Florestal, salva pelo SEVEN, virou do SEVEN e sumiu do Florestal, do AC e do Tijuco.
+  const orig = window._pessoaOrig || {};
+  if (id && orig.id === id && orig.empresa_id && orig.empresa_id !== empresaId) {
+    delete dados.empresa_id;
+    delete dados.compartilhado_com;
+  }
+
   // Situação no próprio cadastro (23/10/2026): antes só o botão da coluna Status ativava — quem reativava pelo
   // cadastro salvava e a pessoa continuava inativa (Luiza, Florestal). Sem a permissão o campo vem travado e não vai.
   const cxAtivo = document.getElementById('fpe-ativo');
@@ -907,7 +916,7 @@ async function _pessoaMontarCompart(dono, ehDono) {
   const nomeDono = (lista.find(e => e.id === dono) || {}).nome || 'outro posto';
   if (!ehDono) {
     box.innerHTML = `<div style="background:#101826;border:1px solid #2a4a6a;border-radius:8px;padding:10px;color:#93c5fd;font-size:0.82rem">
-      Cadastro do posto <b>${pessoaEsc(nomeDono)}</b>, compartilhado com este. Alterações só no posto de origem.</div>`;
+      Cadastro do posto <b>${pessoaEsc(nomeDono)}</b>, compartilhado com este. O posto dono e o compartilhamento só mudam no posto de origem.</div>`;
     return;
   }
   box.innerHTML = `<label>Compartilhar com outro posto do grupo</label>
