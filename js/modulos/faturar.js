@@ -2338,6 +2338,83 @@ async function fatFeriadosLocais(eid) {
   return window._fatFerLocais[eid];
 }
 
+// ---------- MULTA E JUROS POR ATRASO (02/11/2026) ----------
+// Ronan: "a partir desse mês vamos cobrar multa e juros para quem atrasar os pagamentos, pode colocar no cadastro de
+// todos calculando multa e juros, como é praticado no mercado". Regra de mercado (a mesma que o banco aplica no boleto):
+//   multa = % do saldo, cobrada UMA vez; juros de mora = % ao mês, proporcional aos dias (mês de 30 dias), juros simples,
+//   do dia seguinte ao vencimento até o pagamento. Vencimento em sábado, domingo ou feriado: pago no dia útil seguinte
+//   não tem encargo (pago depois, conta do vencimento).
+// Taxas: cadastro do cliente (multa_atraso_pct / juros_atraso_mes_pct; vazio = padrão do posto) e Parâmetros › Cobrança
+// (cobranca_multa_pct / cobranca_juros_mes_pct). Só fatura que vence a partir de cobranca_encargos_desde ("a partir
+// desse mês" = 01/11/2026). A mesma conta está no gateway (pix_cobranca.js, boleto), no servidor (empresas_portal.encargos)
+// e no núcleo (cobrança por mensagem): mudar todos juntos.
+window._fatTaxasPostoCache = window._fatTaxasPostoCache || {};
+function _fatPct(v) {
+  if (v == null || String(v).trim() === "") return null;
+  const n = Number(String(v).replace(/"/g, "").replace(",", ".").trim());
+  return isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
+}
+async function fatTaxasPosto(eid) {
+  const c = window._fatTaxasPostoCache[eid];
+  if (c && Date.now() - c.t < 60000) return c.v;
+  const v = { multa: 0, juros: 0, desde: "", extras: "" };
+  try {
+    const { data } = await sb.from("oct_parametros").select("chave,valor").eq("empresa_id", eid)
+      .in("chave", ["cobranca_multa_pct", "cobranca_juros_mes_pct", "cobranca_encargos_desde", "feriados_locais"]);
+    (data || []).forEach(r => {
+      if (r.chave === "cobranca_multa_pct") v.multa = _fatPct(r.valor) || 0;
+      else if (r.chave === "cobranca_juros_mes_pct") v.juros = _fatPct(r.valor) || 0;
+      else if (r.chave === "cobranca_encargos_desde") v.desde = String(r.valor || "").replace(/"/g, "").slice(0, 10);
+      else if (r.chave === "feriados_locais") v.extras = String(r.valor || "");
+    });
+  } catch (e) { /* sem parâmetro = sem encargo */ }
+  window._fatTaxasPostoCache[eid] = { t: Date.now(), v };
+  return v;
+}
+// taxas que valem para o cliente: o cadastro manda; vazio = o padrão do posto
+function fatTaxasCliente(posto, pessoa) {
+  const m = _fatPct(pessoa && pessoa.multa_atraso_pct), j = _fatPct(pessoa && pessoa.juros_atraso_mes_pct);
+  return { multa: m != null ? m : posto.multa, juros: j != null ? j : posto.juros, desde: posto.desde, extras: posto.extras };
+}
+async function fatTaxasDaFatura(f) {
+  const posto = await fatTaxasPosto(f.empresa_id || window._fatEid);
+  let pessoa = null;
+  if (f.cliente_id) {
+    try {
+      const { data } = await sb.from("oct_pessoas").select("multa_atraso_pct,juros_atraso_mes_pct").eq("id", f.cliente_id).maybeSingle();
+      pessoa = data;
+    } catch (e) { /* colunas novas ainda não criadas: padrão do posto */ }
+  }
+  return fatTaxasCliente(posto, pessoa);
+}
+// encargos de um saldo vencido em vencIso, pago em pagIso -> {dias, multa, juros, total}
+function fatEncargos(saldo, vencIso, pagIso, tx) {
+  const zero = { dias: 0, multa: 0, juros: 0, total: 0 };
+  const venc = String(vencIso || "").slice(0, 10), pag = String(pagIso || "").slice(0, 10);
+  if (!tx || !(saldo > 0.004) || venc.length !== 10 || pag.length !== 10 || pag <= venc) return zero;
+  if (!(tx.multa > 0 || tx.juros > 0)) return zero;
+  if (tx.desde && venc < tx.desde) return zero;            // venceu antes da regra valer
+  // vencimento em fim de semana/feriado: o dia útil seguinte ainda é "em dia"
+  const ano = Number(venc.slice(0, 4));
+  const fer = new Set([...fatFeriados(ano, tx.extras), ...fatFeriados(ano + 1, tx.extras)]);
+  let util = venc;
+  for (let k = 0; k < 10; k++) {
+    const p = util.split("-").map(Number), d = new Date(p[0], p[1] - 1, p[2]);
+    if (d.getDay() !== 0 && d.getDay() !== 6 && !fer.has(util)) break;
+    util = _fatSomaDias(util, 1);
+  }
+  if (pag <= util) return zero;
+  const dias = _fatDiasEntre(venc, pag);
+  const multa = +(saldo * tx.multa / 100).toFixed(2);
+  const juros = +(saldo * tx.juros / 100 / 30 * dias).toFixed(2);
+  return { dias, multa, juros, total: +(multa + juros).toFixed(2) };
+}
+function _fatEncargosTxt(e, tx) {
+  if (!e || !(e.total > 0)) return "";
+  const pct = n => String(+Number(n).toFixed(4)).replace(".", ",");
+  return `multa ${pct(tx.multa)}% R$ ${_fatMoney(e.multa)} + juros ${pct(tx.juros)}% a.m. × ${e.dias} dia(s) R$ ${_fatMoney(e.juros)}`;
+}
+
 async function fatGerarFatura() {
   const sel = [...window._fatSel];
   if (!sel.length) { alert("Selecione ao menos um título."); return; }
@@ -2981,7 +3058,7 @@ const _FAT_ORD_F = {
   vencimento: f => String(f.vencimento || "").slice(0, 10),
   liquidacao: f => _fatIsoLocal(f.liquidado_em),
   atraso:     f => f._atraso,
-  valor:      f => _fatLiquido(f),
+  valor:      f => _fatSaldoAberto(f),
   nf:         f => Number(f.nfe_numero || 0) || null,
   usuario:    f => f._usuario === "—" ? "" : (f._usuario || ""),
 };
@@ -2995,7 +3072,10 @@ const _FAT_ORD_F = {
 function _fatAnotar(f, status, recPor, bol) {
   // com boleto, vale o vencimento que o BANCO aceita: venceu em feriado ou fim de
   // semana, paga no dia útil seguinte sem atraso (07/09 pago em 08/09 = em dia)
-  const venc = bol && bol.vence_ate ? String(bol.vence_ate).slice(0, 10)
+  // Boleto JÁ PAGO numa fatura em aberto (diferença reaberta, 02/11/2026 — Degraus 6 aparecia "48d" de atraso pelo boleto
+  // de 15/09): o vencimento que vale é o da fatura.
+  const bolVale = bol && bol.vence_ate && (status === "liquidada" || bol.status === "registrado");
+  const venc = bolVale ? String(bol.vence_ate).slice(0, 10)
     : f.vencimento ? String(f.vencimento).slice(0, 10) : "";
   const ref = status === "liquidada" ? _fatIsoLocal(f.liquidado_em) : _fatHojeIso();
   f._atraso = venc && ref ? Math.round((new Date(ref + "T12:00:00") - new Date(venc + "T12:00:00")) / 86400000) : null;
@@ -3087,7 +3167,7 @@ function _fatSelFSync() {
   const s = _fatSelF();
   const lista = window._fatFaturas || [];
   const marcadas = lista.filter(f => s.has(f.id));
-  const tot = marcadas.reduce((a, f) => a + _fatLiquido(f), 0);
+  const tot = marcadas.reduce((a, f) => a + _fatSaldoAberto(f), 0);
   const el = document.getElementById("fatf-selinfo");
   if (el) {
     el.innerHTML = marcadas.length
@@ -3149,7 +3229,7 @@ function _fatAplicarBuscaF() {
     }
   });
   const todas = (window._fatFaturas || []).length;
-  const tot = vis.reduce((a, f) => a + _fatLiquido(f), 0);
+  const tot = vis.reduce((a, f) => a + _fatSaldoAberto(f), 0);   // em aberto: o que falta receber
   const res = document.getElementById("fat-c-resumo");
   const totDir = dir.reduce((a, t) => a + Number(t._nota || 0), 0);
   const nTecnox = window._fatAba === "liquidadas" ? (window._fatDiretos || []).filter(t => !(t._recs || []).length).length : 0;
@@ -3484,6 +3564,11 @@ function _fatBolSituacao(f, bol) {
   const conf = bol.consultado_em ? "Conferido no banco em " + new Date(bol.consultado_em).toLocaleString("pt-BR") : "Ainda não conferido no banco";
   const nn = "Boleto " + (bol.nosso_numero || "") + ". ";
   const dias = n => n + " dia" + (Number(n) === 1 ? "" : "s");
+  if (bol.status === "liquidado" && f.status === "aberta") {
+    // boleto pago, fatura ainda em aberto pela diferença (02/11/2026): "Pago em dia" em verde dizia que estava tudo pago
+    return chip("Boleto de " + _fatMoney(bol.valor) + " pago " + _fatData(bol.pago_em || bol.credito_em) + " · falta " + _fatMoney(_fatSaldoAberto(f)),
+                "#422006", "#fcd34d", nn + "O boleto foi pago, mas a fatura ficou com saldo em aberto (valor da fatura maior que o do boleto). " + conf);
+  }
   if (bol.status === "liquidado") {
     const dif = bol.valor_pago != null ? Number(bol.valor_pago) - Number(bol.valor) : 0;
     const extra = dif > 0.009 ? " · +" + _fatMoney(dif) + " juros" : "";
@@ -3521,9 +3606,28 @@ function _fatResumoBoletos(faturas, bolPorFat, status) {
 
 // o numero grande e' o que se cobra; o bruto so' aparece quando ha' abatimento,
 // senao a coluna viraria duas linhas em toda fatura sem desconto
+// SALDO de fatura em aberto com pagamento parcial (02/11/2026, Ronan viu a Degraus "duplicada": a fatura 6 reaberta só
+// pelos R$ 33,53 aparecia com 7.663,85 no Valor e no Total). Em aberto, Valor/Total/seleção/ordenação usam o que FALTA.
+window._fatRecebidos = window._fatRecebidos || {};
+function _fatSaldoAberto(f) {
+  const liq = _fatLiquido(f);
+  return f.status === "aberta" ? +(liq - Number(window._fatRecebidos[f.id] || 0)).toFixed(2) : liq;
+}
+// multa e juros de HOJE da fatura em aberto vencida (cadastro do cliente / Parâmetros › Cobrança)
+function _fatEncargosHoje(f) {
+  const tl = window._fatTaxasLista;
+  if (!tl || f.status !== "aberta") return null;
+  const tx = fatTaxasCliente(tl.posto, (tl.cli || {})[f.cliente_id]);
+  const e = fatEncargos(_fatSaldoAberto(f), f.vencimento, _fatHojeIso(), tx);
+  return e.total > 0 ? { e, tx } : null;
+}
 function _fatValorCel(f) {
   const liq = _fatLiquido(f);
   const d = Number(f.desconto || 0), a = Number(f.acrescimo || 0);
+  const rec = f.status === "aberta" ? Number(window._fatRecebidos[f.id] || 0) : 0;
+  if (rec > 0.004) {
+    return `<b>${_fatMoney(_fatSaldoAberto(f))}</b><br><span style="font-size:10px;color:#6b7688" title="Valor da fatura ${_fatMoney(liq)} − já recebido ${_fatMoney(rec)}">de ${_fatMoney(liq)}</span>`;
+  }
   if (!d && !a) return _fatMoney(liq);
   const det = (d ? `<span style="color:#4ade80">-${_fatMoney(d)}</span>` : "") +
               (a ? `<span style="color:#f0b45c"> +${_fatMoney(a)}</span>` : "");
@@ -3605,7 +3709,20 @@ async function _fatBuscarFaturas(status) {
   }
   faturas.forEach(f => { if (f.parcela_de) f._origNum = origNum[f.parcela_de]; });
   const diretos = status === "liquidada" ? await _fatTitulosDiretos(eid) : [];
-  return { faturas, bolPorFat, recebidos, recPor, ondePor, diretos };
+  // MULTA E JUROS (02/11/2026): taxas do posto + as do cadastro de quem tem fatura vencida (a coluna mostra o de hoje)
+  let taxas = null;
+  if (status === "aberta") {
+    taxas = { posto: await fatTaxasPosto(eid), cli: {} };
+    const hoje = _fatHojeIso();
+    const cids = [...new Set(faturas.filter(f => f.cliente_id && String(f.vencimento || "9999").slice(0, 10) < hoje).map(f => f.cliente_id))];
+    if (cids.length) {
+      try {
+        const rp = await _fatPorLotes(cids, l => sb.from("oct_pessoas").select("id,multa_atraso_pct,juros_atraso_mes_pct").in("id", l));
+        (rp.data || []).forEach(p => { taxas.cli[p.id] = p; });
+      } catch (e) { /* colunas novas ainda não criadas: padrão do posto */ }
+    }
+  }
+  return { faturas, bolPorFat, recebidos, recPor, ondePor, diretos, taxas };
 }
 
 // TÍTULOS RECEBIDOS DIRETO (23/10/2026, Ronan: "se recebeu ele tem que aparecer em faturas liquidadas"): título quitado
@@ -3910,10 +4027,12 @@ function _fatGuardaLista(status, dados) {
   window._fatListas[status] = dados;
 }
 function _fatSaldoCel(f, rec) {
-  if (!(rec > 0)) return "—";
+  const enc = _fatEncargosHoje(f);
+  const encHtml = enc ? `<div style="font-size:0.72rem;color:#f87171;margin-top:2px" title="${_fatEsc(_fatEncargosTxt(enc.e, enc.tx))}">+ multa e juros hoje ${_fatBRL(enc.e.total)} → <b>${_fatBRL(_fatSaldoAberto(f) + enc.e.total)}</b></div>` : "";
+  if (!(rec > 0)) return enc ? `<span style="color:#9aa">—</span>${encHtml}` : "—";
   const saldo = _fatLiquido(f) - rec;
   return `<span style="color:#4ade80">${_fatBRL(rec)}</span>` +
-    (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "");
+    (saldo > 0.005 ? ` <span style="color:#f59e0b">(falta ${_fatBRL(saldo)})</span>` : "") + encHtml;
 }
 
 async function fatListarFaturas(status) {
@@ -3948,6 +4067,8 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
   const corpo = document.getElementById("fat-corpo");
   if (!corpo) return;
   const rolagem = manterRolagem ? (corpo.querySelector(".fat-gridwrap")?.scrollTop || 0) : 0;
+  window._fatRecebidos = dados.recebidos || {};          // antes de ordenar: em aberto o Valor é o saldo
+  window._fatTaxasLista = status === "aberta" ? (dados.taxas || null) : null;
   dados.faturas.forEach(f => _fatAnotar(f, status, dados.recPor, (dados.bolPorFat || {})[f.id]));
   const faturas = _fatOrdenar(dados.faturas, window._fatOrdF, _FAT_ORD_F);
   window._fatFaturas = faturas;
@@ -4030,6 +4151,10 @@ async function fatLiquidar(id) {
   const venc = f.vencimento ? String(f.vencimento).slice(0, 10) : null;
   const diasAtraso = venc && hoje > venc
     ? Math.round((new Date(hoje) - new Date(venc)) / 86400000) : 0;
+  // multa e juros do atraso (02/11/2026): já vêm no "Valor recebido" e no "Juros/multa"; quem recebe pode tirar
+  const tx = await fatTaxasDaFatura(f);
+  const enc = fatEncargos(saldo, venc, hoje, tx);
+  window._frEnc = { saldo, venc, tx };
 
   const box = document.getElementById("conteudo");
   const div = document.createElement("div");
@@ -4043,14 +4168,15 @@ async function fatLiquidar(id) {
         ${jaRecebido > 0 ? `· já recebido ${_fatBRL(jaRecebido)}` : ""}
         ${diasAtraso > 0 ? `<br><span style="color:#f59e0b">⚠ ${diasAtraso} dia(s) em atraso</span>` : ""}
       </p>
+      <div id="fr-enc" style="font-size:0.78rem;color:#f87171;margin:-8px 0 12px">${enc.total > 0 ? "Multa e juros do atraso: " + _fatEncargosTxt(enc, tx) + " = <b>" + _fatBRL(enc.total) + "</b> (já no valor; para não cobrar, digite o saldo)" : ""}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div><label style="color:#9aa;font-size:0.74rem">Saldo devedor</label>
           <div style="padding:9px;background:#13151f;border-radius:6px;color:#f59e0b;font-weight:700">${_fatBRL(saldo)}</div></div>
         <div><label style="color:#9aa;font-size:0.74rem">Valor recebido</label>
-          <input id="fr-valor" type="number" step="0.01" min="0" value="${saldo.toFixed(2)}" oninput="_fatDifCalc('fr-', ${saldo})"
+          <input id="fr-valor" type="number" step="0.01" min="0" value="${(saldo + enc.total).toFixed(2)}" oninput="_fatDifCalc('fr-', ${saldo})"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#4ade80;font-weight:700"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Juros/multa (R$)</label>
-          <input id="fr-juros" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('fr-', ${saldo})"
+          <input id="fr-juros" type="number" step="0.01" min="0" value="${enc.total.toFixed(2)}" oninput="_fatDifResumo('fr-', ${saldo})"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
         <div><label style="color:#9aa;font-size:0.74rem">Desconto (R$)</label>
           <input id="fr-desc" type="number" step="0.01" min="0" value="0" oninput="_fatDifResumo('fr-', ${saldo})"
@@ -4062,7 +4188,7 @@ async function fatLiquidar(id) {
             <option>Cheque</option><option>Boleto</option><option>Outro</option>
           </select></div>
         <div><label style="color:#9aa;font-size:0.74rem">Data do pagamento</label>
-          <input id="fr-data" type="date" value="${hoje}" max="${hoje}"
+          <input id="fr-data" type="date" value="${hoje}" max="${hoje}" onchange="_fatRecalcEncargos()"
             style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></div>
       </div>
       <label id="fr-parcial-box" style="display:none;gap:8px;align-items:center;margin-top:8px;font-size:0.8rem;color:#cbd5e1;cursor:pointer">
@@ -4086,8 +4212,19 @@ async function fatLiquidar(id) {
   (box || document.body).appendChild(div);
   document.getElementById("fr-valor").focus();
   document.getElementById("fr-valor").select();
+  if (enc.total > 0) _fatDifResumo("fr-", saldo);
   // carrega as contas do posto para escolher onde o dinheiro caiu (conciliação) — obrigatório desde 19/10/2026
   _fatCarregarContas("fr-conta");
+}
+// data do pagamento mudou: multa e juros recalculados para aquele dia (pago em dia = sem encargo)
+function _fatRecalcEncargos() {
+  const c = window._frEnc; if (!c) return;
+  const dia = (document.getElementById("fr-data") || {}).value || _fatHojeIso();
+  const enc = fatEncargos(c.saldo, c.venc, dia, c.tx);
+  const v = document.getElementById("fr-valor"), info = document.getElementById("fr-enc");
+  if (v) v.value = (c.saldo + enc.total).toFixed(2);
+  if (info) info.innerHTML = enc.total > 0 ? "Multa e juros do atraso: " + _fatEncargosTxt(enc, c.tx) + " = <b>" + _fatBRL(enc.total) + "</b> (já no valor; para não cobrar, digite o saldo)" : "";
+  _fatDifCalc("fr-", c.saldo);
 }
 
 function _fatBRL(v) { return "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

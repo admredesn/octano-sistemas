@@ -200,6 +200,10 @@ const PARAM_DEFS = [
         desc: 'Cobrada uma vez sobre o valor da fatura vencida. Ex.: 2 para 2%. Em branco = sem multa.' },
       { chave: 'cobranca_juros_mes_pct', tipo: 'texto', rot: 'Juros por atraso (% ao mês)', pad: '', dica: '1', validar: 'percentual',
         desc: 'Proporcional aos dias de atraso (1% ao mês = 0,033% ao dia). Ex.: 1 para 1% ao mês. Em branco = sem juros.' },
+      // 02/11/2026 (Ronan: "a partir desse mês vamos cobrar multa e juros"): fatura que venceu antes desta data não leva
+      // encargo. O cadastro do cliente pode ter taxa própria (vazio = estas; 0 = não cobra).
+      { chave: 'cobranca_encargos_desde', tipo: 'texto', rot: 'Cobrar multa e juros das faturas que vencem a partir de', pad: '', dica: '2026-11-01',
+        desc: 'Data no formato AAAA-MM-DD. Fatura com vencimento anterior não leva multa nem juros. Em branco = todas. Vale para o recebimento no retaguarda, o Pix do app e do Portal Empresas, o boleto novo e a cobrança por mensagem.' },
       // 20/10/2026 (Ronan: "dia útil conta feriado também") — vencimento em dia fixo do mês (cadastro do cliente)
       { chave: 'feriados_locais', tipo: 'texto', rot: 'Feriados municipais (para o vencimento)', pad: '', dica: '08/12; 21/09',
         desc: 'O vencimento em dia fixo (cadastro do cliente) que cair em sábado, domingo ou feriado passa para o dia útil anterior. Os feriados nacionais já contam (inclusive Carnaval, Sexta-feira Santa e Corpus Christi); aqui só os do município, em dd/mm separados por ponto e vírgula.' },

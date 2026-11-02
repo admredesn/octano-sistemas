@@ -182,6 +182,11 @@ async function abrirFormPessoa(id, empresaId) {
         <div class="form-group"><label>Limite da nota a prazo (R$)</label><input id="fpe-prazo-limite" type="number" step="0.01" min="0" value="${p?.limite_nota_prazo ?? ''}" placeholder="sem limite" /></div>
         <div class="form-group"><label>Prazo de pagamento (dias) <span style="font-size:0.72rem;color:#888">(vencimento proposto ao faturar)</span></label><input id="fpe-prazo-dias" type="number" step="1" min="0" max="365" value="${p?.prazo_dias ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
         <div class="form-group"><label>Vencimento em dia fixo do mês <span style="font-size:0.72rem;color:#888">(preenchido, vale no lugar do prazo; sábado, domingo ou feriado = dia útil anterior)</span></label><input id="fpe-venc-dia" type="number" step="1" min="1" max="31" value="${p?.venc_dia ?? ''}" placeholder="ex.: 10" oninput="_pessoaFaAtualizar()" /></div>
+        <!-- MULTA E JUROS POR ATRASO (02/11/2026, Ronan: "pode colocar no cadastro de todos"): vazio = padrão do
+             posto (Parâmetros › Cobrança, 2% + 1% ao mês); 0 = este cliente não paga encargo. Valem na fatura vencida:
+             receber no retaguarda, Pix do app/portal, boleto novo e cobrança por mensagem. -->
+        <div class="form-group"><label>Multa por atraso (%) <span style="font-size:0.72rem;color:#888">(vazio = padrão do posto; 0 = não cobra)</span></label><input id="fpe-multa-atraso" type="number" step="0.01" min="0" max="100" value="${p?.multa_atraso_pct ?? ''}" placeholder="padrão do posto" /></div>
+        <div class="form-group"><label>Juros por atraso (% ao mês) <span style="font-size:0.72rem;color:#888">(proporcional aos dias; vazio = padrão do posto)</span></label><input id="fpe-juros-atraso" type="number" step="0.01" min="0" max="100" value="${p?.juros_atraso_mes_pct ?? ''}" placeholder="padrão do posto" /></div>
         <div class="form-group"><label>Crédito</label><label style="display:flex;align-items:center;gap:8px;font-weight:normal;cursor:pointer;padding-top:6px"><input id="fpe-cred-bloq" type="checkbox" ${p?.credito_bloqueado?'checked':''} ${_pessoaDesbloqueioTravado(p)?'disabled':''} style="width:auto" /> 🚫 Crédito bloqueado</label>${_pessoaAvisoBloqueio(p)}</div>
         <!-- TABELA DE PREÇO no cadastro (modelo TecnoX 17/08): o vínculo
              cliente→negociação é escolhido AQUI, não dentro da tabela. -->
@@ -818,6 +823,9 @@ async function salvarPessoa(id, empresaId) {
     prazo_dias: (document.getElementById('fpe-prazo-dias')?.value || '') === '' ? null : parseInt(document.getElementById('fpe-prazo-dias').value, 10),
     // dia fixo do vencimento (20/10/2026): vale no lugar do prazo — fechamento automático e "Gerar fatura"
     venc_dia: (document.getElementById('fpe-venc-dia')?.value || '') === '' ? null : parseInt(document.getElementById('fpe-venc-dia').value, 10),
+    // multa/juros do atraso deste cliente (02/11/2026): vazio = padrão do posto, 0 = não cobra
+    multa_atraso_pct: (document.getElementById('fpe-multa-atraso')?.value || '') === '' ? null : parseFloat(String(document.getElementById('fpe-multa-atraso').value).replace(',', '.')),
+    juros_atraso_mes_pct: (document.getElementById('fpe-juros-atraso')?.value || '') === '' ? null : parseFloat(String(document.getElementById('fpe-juros-atraso').value).replace(',', '.')),
     credito_bloqueado: !!document.getElementById('fpe-cred-bloq')?.checked,
     // exigências da venda a prazo (o PDV as respeita desde sempre; a tela é nova)
     exige_placa:          !!document.getElementById('fpe-ex-placa')?.checked,
