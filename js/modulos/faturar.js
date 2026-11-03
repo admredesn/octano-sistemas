@@ -2418,7 +2418,21 @@ function _fatEncargosTxt(e, tx) {
 async function fatGerarFatura() {
   const sel = [...window._fatSel];
   if (!sel.length) { alert("Selecione ao menos um título."); return; }
-  const titulos = (window._fatTitulos || []).filter(t => sel.includes(t.id));
+  // SELEÇÃO ESCONDIDA PELA BUSCA (03/11/2026, fatura 119 do Alex Pereira, Florestal): a busca por nome não limpa a
+  // seleção; marcou 3 notas do Gilberto Lopes, buscou "alex", marcou as 2 dele -- a conta e a trava de "um cliente
+  // só" olhavam só o que estava na tela, mas a gravação levava TODO o marcado. As 3 do Gilberto ficaram "faturadas"
+  // na fatura do Alex (paga) e nunca foram cobradas. Agora a seleção é conferida contra tudo o que foi lido.
+  const visiveis = new Set((window._fatTitulos || []).map(t => t.id));
+  const lidos = (window._fatTitCache && window._fatTitCache.todos) || window._fatTitulos || [];
+  const titulos = lidos.filter(t => sel.includes(t.id));
+  const escondidos = titulos.filter(t => !visiveis.has(t.id));
+  if (escondidos.length) {
+    const nomes = [...new Set(escondidos.map(t => t.cliente_nome || "sem cliente"))].join(", ");
+    alert(`Há ${escondidos.length} título(s) marcado(s) que o filtro/busca está escondendo (${nomes}).\n\n` +
+          "Limpe a busca para ver tudo o que está marcado, ou desmarque (Esc) e marque de novo.");
+    return;
+  }
+  if (titulos.length !== sel.length) { alert("A lista mudou depois da seleção. Desmarque (Esc) e marque de novo."); return; }
   const cliIds = [...new Set(titulos.map(t => t.cliente_id))];
   if (cliIds.length > 1) { alert("Selecione títulos de UM cliente só por fatura."); return; }
   const total = titulos.reduce((s, t) => s + Number(t.valor || 0), 0);
@@ -2619,7 +2633,11 @@ async function fatGerarFaturaOk() {
     nova = r.data;
   }
 
-  await sb.from("oct_pdv_notas_prazo").update({ fatura_id: nova.id, status: "faturado" }).in("id", st.sel);
+  // só os títulos conferidos (mesmo cliente, os que somaram o total), e só se ainda estão livres
+  let qTit = sb.from("oct_pdv_notas_prazo").update({ fatura_id: nova.id, status: "faturado" })
+    .in("id", st.titulos.map(t => t.id)).is("fatura_id", null);
+  qTit = st.cliId ? qTit.eq("cliente_id", st.cliId) : qTit.is("cliente_id", null);
+  await qTit;
 
   // grava o prazo no cadastro (falha aqui nao desfaz a fatura -- so' avisa)
   let avisoPrazo = "";
