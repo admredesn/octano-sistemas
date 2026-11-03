@@ -2379,6 +2379,18 @@ async function fcLancEditar(refTipo, refId) {
     : (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(v('forma_nome') || ''), '') : null);
   const contaPixEd = (refTipo !== 'np' && (grupoPix === 'pix' || grupoPix === 'pix_cnpj'))
     ? await _fcContaPixHtml('fcl-pix-conta', grupoPix, aj.conta_id != null ? aj.conta_id : null) : '';
+  // CUPOM QUE VIRA NOTA A PRAZO (03/11/2026): escolher "Nota a prazo" abre o cliente — vem do cupom (cadastro pelo id ou
+  // pelo CPF/CNPJ) e pode ser trocado pela busca, como no ➕ Incluir. É ele que leva o título ao Faturar.
+  window._fcNpPodeCriar = refTipo === 'venda' && !aj.titulo_id && _fcGrupoNome(String(v('forma_nome') || ''), '') !== 'prazo';
+  let npCli = { id: '', nome: '' };
+  if (window._fcNpPodeCriar) { try { npCli = await _fcClienteDaVenda(refId); } catch (e) { /* a busca resolve */ } }
+  const npBloco = !window._fcNpPodeCriar ? (aj.titulo_id ? '<p style="color:#7ee2a0;font-size:0.75rem;margin-top:8px">📄 título no Faturar</p>' : '') : `
+      <div id="fcl-np-cli" style="display:none;margin-top:8px;padding:8px;border:1px solid #2a2d3e;border-radius:6px">
+        <label style="display:block;color:#9aa;font-size:0.75rem">Cliente da nota a prazo — vira título no Faturar</label>
+        <input id="fcm-cliente" value="${fcEsc(npCli.nome)}" oninput="_fcCliDigitou(this.value)" class="fc-inp2 lg" style="width:100%" autocomplete="off">
+        <input type="hidden" id="fcm-cliente-id" value="${fcEsc(npCli.id)}">
+        <div id="fcm-cli-lista">${npCli.id ? '<p style="color:#7ee2a0;font-size:0.75rem;padding:4px 2px">✔ cliente do cadastro</p>' : ''}</div>
+      </div>`;
   fcModal('✎ Editar lançamento', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="color:#888;font-size:0.75rem;margin-bottom:10px">${fcEsc(base.rotulo || refTipo)} — o valor original não é apagado: a edição fica registrada por cima (auditável).</p>
@@ -2392,10 +2404,11 @@ async function fcLancEditar(refTipo, refId) {
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
            <input id="fcl-cliente" value="${fcEsc(v('cliente_nome') || (base.rotulo || '').replace('Nota a prazo — ', ''))}" class="fc-inp2 lg" style="width:100%">`
         : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma de pagamento</label>
-           <select id="fcl-forma" class="fc-inp2" style="width:200px">
+           <select id="fcl-forma" class="fc-inp2" style="width:200px" onchange="_fcNpCliMostrar(this.value)">
              <option value="">(manter: ${fcEsc(v('forma_nome') || '—')})</option>
              ${formas.map(f => `<option value="${f}">${f}</option>`).join('')}
            </select>
+           ${npBloco}
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Bandeira</label>
            <select id="fcl-bandeira" class="fc-inp2" style="width:200px">
              <option value="${fcEsc(bandAtual)}">${bandAtual ? '(manter: ' + fcEsc(bandAtual) + ')' : '(sem bandeira)'}</option>
@@ -2423,7 +2436,7 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
   if (_fcTravado()) return;
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
-  let ajuste = null;
+  let ajuste = null, tituloNovo = null;
   if (!desfazer) {
     const valor = parseFloat(document.getElementById('fcl-valor').value);
     const forma = document.getElementById('fcl-forma').value;
@@ -2479,18 +2492,61 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       if (refTipo === 'np' && cliEl && cliEl.value.trim()) ajuste.cliente_nome = cliEl.value.trim();
       const cpE = _fcContaPixEscolhida('fcl-pix-conta');   // Pix: em qual conta caiu (23/10/2026)
       if (cpE) { ajuste.conta_id = cpE.id; ajuste.conta_nome = cpE.nome; }
+      // CUPOM TROCADO PARA NOTA A PRAZO VIRA TÍTULO (03/11/2026, Ronan: "pode mudar o F.Caixa para criar o título"; NFC-e
+      // 1009 da Sônia saiu como dinheiro e a troca da forma arrumou só o caixa — o título nunca chegou ao Faturar).
+      // Desfazer a troca (ou trocar de novo) tira o título, só enquanto ele está livre (aberto, sem fatura/recebimento).
+      if (refTipo === 'venda') {
+        const gNovo = _fcGrupoNome(String(ajuste.forma_nome || base.forma_nome || ''), '');
+        const gAntes = _fcGrupoNome(String(prev.forma_nome || base.forma_nome || ''), '');
+        const vTit = Math.round(Number(ajuste.valor != null ? ajuste.valor : base.valor || 0) * 100) / 100;
+        if (prev.titulo_id && gNovo !== 'prazo') {
+          if (!(await _fcTituloVendaTirar(prev.titulo_id))) return;
+          delete ajuste.titulo_id;
+        } else if (prev.titulo_id) {
+          const vAntes = Math.round(Number(prev.valor != null ? prev.valor : base.valor || 0) * 100) / 100;
+          if (Math.abs(vTit - vAntes) > 0.004) {
+            const lv = await _fcTituloManualLivre(prev.titulo_id);
+            if (!lv.livre) { alert('Valor não alterado: o título desta nota no Faturar ' + lv.motivo + '.' + N2 + 'Resolva no Faturar primeiro.'); return; }
+            if (!lv.sumiu) {
+              const { error: eT } = await sb.from('oct_pdv_notas_prazo').update({ valor: vTit, valor_original: vTit }).eq('id', prev.titulo_id).eq('status', 'aberto');
+              if (eT) { alert('Não consegui alterar o título no Faturar: ' + eT.message); return; }
+            }
+          }
+        } else if (forma && gNovo === 'prazo' && gAntes !== 'prazo') {
+          const cliId = String((document.getElementById('fcm-cliente-id') || {}).value || '');
+          const cliNome = String((document.getElementById('fcm-cliente') || {}).value || '').trim();
+          if (!cliId) {
+            if (!confirm('Cliente fora do cadastro: o cupom passa a contar como nota a prazo no caixa, mas NÃO vira título no Faturar.' + N2
+              + 'Para ir ao Faturar, escolha o cliente na lista que aparece ao digitar o nome. Continuar sem título?')) return;
+          } else {
+            try {
+              const r = await _fcTituloDaVenda(refId, window._fcTurnoAtual, vTit, { id: cliId, nome: cliNome }, base.forma_nome);
+              if (r.existente) alert('Este cupom já tem título no Faturar — não criei outro.');
+              else { ajuste.titulo_id = r.id; tituloNovo = r.id; }
+            } catch (e) { alert('Não consegui criar o título no Faturar: ' + (e.message || e) + N2 + 'Nada foi alterado.'); return; }
+          }
+        }
+      }
       if (!Object.keys(ajuste).length) ajuste = null;
     }
+  } else {
+    // ↩ desfazer a edição de um cupom que virou nota a prazo: o título sai junto (se ainda livre)
+    const prevD = (window._fcConf[k] || {}).ajuste || {};
+    if (refTipo === 'venda' && prevD.titulo_id && !(await _fcTituloVendaTirar(prevD.titulo_id))) return;
   }
   const cur = window._fcConf[k] = window._fcConf[k] || {};
+  const ajusteAntes = cur.ajuste;
   cur.ajuste = ajuste;
   try {
-    await sb.from('oct_fc_lancamentos').upsert({
+    const { error: eU } = await sb.from('oct_fc_lancamentos').upsert({
       empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
       ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido,
       ajuste, conferido_em: new Date().toISOString(),
     }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+    if (eU) throw eU;
   } catch (e) {
+    cur.ajuste = ajusteAntes;
+    if (tituloNovo) await sb.from('oct_pdv_notas_prazo').delete().eq('id', tituloNovo).eq('status', 'aberto');
     alert('Não salvou: ' + (e.message || e) + '\n\n→ Rode o SQL-FC-LANCAMENTOS.sql no Supabase.');
     return;
   }
@@ -4515,6 +4571,58 @@ async function _fcTituloDoManual(turnoId, a) {
   }).select('id').single();
   if (error) throw error;
   return data.id;
+}
+// CUPOM TROCADO PARA NOTA A PRAZO (03/11/2026): o ✎ da venda mostra o cliente quando a forma escolhida é a prazo
+function _fcNpCliMostrar(forma) {
+  const el = document.getElementById('fcl-np-cli');
+  if (el) el.style.display = window._fcNpPodeCriar && _fcGrupoNome(String(forma || ''), '') === 'prazo' ? 'block' : 'none';
+}
+// cliente do cupom para a nota a prazo: o do cadastro pelo id do cupom, senão pelo CPF/CNPJ (um só), senão só o nome
+async function _fcClienteDaVenda(vendaId) {
+  const { data: v } = await sb.from('oct_pdv_vendas').select('cliente_id,cliente_nome,cliente_cpf').eq('id', vendaId).maybeSingle();
+  if (!v) return { id: '', nome: '' };
+  if (v.cliente_id) return { id: v.cliente_id, nome: v.cliente_nome || '' };
+  const d = String(v.cliente_cpf || '').replace(/\D/g, '');
+  if (d.length === 11 || d.length === 14) {
+    const { data: ps } = await sb.from('oct_pessoas').select('id,nome').eq('empresa_id', window._fcEmpresaId)
+      .eq('ativo', true).eq('documento', d).limit(2);
+    if ((ps || []).length === 1) return { id: ps[0].id, nome: ps[0].nome };
+  }
+  return { id: '', nome: v.cliente_nome || '' };
+}
+// título do cupom que virou nota a prazo: chave/número do cupom, data = a da venda. A observação NÃO leva "do TecnoX":
+// o F.Caixa já conta o cupom como prazo pela troca da forma (o título não soma de novo em rec.prazo).
+async function _fcTituloDaVenda(vendaId, turnoId, valor, cli, formaAntes) {
+  const { data: v, error: eV } = await sb.from('oct_pdv_vendas').select('id,numero,nfce_chave,data_venda').eq('id', vendaId).maybeSingle();
+  if (eV || !v) throw (eV || new Error('cupom não encontrado'));
+  if (v.nfce_chave) {
+    const { data: ja } = await sb.from('oct_pdv_notas_prazo').select('id').eq('empresa_id', window._fcEmpresaId)
+      .eq('chave_nfe', v.nfce_chave).neq('status', 'cancelado').limit(1);
+    if ((ja || []).length) return { id: ja[0].id, existente: true };
+  }
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
+  const obs = 'Cupom ' + (v.numero != null ? v.numero : '') + ' saiu como ' + (formaAntes || 'outra forma')
+    + ' e foi trocado para nota a prazo no F.Caixa — caixa ' + (t.numero != null ? t.numero : '') + ' (' + (_fcData(t.aberto_em) || '') + ')'
+    + ' — por ' + (await _fcAutor());
+  const { data, error } = await sb.from('oct_pdv_notas_prazo').insert({
+    empresa_id: window._fcEmpresaId, turno_id: turnoId,
+    cliente_id: cli.id, cliente_nome: cli.nome || null,
+    chave_nfe: v.nfce_chave || null, numero_nfe: v.numero != null ? String(v.numero) : null,
+    valor, valor_original: valor, forma_nome: 'Nota a prazo', status: 'aberto',
+    registrado_em: v.data_venda || t.aberto_em || new Date().toISOString(), criado_em: new Date().toISOString(),
+    observacao: obs,
+  }).select('id').single();
+  if (error) throw error;
+  return { id: data.id };
+}
+// tira o título do cupom que deixou de ser prazo — só se ainda está livre; senão avisa e não deixa trocar
+async function _fcTituloVendaTirar(id) {
+  const lv = await _fcTituloManualLivre(id);
+  if (!lv.livre) { alert('Não alterado: o título desta nota no Faturar ' + lv.motivo + '.' + N2 + 'Resolva no Faturar primeiro.'); return false; }
+  if (lv.sumiu) return true;
+  const { error } = await sb.from('oct_pdv_notas_prazo').delete().eq('id', id).eq('status', 'aberto');
+  if (error) { alert('Não consegui tirar o título do Faturar: ' + error.message); return false; }
+  return true;
 }
 // o título da nota manual ainda pode mudar/sair? (em aberto, sem fatura e sem recebimento parcial)
 async function _fcTituloManualLivre(id) {
