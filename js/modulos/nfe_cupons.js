@@ -785,6 +785,11 @@ async function ncupAbrirEmissao() {
         <div class="ncup-linha"><div style="flex:1"><label>Observações da nota — placa, KM, motorista… (saem nas informações complementares)</label>
           <textarea id="ncup-obs" rows="2" maxlength="1500" placeholder="ex.: Placa: ABC1D23 KM: 70181"
             style="width:100%;box-sizing:border-box;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem;font-family:inherit;resize:vertical"></textarea></div></div>
+        <div class="ncup-linha" style="align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:0 0 210px"><label>Data/hora da emissão <span style="color:#666">(vazio = agora)</span></label><input id="ncup-dh-emi" type="datetime-local" step="1" style="color-scheme:dark"></div>
+          <div style="flex:0 0 210px"><label>Data/hora de saída <span style="color:#666">(vazio = a da emissão)</span></label><input id="ncup-dh-sai" type="datetime-local" step="1" style="color-scheme:dark"></div>
+          <div style="flex:0 0 auto"><button class="ncup-btn" onclick="_ncupDataDoCupom()" title="Emissão e saída na data/hora do último cupom escolhido">📅 Data do cupom</button></div>
+        </div>
         <div class="ncup-linha" style="align-items:flex-end">
           ${inp("ncup-doc", "CPF/CNPJ do cliente *", { attr: 'inputmode="numeric" placeholder="só números"' })}
           <div style="flex:0 0 auto"><button class="ncup-btn" onclick="_ncupBuscarCliente()">🔍 Buscar</button></div>
@@ -826,6 +831,32 @@ async function ncupAbrirEmissao() {
   if (docs[0]) _ncupBuscarCliente();
   else document.getElementById("ncup-doc").focus();
   _ncupPrevia();
+}
+
+// DATAS DA NF-e (03/11/2026, Ronan: "nessa tela tem que dar opção de mudar as datas"): emissão e saída escolhidas na tela
+// ("AAAA-MM-DDTHH:MM[:SS]", horário de Brasília) vão para o servidor em dh_emi / dh_sai_ent; vazias = agora, como antes.
+// Horário do cupom em Brasília: o banco guarda UTC; a cópia do TecnoX já está na hora do posto (marcada como UTC).
+function _ncupHoraLocal(v) {
+  const s = String(v.data_venda || "");
+  if (v._tecnox) return s.slice(0, 19).replace(" ", "T");
+  const ms = Date.parse(s);
+  return isNaN(ms) ? "" : new Date(ms - 3 * 3600e3).toISOString().slice(0, 19);
+}
+function _ncupDataDoCupom() {
+  const ult = _ncupSelecionados().map(_ncupHoraLocal).filter(Boolean).sort().pop();
+  if (!ult) { _ncupMsg("Os cupons escolhidos não têm data.", "#f87171"); return; }
+  document.getElementById("ncup-dh-emi").value = ult;
+  document.getElementById("ncup-dh-sai").value = ult;
+  _ncupDesconfirmar();
+}
+// "AAAA-MM-DDTHH:MM[:SS]" de Brasília -> milissegundos (NaN se vazio/ruim)
+function _ncupDhMs(s) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(:\d{2})?$/.exec(String(s || ""));
+  return m ? Date.parse(m[1] + "T" + m[2] + (m[3] || ":00") + "-03:00") : NaN;
+}
+function _ncupDhTxt(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(String(s || ""));
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : "";
 }
 
 // cadastro de produtos (o fiscal que o cupom não gravou) + ambiente de cada cupom (oct_nfce)
@@ -1326,6 +1357,16 @@ async function _ncupEmitir() {
     nota = _ncupMontarNota(sel, dest, cfg, st.prep.prodSet, st.emp, st.prep.prods, _ncupEdAtual());
   } catch (e) { _ncupMsg(_ncupEsc(e.message || e), "#f87171"); return; }
   const vNF = _ncupVNF(nota);
+  // datas escolhidas na tela (vazias = agora; saída vazia = a da emissão)
+  const dhEmi = String((document.getElementById("ncup-dh-emi") || {}).value || "");
+  const dhSai = String((document.getElementById("ncup-dh-sai") || {}).value || "");
+  const msEmi = _ncupDhMs(dhEmi), msSai = _ncupDhMs(dhSai);
+  if (dhEmi && isNaN(msEmi)) { _ncupMsg("Data/hora da emissão inválida.", "#f87171"); return; }
+  if (dhSai && isNaN(msSai)) { _ncupMsg("Data/hora de saída inválida.", "#f87171"); return; }
+  if (msEmi > Date.now() + 60000) { _ncupMsg("A data/hora da emissão não pode ser no futuro (a SEFAZ recusa).", "#f87171"); return; }
+  if (dhEmi) nota.dh_emi = dhEmi;
+  if (dhSai) nota.dh_sai_ent = dhSai;
+  const diasAtras = dhEmi ? Math.floor((Date.now() - msEmi) / 86400000) : 0;
 
   // 1º clique: confere (cupom que outra tela transformou enquanto esta estava aberta para aqui); 2º clique: emite
   if (!st.confirmar) {
@@ -1352,6 +1393,8 @@ async function _ncupEmitir() {
     _ncupMsg(`Conferir: NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO"}</b>, série ${_ncupEsc(cfg.serie)}, `
       + `R$ ${_ncupMoney(vNF)}, ${nota.itens.length} item(ns), ${sel.length} cupom(ns) (${nota.refs.length} referenciado(s)), para <b>${_ncupEsc(dest.nome)}</b> (${_ncupEsc(_ncupDocFmt(doc))}).${outroDoc}`
       + (nota.refs.length ? "" : `<br><b style="color:#f59e0b">⚠ Nenhum cupom de produção na referência${prod ? " (cupons de homologação não valem fiscalmente)" : ""}.</b>`)
+      + `<br>Emissão: <b>${dhEmi ? _ncupEsc(_ncupDhTxt(dhEmi)) : "agora"}</b> · saída: <b>${dhSai ? _ncupEsc(_ncupDhTxt(dhSai)) : (dhEmi ? "a mesma da emissão" : "agora")}</b>`
+      + (diasAtras >= 7 ? `<br><b style="color:#f59e0b">⚠ Emissão ${diasAtras} dia(s) atrás: a SEFAZ pode recusar por data de emissão muito atrasada (rejeição 228).</b>` : "")
       + `<br><span style="color:#aaa">Observações: ${_ncupEsc(nota.inf_complementar || "—")} (+ tributos aproximados)</span>`
       + (mexido.length ? `<br><b style="color:#fbbf24">Alterado na tela: ${_ncupEsc(mexido.join(" · "))}.</b>` : ""));
     btn.textContent = "✔ Confirmar e emitir";
@@ -1404,7 +1447,7 @@ async function _ncupEmitir() {
         empresa_id: st.eid, numero: nota.numero, serie: cfg.serie, modelo: "55",
         status: "autorizada", ambiente: cfg.ambiente, valor_total: vNF,
         cpf_consumidor: doc, chave_nfe: r.chave, protocolo: r.protocolo,
-        xml_autorizado: r.nfe_proc || null, data_emissao: new Date().toISOString(),
+        xml_autorizado: r.nfe_proc || null, data_emissao: dhEmi ? new Date(msEmi).toISOString() : new Date().toISOString(),
       });
       if (ei) avisos.push("não gravou no histórico de notas (" + (ei.message || ei) + ")");
     } catch (e) { avisos.push("não gravou no histórico de notas"); }
