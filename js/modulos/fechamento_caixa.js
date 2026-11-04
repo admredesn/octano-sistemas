@@ -984,8 +984,9 @@ function fcDetalhe(turnoId) {
   // quebra sumiria sem ninguém responder por ela — foi o que aconteceu no turno
   // 31, quando somar sempre contava o mesmo dinheiro duas vezes.
   const temTitulo = _st.temTitulo;
-  const faltaQuitada = respNome && temTitulo && difApurada < 0;   // virou cobrança
-  const sobraAtribuida = respNome && difApurada > 0;              // sobra não gera título
+  // só zera o Resultado quando o lançado é ESTA diferença (04/11/2026: com o valor mudado, o caixa volta a mostrar a quebra)
+  const faltaQuitada = _st.resolvida && difApurada < 0;   // virou cobrança
+  const sobraAtribuida = _st.resolvida && difApurada > 0; // sobra não gera título
   const totalReceb = Number((somaReceb + (faltaQuitada ? -difApurada : 0)).toFixed(2));
   const totalVenda = Number((somaVenda + (sobraAtribuida ? difApurada : 0)).toFixed(2));
   // Resultado = contas prestadas − origem. Negativo = FALTA, positivo = SOBRA.
@@ -1009,7 +1010,8 @@ function fcDetalhe(turnoId) {
     // sem título, o nome está lá mas a quebra ainda não virou cobrança: o rótulo
     // precisa dizer isso, senão o operador vê o nome e não entende o porquê do
     // caixa seguir aberto.
-    const pend = (difApurada < 0 && !temTitulo) ? ' (sem título)' : '';
+    const pend = _st.mudou ? ' (lançada ' + _st.regTipo + ' de ' + fcMoney(_st.regValor) + ' — feche o caixa de novo)'
+      : (difApurada < 0 && !temTitulo) ? ' (sem título)' : '';
     return base + ' — ' + fcEsc(respNome) + pend;
   };
   const receb = recebBase.concat([[_rotDif('Falta de Caixa', faltaCaixa), faltaCaixa]]);
@@ -3341,11 +3343,43 @@ async function fcDifResponsavel(dif) {
 async function _fcTituloDifExistente(turnoId) {
   try {
     const { data } = await sb.from('oct_pdv_notas_prazo')
-      .select('id,valor,cliente_nome,status')
+      .select('id,valor,valor_original,cliente_id,cliente_nome,status,fatura_id')
       .eq('empresa_id', window._fcEmpresaId).eq('turno_id', turnoId)
       .eq('forma_nome', 'Diferença de caixa').limit(1);
     return (data || [])[0] || null;
   } catch (e) { return null; }
+}
+
+// TÍTULO DA FALTA ACOMPANHA O CAIXA (04/11/2026, Ronan: "as faturas não coincidem com as faltas registradas nos caixas"):
+// reaberto e fechado de novo, o caixa mudava a falta mas o título ficava com o valor da 1ª vez — AC 840 cobrava 47,47 de
+// uma falta de 98,31; 841 cobrava 35,23 de um caixa que fechou com sobra. Ao fechar/lançar, o título que já existe passa
+// ao valor apurado agora, ou sai se não há mais falta — só enquanto livre no Faturar; senão avisa e o caixa não fecha.
+async function _fcTituloDifSincronizar(turnoId, dif, pessoaId, pessoaNome) {
+  const ja = await _fcTituloDifExistente(turnoId);
+  if (!ja) return { ok: true, titulo: null };
+  const alvo = dif <= -0.01 ? Math.round(Math.abs(dif) * 100) / 100 : 0;
+  const antes = Number(ja.valor_original != null ? ja.valor_original : ja.valor || 0);
+  const trocaPessoa = !!(alvo && pessoaId && pessoaId !== ja.cliente_id);
+  if (Math.abs(antes - alvo) < 0.01 && !trocaPessoa) return { ok: true, titulo: ja };
+  const agora = alvo ? 'falta de ' + fcMoney(alvo) : (dif >= 0.01 ? 'sobra de ' + fcMoney(dif) : 'nenhuma diferença');
+  const lv = await _fcTituloManualLivre(ja.id);
+  if (!lv.livre) return { ok: false, msg: 'O título da falta deste caixa (' + fcMoney(antes) + ', ' + ja.cliente_nome + ') ' + lv.motivo
+    + ', e agora o caixa tem ' + agora + '.' + N2 + 'Acerte o título no Faturar antes de fechar o caixa.' };
+  if (!alvo) {
+    const { error } = await sb.from('oct_pdv_notas_prazo').delete().eq('id', ja.id).eq('status', 'aberto');
+    if (error) return { ok: false, msg: 'Não consegui tirar o título da falta: ' + error.message };
+    return { ok: true, titulo: null, aviso: 'O título de ' + fcMoney(antes) + ' de ' + ja.cliente_nome + ' saiu do Faturar (agora o caixa tem ' + agora + ').' };
+  }
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
+  const nome = trocaPessoa ? pessoaNome : ja.cliente_nome;
+  const upd = { valor: alvo, valor_original: alvo,
+    observacao: 'Falta de caixa — turno ' + (t.numero != null ? t.numero : '') + ' (' + (_fcData(t.aberto_em) || '') + ') — responsável: ' + nome
+      + ' — valor ajustado ao fechar o caixa de novo (' + new Date().toLocaleDateString('pt-BR') + '): ' + fcMoney(antes) + ' → ' + fcMoney(alvo) };
+  if (trocaPessoa) { upd.cliente_id = pessoaId; upd.cliente_nome = pessoaNome; }
+  const { error } = await sb.from('oct_pdv_notas_prazo').update(upd).eq('id', ja.id).eq('status', 'aberto').is('fatura_id', null);
+  if (error) return { ok: false, msg: 'Não consegui acertar o título da falta: ' + error.message };
+  return { ok: true, titulo: Object.assign({}, ja, upd),
+    aviso: 'Título de ' + nome + ' acertado: ' + fcMoney(antes) + ' → ' + fcMoney(alvo) + '.' };
 }
 
 async function fcDifLancar(dif) {
@@ -3363,14 +3397,21 @@ async function fcDifLancar(dif) {
   // TÍTULO A FATURAR: a falta vira nota a prazo no nome do funcionário e é
   // cobrada/descontada pelo Faturar, junto com os demais títulos em aberto.
   // (Sobra não vira título a receber — ali o posto é que deve à pessoa.)
-  if (dif < 0) {
-    const ja = await _fcTituloDifExistente(turnoId);
-    if (ja) {
-      alert('Este caixa já tem título de diferença: ' + fcMoney(ja.valor)
-        + ' no nome de ' + ja.cliente_nome + ' (' + ja.status + ').' + N2
-        + 'Para trocar o responsável, exclua o título no Faturar e lance de novo.');
-      return;
-    }
+  let aviso = '';
+  const ja = await _fcTituloDifExistente(turnoId);
+  // título de antes com outro valor (ou a falta virou sobra): acompanha o apurado agora (04/11/2026)
+  if (ja && (dif >= 0 || Math.abs(Number(ja.valor_original != null ? ja.valor_original : ja.valor || 0) - Math.abs(dif)) >= 0.01)) {
+    const s = await _fcTituloDifSincronizar(turnoId, dif, pid || null, pnome);
+    if (!s.ok) { alert(s.msg); return; }
+    aviso = s.aviso || '';
+  }
+  if (dif < 0 && ja && !aviso) {
+    alert('Este caixa já tem título de diferença: ' + fcMoney(ja.valor)
+      + ' no nome de ' + ja.cliente_nome + ' (' + ja.status + ').' + N2
+      + 'Para trocar o responsável, exclua o título no Faturar e lance de novo.');
+    return;
+  }
+  if (dif < 0 && !ja) {
     const { error } = await sb.from('oct_pdv_notas_prazo').insert({
       empresa_id: window._fcEmpresaId,
       turno_id: turnoId,
@@ -3403,7 +3444,8 @@ async function fcDifLancar(dif) {
 
   await fcRecarregar();
   alert(rot + ' de ' + fcMoney(Math.abs(dif)) + ' lançada para ' + pnome + '.'
-    + (dif < 0 ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
+    + (aviso ? String.fromCharCode(10, 10) + '📄 ' + aviso
+      : dif < 0 ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
                : String.fromCharCode(10, 10) + 'Sobra: registrada como responsabilidade, sem título a receber.'));
 }
 // ---------- Nós de MOVIMENTAÇÃO (vales, recebimentos externos, ledger) ----------
@@ -4411,13 +4453,18 @@ async function fcSalvarObs() {
 // novo, como se nada tivesse sido lançado (25/08).
 //   FALTA -> resolvida quando tem responsável E título gerado (virou cobrança).
 //   SOBRA -> não existe título a gerar; basta o responsável registrado.
+//   O REGISTRO VALE PARA O VALOR LANÇADO (04/11/2026, AC caixas 840/841): reaberto e fechado de novo com outra
+//   diferença, o caixa seguia "resolvido" pelo nome antigo e o título ficava com o valor da 1ª vez. Valor ou tipo
+//   diferentes do apurado agora = não resolvida (pergunta de novo e o título acompanha).
 function _fcDifStatus(turnoId, difApurada) {
   const a = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
   const respNome = (a && a.responsavel) ? String(a.responsavel) : '';
   const temTitulo = !!(a && a.titulo_gerado);
   const dif = Number(difApurada || 0);
-  const resolvida = !!respNome && (dif > 0 ? true : temTitulo);
-  return { respNome, temTitulo, resolvida };
+  const confere = !!a && Math.abs(Number(a.valor || 0) - Math.abs(dif)) < 0.01 && a.tipo === (dif < 0 ? 'falta' : 'sobra');
+  const resolvida = !!respNome && confere && (dif > 0 ? true : temTitulo);
+  const mudou = !!respNome && !confere && Math.abs(dif) >= 0.01;
+  return { respNome, temTitulo, resolvida, mudou, regTipo: (a && a.tipo) || '', regValor: Number((a && a.valor) || 0) };
 }
 
 async function fcConfirmarCaixa(turnoId) {
@@ -4490,25 +4537,35 @@ async function _fcModalResponsavel(turnoId, dif) {
   // SOBRA: dinheiro a mais no caixa não é crédito dele por padrão.
   const marcado = dif < 0 ? 'checked' : '';
   const podeTitulo = dif < 0;   // só a falta gera título a receber
+  // já lançada com outro valor (caixa reaberto e mexido): diz o que estava e já marca quem era (04/11/2026)
+  const st = _fcDifStatus(turnoId, dif);
+  const antes = st.mudou ? st.respNome : '';
+  // só marca quando o tipo é o mesmo: sobra lançada para a gerente não vira, sozinha, título de falta dela
+  const mesmoTipo = st.regTipo === (dif < 0 ? 'falta' : 'sobra');
+  const marcaAntes = (n) => antes && mesmoTipo && _fcNorm(n) === _fcNorm(antes) ? 'checked' : '';
   const opcao = (n) => {
     const p = _fcCasaPessoa(n, pessoas);
     const tag = p ? '<span style="color:#7ee2a0;font-size:0.72rem"> · cadastrado</span>'
       : '<span style="color:#f0b45c;font-size:0.72rem"> · sem cadastro (não gera vale)</span>';
     return `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer;align-items:center">
-      <input type="radio" name="fcresp" value="${fcEsc(n)}" data-pid="${p ? p.id : ''}">
+      <input type="radio" name="fcresp" value="${fcEsc(n)}" data-pid="${p ? p.id : ''}" ${marcaAntes(n)}>
       <span>${fcEsc(n)}${tag}</span></label>`;
   };
   const doTurno = [...nomes].sort();
   const outros = pessoas.filter(p => !doTurno.some(n => _fcCasaPessoa(n, [p])));
+  const avisoAntes = antes ? `<p style="margin-bottom:12px;padding:8px 10px;border:1px solid #5a4a22;border-radius:6px;background:#1d1a10;color:#f0c674">
+      Este caixa já tinha <b>${fcEsc(st.regTipo)} de ${fcMoney(st.regValor)}</b> lançada para <b>${fcEsc(antes)}</b> e mudou depois.
+      ${dif < 0 ? 'O título dele no Faturar passa para ' + fcMoney(Math.abs(dif)) + '.' : 'O título de falta, se houver, sai do Faturar.'}</p>` : '';
 
   fcModal('👤 Responsável pela diferença de caixa', `
     <div style="padding:16px;font-size:0.85rem;color:#cdd6e0">
       <p style="margin-bottom:12px">Foi apurada <b style="color:${cor}">${tipo} de ${fcMoney(Math.abs(dif))}</b> neste caixa.
       Identifique o funcionário responsável para fechar a conferência:</p>
+      ${avisoAntes}
       ${doTurno.map(opcao).join('')}
       ${outros.length ? `<div style="color:#8892a0;font-size:0.75rem;margin:8px 0 4px">outros funcionários</div>`
         + outros.map(p => `<label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;margin-bottom:5px;cursor:pointer">
-            <input type="radio" name="fcresp" value="${fcEsc(p.nome)}" data-pid="${p.id}"><span>${fcEsc(p.nome)}</span></label>`).join('') : ''}
+            <input type="radio" name="fcresp" value="${fcEsc(p.nome)}" data-pid="${p.id}" ${marcaAntes(p.nome)}><span>${fcEsc(p.nome)}</span></label>`).join('') : ''}
       <label style="display:flex;gap:8px;padding:6px 8px;border:1px solid #2a2d3e;border-radius:6px;cursor:pointer;align-items:center">
         <input type="radio" name="fcresp" value="" data-pid="">
         <span>Outro:</span>
@@ -4671,9 +4728,12 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
       + (responsavel ? ' — responsável: ' + responsavel : '');
   try {
     const session = await getSession();
+    // o título da falta que já existe acompanha o apurado agora, ou sai — antes de gravar o resto (04/11/2026)
+    const sinc = await _fcTituloDifSincronizar(turnoId, dif, responsavel ? pessoaIdVale : null, responsavel);
+    if (!sinc.ok) { alert(sinc.msg); return; }
+    const k = 'diferenca:' + turnoId;
     if (responsavel) {
       // registro auditável da diferença em nome do funcionário
-      const k = 'diferenca:' + turnoId;
       const cur = window._fcConf[k] = window._fcConf[k] || {};
       cur.ajuste = { responsavel, valor: Math.round(Math.abs(dif) * 100) / 100, tipo: dif < 0 ? 'falta' : 'sobra' };
       cur.conferido = true;
@@ -4681,15 +4741,22 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
         empresa_id: window._fcEmpresaId, turno_id: turnoId,
         ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
       }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
-      // e vira dívida/crédito na conta corrente do funcionário, para descontar
-      if (pessoaIdVale && await _fcTituloDaDiferenca(turnoId, pessoaIdVale, responsavel, dif)) {
+      // e vira dívida/crédito na conta corrente do funcionário, para descontar (o que já existia e foi acertado conta)
+      if (dif < 0 && (sinc.titulo || (pessoaIdVale && await _fcTituloDaDiferenca(turnoId, pessoaIdVale, responsavel, dif)))) {
         cur.ajuste.titulo_gerado = true;
-        cur.ajuste.pessoa_id = pessoaIdVale;
+        cur.ajuste.pessoa_id = pessoaIdVale || sinc.titulo.cliente_id;
         await sb.from('oct_fc_lancamentos').upsert({
           empresa_id: window._fcEmpresaId, turno_id: turnoId,
           ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: cur.ajuste,
         }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
       }
+    } else if (Math.abs(dif) < 0.01 && ((window._fcConf || {})[k] || {}).ajuste) {
+      // fechou sem diferença: a falta/sobra lançada antes não existe mais
+      window._fcConf[k].ajuste = null;
+      await sb.from('oct_fc_lancamentos').upsert({
+        empresa_id: window._fcEmpresaId, turno_id: turnoId,
+        ref_tipo: 'diferenca', ref_id: turnoId, conferido: true, ajuste: null,
+      }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
     }
     const { error } = await sb.from('oct_pdv_turnos').update({
       dinheiro_esperado: d.dinheiro_esperado,
@@ -4703,7 +4770,8 @@ async function _fcConfirmarGravar(turnoId, responsavel, pessoaIdVale) {
     try { window._fcContasCache = await _fcContasDoPosto(); liv = await _fcLivroDoTurno(turnoId); }
     catch (e) { liv = { lancadas: [], mantidas: [], aviso: 'Livro financeiro: ' + (e.message || e) }; }
     alert('✔ Conferência confirmada. ' + resumo
-      + (pessoaIdVale && dif < 0
+      + (sinc.aviso ? String.fromCharCode(10, 10) + '📄 ' + sinc.aviso
+        : pessoaIdVale && dif < 0 && !sinc.titulo
           ? String.fromCharCode(10, 10) + '📄 Título gerado no nome de ' + responsavel + ' (Faturar › Notas/Títulos em Aberto).'
           : '')
       + _fcLivroResumo(liv));
