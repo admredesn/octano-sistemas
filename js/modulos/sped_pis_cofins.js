@@ -45,8 +45,10 @@ async function gerarSpedPisCofinsV2() {
   const faltas = [];
   const cnpj = (empresa?.cnpj || '').replace(/\D/g, '');
   if (!cnpj) faltas.push('CNPJ da empresa');
-  const codMun = empresa?.cod_municipio || empresa?.codigo_ibge || empresa?.cod_mun || '';
-  if (!codMun) faltas.push('Código IBGE do município (cod_municipio)');
+  // o cadastro guarda o IBGE em c_mun (o mesmo do SPED Fiscal/ECD e da NFC-e); os outros nomes nunca existiram em
+  // oct_empresas — o AC tinha 3102902 e a tela dizia que faltava (04/11/2026)
+  const codMun = String(empresa?.c_mun || empresa?.cod_municipio || empresa?.codigo_ibge || empresa?.cod_mun || '').replace(/\D/g, '');
+  if (!codMun) faltas.push('Código IBGE do município (c_mun no cadastro da empresa)');
   if (faltas.length) {
     div.innerHTML = '<div style="background:#2a1a1a;border:1px solid #5a2a2a;border-radius:8px;padding:16px;color:#f88">'
       + '<strong>Não é possível gerar o SPED.</strong><br>Faltam dados no cadastro da empresa:<ul style="margin:8px 0 0 18px">'
@@ -61,47 +63,69 @@ async function gerarSpedPisCofinsV2() {
   const dtFimFmt = spedData(dtFim);
 
   // ---- busca as vendas do período ----
-  // NFC-e: data_emissao é timestamp; filtra pelo range do mês e status autorizada
-  // NFC-e PAGINADO (20/08): a consulta simples cortava em 1000 cupons — o AC de
-  // julho tem 4.887 e o SPED saía com só 1.000 (receita subdimensionada).
-  // _spedTudo (contabilidade.js) pagina de 1000 em 1000 até acabar.
-  const [nfces, saidaRes, prodRes] = await Promise.all([
-    _spedTudo(p => sb.from('oct_nfce')
-      .select('numero,serie,modelo,status,valor_total,data_emissao,chave_nfe,itens,cpf_consumidor')
-      .eq('empresa_id', empresaId).eq('status', 'autorizada')
-      .gte('data_emissao', dtIni + 'T00:00:00').lte('data_emissao', dtFim + 'T23:59:59')
-      .order('data_emissao').range(p * 1000, p * 1000 + 999)),
-    sb.from('oct_nfe_saida').select('*, oct_nfe_saida_itens(*)')
-      .eq('empresa_id', empresaId).in('status', ['autorizada', 'transmitida'])
-      .gte('emissao', dtIni).lte('emissao', dtFim),
-    sb.from('oct_produtos').select('id,codigo,descricao,ncm,unidade,cod_anp').eq('empresa_id', empresaId),
+  // NFC-e: SÓ PRODUÇÃO e o mês no horário de Brasília (_spedNfceDoMes, contabilidade.js). 04/11/2026: a consulta não olhava
+  // o ambiente (out/2026 do AC levava 3.453 NFC-e de HOMOLOGAÇÃO e deixava de fora os 2.022 cupons do TecnoX, trazidos com
+  // _ferramentas/importar_nfce_tecnox_periodo.py) e cortava o mês em meia-noite UTC.
+  // PAGINADO (20/08): a consulta simples cortava em 1000 cupons — o AC de julho tem 4.887.
+  const [notas, prodRes, hom] = await Promise.all([
+    _spedTudo(p => _spedNfceDoMes(p, empresaId, dtIni, dtFim, 'numero,serie,modelo,status,valor_total,data_emissao,chave_nfe,itens,cpf_consumidor')),
+    sb.from('oct_produtos').select('id,codigo,nome,ncm,unidade,cod_anp,cst_pis,cst_cofins,aliq_pis,aliq_cofins,ind_monofasico,ativo').eq('empresa_id', empresaId),
+    _spedHomologacaoDoMes(empresaId, dtIni, dtFim),
   ]);
+  const avisos = [];
+  if (hom.n) avisos.push(hom.n + ' NFC-e de HOMOLOGAÇÃO no período (R$ ' + spedNum(hom.v) + ') ficaram fora: não têm valor fiscal. As vendas desses dias precisam de documento válido — decisão do contador.');
+  const prods = (prodRes && prodRes.data) || [];
+  const prodPorId = new Map(prods.map(x => [x.id, x]));
+  const prodPorCod = new Map();
+  prods.forEach(x => { const c = String(x.codigo || ''); if (c && (!prodPorCod.has(c) || x.ativo)) prodPorCod.set(c, x); });
 
-  const saidas = saidaRes.data || [];
-  const prods = prodRes.data || [];
+  // NF-e (modelo 55) do Faturar / Cupom → NF-e: todas as de out/2026 são CFOP 5929 (lançamento de cupom). A receita já
+  // está no cupom — entrar de novo duplicaria; ficam fora, com aviso. As de outro CFOP ainda não têm C170 aqui: aviso.
+  const nfe55 = notas.filter(n => n.status === 'autorizada' && String(n.modelo || '65') === '55');
+  await _spedXmlDasNfe(empresaId, nfe55);
+  let n5929 = 0, v5929 = 0;
+  const nfeOutras = [];
+  nfe55.forEach(n => {
+    const its = _spedNfeDoXml(n.xml_autorizado).itens;
+    if (its.length && its.every(i => /^[56]929$/.test(String(i.cfop || '')))) { n5929++; v5929 += Number(n.valor_total || 0); }
+    else nfeOutras.push(n.numero);
+  });
+  if (n5929) avisos.push(n5929 + ' NF-e com CFOP 5929 (R$ ' + spedNum(v5929) + ') ficaram fora: são lançamento de cupom, a receita já está nas NFC-e. Se o cupom referenciado era de homologação, o contador decide como declarar.');
+  if (nfeOutras.length) avisos.push('NF-e de venda direta (CFOP diferente de 5929) NÃO entraram — este gerador ainda não monta o C170 delas: nº ' + nfeOutras.join(', ') + '. Informe ao contador.');
 
-  // junta todas as "notas de saída" num formato único {tipo, mod, ...itens[]}
+  // CST de PIS/COFINS do item: o do cupom (importados do TecnoX trazem do XML); senão o do cadastro do produto; senão
+  // monofásico → 04, alíquota > 0 → 01. Sem nada: 49, com aviso. O cupom do PDV guarda total/cfop em lugares diferentes
+  // do que o gerador lia (it.valor_total e it.cfop não existem nele: o C175 saía com valor 0 e CST 49 em tudo).
+  let semCst = 0;
+  const _n = v => (v === null || v === undefined || v === '') ? null : Number(v);
+  const _cst = v => v ? String(v).padStart(2, '0') : '';
+  const resolverItem = (it) => {
+    const f = it.fiscal || {};
+    const pr = prodPorId.get(it.produto_id || f.id) || prodPorCod.get(String(it.codigo || it.cod || f.codigo || ''));
+    const mono = String(it.ind_monofasico || f.ind_monofasico || (pr && pr.ind_monofasico) || '').toUpperCase() === 'S';
+    let cstP = _cst(it.cst_pis || f.cst_pis || (pr && pr.cst_pis));
+    let cstC = _cst(it.cst_cofins || f.cst_cofins || (pr && pr.cst_cofins));
+    let aP = [it.aliq_pis, f.aliq_pis, pr && pr.aliq_pis].map(_n).find(v => v != null) || 0;
+    let aC = [it.aliq_cofins, f.aliq_cofins, pr && pr.aliq_cofins].map(_n).find(v => v != null) || 0;
+    if (!cstP) cstP = mono ? '04' : (aP > 0 ? '01' : '');
+    if (!cstC) cstC = mono ? '04' : (aC > 0 ? '01' : '');
+    if (!cstP || !cstC) { semCst++; cstP = cstP || '49'; cstC = cstC || '49'; }
+    if (!['01', '02'].includes(cstP)) aP = 0;
+    if (!['01', '02'].includes(cstC)) aC = 0;
+    return { cfop: String(it.cfop || f.cfop || '').replace(/\D/g, ''), cst_pis: cstP, aliq_pis: aP, cst_cofins: cstC, aliq_cofins: aC,
+      valor_total: Number(it.valor_total != null ? it.valor_total : (it.total || 0)), desconto: Number(it.desconto || 0), prod: pr || null };
+  };
+
+  // junta as "notas de saída" num formato único {mod, ...itens[]}
   const docs = [];
-  nfces.forEach(n => docs.push({
+  notas.filter(n => n.status === 'autorizada' && String(n.modelo || '65') !== '55').forEach(n => docs.push({
     mod: '65', serie: n.serie, numero: n.numero, chave: n.chave_nfe,
     emissao: n.data_emissao, valor_total: n.valor_total,
-    itens: (n.itens || []).map(it => ({
-      cfop: it.cfop, cst_pis: it.cst_pis, aliq_pis: it.aliq_pis,
-      cst_cofins: it.cst_cofins, aliq_cofins: it.aliq_cofins,
-      valor_total: it.valor_total, codigo: it.codigo, ncm: it.ncm,
-      cod_anp: it.cod_anp, ind_monofasico: it.ind_monofasico,
-    })),
+    itens: (n.itens || []).map(resolverItem),
   }));
-  saidas.forEach(n => docs.push({
-    mod: '55', serie: n.serie, numero: n.numero, chave: n.chave_nfe || n.chave,
-    emissao: n.emissao, valor_total: n.valor_total,
-    itens: (n.oct_nfe_saida_itens || []).map(it => ({
-      cfop: it.cfop, cst_pis: it.cst_pis, aliq_pis: it.aliq_pis,
-      cst_cofins: it.cst_cofins, aliq_cofins: it.aliq_cofins,
-      valor_total: it.valor_total, codigo: it.codigo, ncm: it.ncm,
-      cod_anp: it.cod_anp, ind_monofasico: it.ind_monofasico,
-    })),
-  }));
+  if (semCst) avisos.push(semCst + ' item(ns) sem CST de PIS/COFINS no cupom nem no cadastro — saíram com CST 49. Confira o cadastro fiscal dos produtos.');
+  const c5655 = docs.reduce((t, d) => t + d.itens.filter(i => i.cfop === '5655').length, 0);
+  if (c5655) avisos.push(c5655 + ' item(ns) de NFC-e com CFOP 5655 (venda para comercialização) — para consumidor final o CFOP é 5656. Confira o cadastro dos produtos.');
 
   // ---- montagem dos registros ----
   const linhas = [];
@@ -118,13 +142,15 @@ async function gerarSpedPisCofinsV2() {
   L('|0110|1|1|1||');
   // 0140: estabelecimento
   L(`|0140|01|${nome}|${cnpj}|${uf}|${ie}|${codMun}|||`);
-  // 0190: unidades
-  const unidades = [...new Set(prods.map(p => (p.unidade || 'UN')).concat(docs.flatMap(d => d.itens.map(i => 'UN'))))];
+  // 0190/0200: os produtos que aparecem nas vendas do período, um por código (o PVA recusa 0200 repetido; a coluna
+  // 'descricao' que a consulta pedia não existe em oct_produtos — o 0200 saía vazio)
+  const usados = new Map();
+  docs.forEach(d => d.itens.forEach(i => { if (i.prod && i.prod.codigo != null && !usados.has(String(i.prod.codigo))) usados.set(String(i.prod.codigo), i.prod); }));
+  const unidades = [...new Set([...usados.values()].map(x => (x.unidade || 'UN').toUpperCase()).concat(['UN']))];
   unidades.forEach(u => L(`|0190|${u}|${u}|`));
-  // 0200: produtos (com 0206 quando houver cod_anp)
-  prods.forEach(p => {
-    L(`|0200|${p.codigo}|${(p.descricao || '').substring(0, 100)}|||${p.unidade || 'UN'}|00|${p.ncm || ''}||||0|`);
-    if (p.cod_anp) L(`|0206|${p.cod_anp}|`);
+  usados.forEach(x => {
+    L(`|0200|${x.codigo}|${_sfTxt(x.nome || '').substring(0, 100)}|||${(x.unidade || 'UN').toUpperCase()}|00|${String(x.ncm || '').replace(/\D/g, '')}||||0|`);
+    if (x.cod_anp) L(`|0206|${x.cod_anp}|`);
   });
   L(`|0990|${contarBloco(linhas, '0')}|`);
 
@@ -141,6 +167,7 @@ async function gerarSpedPisCofinsV2() {
   const apuracaoCof = {};
   let receitaMonofasica = 0; // CST 04 (e 06/07/08/09 sem incidência)
 
+  let receitaOutrasCst = 0;  // 05–09: sem incidência mas não monofásica — vai no aviso (o M400 abaixo é só do 04)
   docs.forEach(doc => {
     const vTot = Number(doc.valor_total || 0);
     const emi = spedData(doc.emissao);
@@ -150,32 +177,36 @@ async function gerarSpedPisCofinsV2() {
     const grupos = {};
     (doc.itens || []).forEach(it => {
       const k = chaveC175(it);
-      if (!grupos[k]) grupos[k] = { it, vl: 0 };
+      if (!grupos[k]) grupos[k] = { it, vl: 0, desc: 0 };
       grupos[k].vl += Number(it.valor_total || 0);
+      grupos[k].desc += Number(it.desconto || 0);
     });
-    Object.values(grupos).forEach(({ it, vl }) => {
+    Object.values(grupos).forEach(({ it, vl, desc }) => {
       const cstP = it.cst_pis || '49';
       const cstC = it.cst_cofins || '49';
       const aliqP = Number(it.aliq_pis || 0);
       const aliqC = Number(it.aliq_cofins || 0);
+      const bc = Math.max(0, vl - desc);
       // valor de PIS/COFINS só quando há incidência (CST 01/02); monofásico (04) = 0
       const incideP = ['01', '02'].includes(cstP);
       const incideC = ['01', '02'].includes(cstC);
-      const vPis = incideP ? vl * aliqP / 100 : 0;
-      const vCof = incideC ? vl * aliqC / 100 : 0;
+      const vPis = incideP ? bc * aliqP / 100 : 0;
+      const vCof = incideC ? bc * aliqC / 100 : 0;
       // C175: |C175|CFOP|VL_OPR|VL_DESC|CST_PIS|VL_BC_PIS|ALIQ_PIS|...|VL_PIS|CST_COFINS|VL_BC_COFINS|ALIQ_COFINS|...|VL_COFINS|COD_CTA|INFO|
-      L(`|C175|${it.cfop || ''}|${spedNum(vl)}|0|${cstP}|${spedNum(incideP ? vl : 0)}|${spedNum(aliqP)}|||${spedNum(vPis)}|${cstC}|${spedNum(incideC ? vl : 0)}|${spedNum(aliqC)}|||${spedNum(vCof)}|200000000||`);
+      L(`|C175|${it.cfop || ''}|${spedNum(vl)}|${spedNum(desc)}|${cstP}|${spedNum(incideP ? bc : 0)}|${spedNum(aliqP)}|||${spedNum(vPis)}|${cstC}|${spedNum(incideC ? bc : 0)}|${spedNum(aliqC)}|||${spedNum(vCof)}|200000000||`);
       // acumula apuração
       if (incideP) {
         const a = apuracaoPis[aliqP] || { base: 0, valor: 0 };
-        a.base += vl; a.valor += vPis; apuracaoPis[aliqP] = a;
-      } else { receitaMonofasica += vl; }
+        a.base += bc; a.valor += vPis; apuracaoPis[aliqP] = a;
+      } else if (cstP === '04') { receitaMonofasica += bc; }
+      else if (['05', '06', '07', '08', '09'].includes(cstP)) { receitaOutrasCst += bc; }
       if (incideC) {
         const a = apuracaoCof[aliqC] || { base: 0, valor: 0 };
-        a.base += vl; a.valor += vCof; apuracaoCof[aliqC] = a;
+        a.base += bc; a.valor += vCof; apuracaoCof[aliqC] = a;
       }
     });
   });
+  if (receitaOutrasCst > 0) avisos.push('R$ ' + spedNum(receitaOutrasCst) + ' com CST 05–09 (sem incidência, não monofásica) — o M400/M800 deste gerador só leva o CST 04; o contador complementa.');
   L(`|C990|${linhas.length - cStart + 1}|`);
 
   // ---- BLOCOS D, F, I (vazios nesta fase) ----
@@ -233,6 +264,13 @@ async function gerarSpedPisCofinsV2() {
     + ' | PIS: R$ ' + spedNum(totPis) + ' | COFINS: R$ ' + spedNum(totCof)
     + ' | Monofásica: R$ ' + spedNum(receitaMonofasica) + '</div></div>'
     + '<button onclick="downloadSped(\'pis\')" class="btn-salvar">Baixar TXT</button></div>'
+    + (avisos.length
+      ? '<div style="background:#2a2410;border:1px solid #b45309;border-radius:8px;padding:12px;margin-bottom:12px">'
+        + '<strong style="color:#fbbf24;font-size:0.85rem">Avisos (' + avisos.length + '):</strong>'
+        + '<ul style="color:#fed7aa;font-size:0.8rem;margin:6px 0 0 18px">' + avisos.map(x => '<li>' + escHtml(x) + '</li>').join('') + '</ul></div>'
+      : '')
+    + '<div style="background:#1a2a1a;border:1px solid #2a5a3a;border-radius:8px;padding:10px;margin-bottom:12px;color:#7be0a0;font-size:0.8rem">'
+    + 'Este arquivo NÃO vai direto para a Receita: envie ao CONTADOR para validar no PVA da EFD-Contribuições.</div>'
     + '<div style="background:#0a0c12;border-radius:6px;padding:12px;font-family:monospace;font-size:0.72rem;color:#4caf50;max-height:400px;overflow-y:auto;line-height:1.6">'
     + linhas.slice(0, 100).map((l, i) => '<div style="border-bottom:1px solid #0f1117;padding:2px 0"><span style="color:#555;margin-right:8px;min-width:40px;display:inline-block">' + (i + 1) + '</span>' + escHtml(l) + '</div>').join('')
     + (linhas.length > 100 ? '<div style="color:#555;padding:8px 0">... mais ' + (linhas.length - 100) + ' registros (baixe o TXT)</div>' : '')

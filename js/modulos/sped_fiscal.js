@@ -58,7 +58,33 @@ function _sfTxt(s) {
   return String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "")
     .replace(/\|/g, " ").replace(/[\r\n]+/g, " ").trim();
 }
+// texto com o tamanho máximo do leiaute (PVA: "Tamanho do campo inválido" — endereço da ALE no 0150 com 72, Florestal 10/2026)
+function _sfCorta(s, n) { return _sfTxt(s).slice(0, n).trim(); }
+// COD_VER do 0000 pelo ano do período: 020 vale de 01/2026 (Guia Prático 3.1.9 — e cria o campo 11 do 1310)
+function _sfVerDoAno(ano) { return ano >= 2026 ? "020" : ano === 2025 ? "019" : ano === 2024 ? "018" : "017"; }
 function _sfDia(iso) { return String(iso || "").slice(0, 10); }
+// NF-e (modelo 55) do Faturar / Cupom → NF-e: o oct_nfce não guarda os itens, só o XML autorizado. Lê itens (mesmo formato
+// dos cupons importados: cfop, CST de ICMS/PIS/COFINS) e o destinatário — sem DOMParser, para rodar também fora do navegador.
+function _spedXmlTag(x, t) { const m = String(x || "").match(new RegExp("<" + t + ">([^<]*)</" + t + ">")); return m ? m[1] : ""; }
+function _spedNfeDoXml(xml) {
+  const x = String(xml || "");
+  const bloco = (s, t) => (String(s).match(new RegExp("<" + t + ">[\\s\\S]*?</" + t + ">")) || [""])[0];
+  const imp = (det, g) => { const b = bloco(det, g); return { cst: _spedXmlTag(b, "CST") || _spedXmlTag(b, "CSOSN"), aliq: Number(_spedXmlTag(b, "p" + g) || 0) }; };
+  const itens = (x.match(/<det [\s\S]*?<\/det>/g) || []).map(det => {
+    const prod = bloco(det, "prod"), icms = imp(det, "ICMS"), pis = imp(det, "PIS"), cof = imp(det, "COFINS");
+    const cfop = _spedXmlTag(prod, "CFOP");
+    return { codigo: _spedXmlTag(prod, "cProd"), desc: _spedXmlTag(prod, "xProd"), ncm: _spedXmlTag(prod, "NCM"), cfop,
+      unidade: _spedXmlTag(prod, "uCom"), qtd: Number(_spedXmlTag(prod, "qCom") || 0), total: Number(_spedXmlTag(prod, "vProd") || 0),
+      desconto: Number(_spedXmlTag(prod, "vDesc") || 0), cod_anp: _spedXmlTag(prod, "cProdANP"),
+      cst_pis: pis.cst, aliq_pis: pis.aliq, cst_cofins: cof.cst, aliq_cofins: cof.aliq,
+      fiscal: { cfop, origem: _spedXmlTag(bloco(det, "ICMS"), "orig") || "0", cst_icms: icms.cst, aliq_icms: icms.aliq } };
+  });
+  const dest = bloco(x, "dest");
+  const doc = _spedXmlTag(dest, "CNPJ") || _spedXmlTag(dest, "CPF");
+  return { itens, dest: doc ? { documento: doc, nome: _spedXmlTag(dest, "xNome"), ie: _spedXmlTag(dest, "IE"), cod_mun: _spedXmlTag(dest, "cMun"),
+    endereco: [_spedXmlTag(dest, "xLgr"), _spedXmlTag(dest, "nro")].filter(Boolean).join(", "), bairro: _spedXmlTag(dest, "xBairro"),
+    cidade: _spedXmlTag(dest, "xMun"), uf: _spedXmlTag(dest, "UF") } : null };
+}
 
 // CST com origem na frente (3 dígitos): origem "0" + cst "61" -> "061"
 function _sfCst(fiscal) {
@@ -111,17 +137,59 @@ function spedFiscalMontar(d) {
   const ctd = cfg.contador || {};
   const dtIni = _sfData(d.dtIni), dtFim = _sfData(d.dtFim);
 
+  // ENTRADA NO DIA DA DESCARGA (04/11/2026, Florestal out/2026: NF 382644 de gasolina emitida 19/10 e descarregada 20/10
+  // 05:55 — com a entrada em 19/10 o 1300 do dia 20 ficava com estoque escritural NEGATIVO, que o PVA recusa). Quando a
+  // sonda casou a descarga com a nota (oct_nfe_descarga), o DT_E_S do C100 e o VOL_ENTR do 1300 vão para o dia da
+  // descarga — o mesmo dia das medições (o do texto). Fora do período, fica a data da nota e avisa.
+  {
+    const diaDesc = new Map();
+    (d.descargas || []).forEach(x => String(x.nf_chaves || "").split(/[^0-9]+/).filter(c => c.length === 44)
+      .forEach(c => { if (!diaDesc.has(c)) diaDesc.set(c, _sfDia(x.descarga_ini)); }));
+    // o casamento da sonda erra às vezes (NF de 05/10 casada com a descarga de 07/10, que é a da NF de 07/10): só muda
+    // quando a descarga é 1–2 dias DEPOIS da nota e nenhuma outra nota do mesmo combustível é do dia da descarga
+    const combDia = new Set();
+    (d.entradas || []).forEach(n => (n.itens || []).forEach(it => { if (it.cod_anp && it.produto_id) combDia.add(it.produto_id + "|" + _sfDia(n.entrada || n.emissao)); }));
+    const diasEntre = (a, b) => Math.round((new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 86400000);
+    (d.entradas || []).forEach(n => {
+      const dd = diaDesc.get(String(n.chave_nfe || "")), antes = _sfDia(n.entrada || n.emissao);
+      if (!dd || dd === antes) return;
+      const outra = (n.itens || []).some(it => it.cod_anp && it.produto_id && combDia.has(it.produto_id + "|" + dd));
+      if (outra || diasEntre(antes, dd) < 1 || diasEntre(antes, dd) > 2) return;
+      if (dd >= d.dtIni && dd <= d.dtFim) {
+        n.entrada = dd;
+        A.push(`Entrada da NF ${n.numero}: no dia da descarga (${dd.split("-").reverse().join("/")}), não em ${antes.split("-").reverse().join("/")} — é o dia em que o combustível entrou no tanque (1300 e DT_E_S).`);
+      } else A.push(`NF ${n.numero}: descarga em ${dd.split("-").reverse().join("/")}, fora do período — ficou a data da nota (${antes}).`);
+    });
+    // descarga que a sonda não casou com nota: só avisa se não há NF de entrada daquele tanque em até 2 dias (no AC o
+    // casamento falha em várias e a nota existe — o aviso viraria ruído)
+    const tqNum = new Map((d.tanques || []).map(t => [t.id, t.numero]));
+    const tqDoProd = new Map((d.produtos || []).filter(x => x.tanque_id).map(x => [x.id, tqNum.get(x.tanque_id)]));
+    const entTq = [];
+    (d.entradas || []).forEach(n => (n.itens || []).forEach(it => { const t = tqDoProd.get(it.produto_id); if (t != null) entTq.push({ t, dia: _sfDia(n.entrada || n.emissao) }); }));
+    (d.descargas || []).filter(x => !/\d{44}/.test(String(x.nf_chaves || "")) && Number(x.volume_salto || 0) >= 500).forEach(x => {
+      const dia = _sfDia(x.descarga_ini);
+      if (entTq.some(e => String(e.t) === String(x.tanque_numero) && Math.abs(diasEntre(e.dia, dia)) <= 2)) return;
+      A.push(`Descarga de ${Math.round(Number(x.volume_salto))} L de ${x.combustivel || "combustível"} no tanque ${x.tanque_numero} em `
+        + `${dia.split("-").reverse().join("/")} SEM NOTA FISCAL de entrada no Octano (nem nos 2 dias em volta) — sem ela o 1300 desse dia fica com estoque negativo ou ganho.`);
+    });
+  }
+
   // ---------- BLOCO 0 ----------
   const cnpj = String(emp.cnpj || "").replace(/\D/g, "");
   const ie = String(emp.ie || "").replace(/\D/g, "");
   const codMun = String(cfg.cod_mun || emp.c_mun || "").replace(/\D/g, "");
   if (!codMun) A.push("Sem código IBGE do município (sped_config.cod_mun) — o PVA vai recusar o 0000.");
   if (!ctd.nome) A.push("Dados do CONTADOR não preenchidos (registro 0100) — preencha e salve na tela.");
-  // perfil B = o do posto no gabarito; COD_VER na tela (018/019/020)
-  L.push(`|0000|${d.codVer || "019"}|0|${dtIni}|${dtFim}|${_sfTxt(emp.nome)}|${cnpj}||${emp.uf || "MG"}|${ie}|${codMun}|||B|1|`);
+  // perfil B = o do posto no gabarito; COD_VER pelo ano do período (a tela pode forçar 018/019/020)
+  const codVer = d.codVer || _sfVerDoAno(Number(String(d.dtIni || "").slice(0, 4)));
+  L.push(`|0000|${codVer}|0|${dtIni}|${dtFim}|${_sfTxt(emp.nome)}|${cnpj}||${emp.uf || "MG"}|${ie}|${codMun}|||B|1|`);
+  if (codVer >= "020") {
+    const semCap = (d.tanques || []).filter(t => !(Number(t.capacidade) > 0)).map(t => t.numero);
+    if (semCap.length) A.push("Tanque(s) " + semCap.join(", ") + " sem capacidade no cadastro — o campo 11 do 1310 (CAP_TANQUE) é obrigatório no leiaute 020; preencha em Tanques.");
+  }
   L.push("|0001|0|");
-  L.push(`|0005|${_sfTxt(emp.nome_fantasia || emp.nome)}|${String(emp.cep || "").replace(/\D/g, "")}|${_sfTxt(emp.endereco || "")}|S/N||${_sfTxt(emp.bairro || "CENTRO")}|${String(emp.telefone || "").replace(/\D/g, "")}||${_sfTxt(emp.email || "")}|`);
-  L.push(`|0100|${_sfTxt(ctd.nome)}|${String(ctd.cpf || "").replace(/\D/g, "")}|${_sfTxt(ctd.crc || "")}|${String(ctd.cnpj || "").replace(/\D/g, "")}|${String(ctd.cep || "").replace(/\D/g, "")}|${_sfTxt(ctd.endereco || "")}|${_sfTxt(ctd.numero || "")}||${_sfTxt(ctd.bairro || "")}|${String(ctd.fone || "").replace(/\D/g, "")}||${_sfTxt(ctd.email || "")}|${String(ctd.cod_mun || codMun).replace(/\D/g, "")}|`);
+  L.push(`|0005|${_sfCorta(emp.nome_fantasia || emp.nome, 60)}|${String(emp.cep || "").replace(/\D/g, "")}|${_sfCorta(emp.endereco || "", 60)}|S/N||${_sfCorta(emp.bairro || "CENTRO", 60)}|${String(emp.telefone || "").replace(/\D/g, "")}||${_sfTxt(emp.email || "")}|`);
+  L.push(`|0100|${_sfCorta(ctd.nome, 100)}|${String(ctd.cpf || "").replace(/\D/g, "")}|${_sfTxt(ctd.crc || "")}|${String(ctd.cnpj || "").replace(/\D/g, "")}|${String(ctd.cep || "").replace(/\D/g, "")}|${_sfCorta(ctd.endereco || "", 60)}|${_sfCorta(ctd.numero || "", 10)}||${_sfCorta(ctd.bairro || "", 60)}|${String(ctd.fone || "").replace(/\D/g, "")}||${_sfTxt(ctd.email || "")}|${String(ctd.cod_mun || codMun).replace(/\D/g, "")}|`);
 
   // participantes = fornecedores das entradas do período
   const parts = new Map();      // cod_part -> pessoa
@@ -138,9 +206,19 @@ function spedFiscalMontar(d) {
     if (!doc) { A.push(`CT-e ${c.numero || "?"} sem CNPJ da transportadora — ficará sem participante.`); return; }
     if (!parts.has(doc)) parts.set(doc, _sfCteParticipante(c));
   });
+  // + os destinatários das NF-e de saída (modelo 55) — os itens delas vêm do XML (04/11/2026)
+  (d.nfces || []).forEach(n => {
+    if (String(n.modelo || "65") !== "55") return;
+    n._nfe = _spedNfeDoXml(n.xml_autorizado);
+    if (!(n.itens || []).length) n.itens = n._nfe.itens;
+    const p = n._nfe.dest;
+    if (!p) { A.push(`NF-e ${n.numero || "?"} sem destinatário no XML — ficará sem participante.`); return; }
+    const doc = String(p.documento || "").replace(/\D/g, "");
+    if (!parts.has(doc)) parts.set(doc, p);
+  });
   parts.forEach((p, doc) => {
     const ehCnpj = doc.length === 14;
-    L.push(`|0150|F${doc}|${_sfTxt(p.nome)}|1058|${ehCnpj ? doc : ""}|${ehCnpj ? "" : doc}|${String(p.ie || "").replace(/\D/g, "")}|${String(p.cod_mun || "").replace(/\D/g, "") || codMun}||${_sfTxt(p.endereco || p.cidade || "")}|||${_sfTxt(p.bairro || "")}|`);
+    L.push(`|0150|F${doc}|${_sfCorta(p.nome, 100)}|1058|${ehCnpj ? doc : ""}|${ehCnpj ? "" : doc}|${String(p.ie || "").replace(/\D/g, "")}|${String(p.cod_mun || "").replace(/\D/g, "") || codMun}||${_sfCorta(p.endereco || p.cidade || "", 60)}|||${_sfCorta(p.bairro || "", 60)}|`);
   });
 
   // produtos MOVIMENTADOS no período (saídas por produto_id; entradas idem)
@@ -181,13 +259,16 @@ function spedFiscalMontar(d) {
   const creditados = [];   // p/ o contador conferir item a item o que creditou
   let vSaidas = 0, vEntradas = 0, nSaidas = 0, nCancel = 0;
 
-  // SAÍDAS: uma C100 por NFC-e; canceladas em forma curta (só identificação)
+  // SAÍDAS: uma C100 por NFC-e (e por NF-e modelo 55, com o destinatário); canceladas em forma curta (só identificação)
   (d.nfces || []).forEach(n => {
     const dt = _sfData(n.data_emissao || n.criado_em);
     const cancel = String(n.status || "") === "cancelada";
+    const mod = String(n.modelo || "65") === "55" ? "55" : "65";
+    const destDoc = mod === "55" && n._nfe && n._nfe.dest ? String(n._nfe.dest.documento || "").replace(/\D/g, "") : "";
+    const part = destDoc ? "F" + destDoc : "";
     if (cancel) {
       nCancel++;
-      L.push(`|C100|1|0||65|02|${n.serie || 1}|${n.numero}|${n.chave_nfe || ""}|${dt}||||||||||||||||||||`);
+      L.push(`|C100|1|0||${mod}|02|${n.serie || (mod === "55" ? 0 : 1)}|${n.numero}|${n.chave_nfe || ""}|${dt}||||||||||||||||||||`);
       return;
     }
     nSaidas++;
@@ -211,7 +292,7 @@ function spedFiscalMontar(d) {
     let bc = 0, icms = 0;
     grupos.forEach(g => { bc += g.bc; icms += g.icms; });
     debitos += icms;
-    L.push(`|C100|1|0||65|00|${n.serie || 1}|${n.numero}|${n.chave_nfe || ""}|${dt}|${dt}|${_sfNum(vDoc)}|0|0|0|${_sfNum(vDoc)}|9|0|0|0|${_sfNum(bc)}|${_sfNum(icms)}|0|0|0|0|0|0|0|`);
+    L.push(`|C100|1|0|${part}|${mod}|00|${n.serie || (mod === "55" ? 0 : 1)}|${n.numero}|${n.chave_nfe || ""}|${dt}|${dt}|${_sfNum(vDoc)}|0|0|0|${_sfNum(vDoc)}|9|0|0|0|${_sfNum(bc)}|${_sfNum(icms)}|0|0|0|0|0|0|0|`);
     grupos.forEach(g => L.push(`|C190|${g.cst}|${g.cfop}|${_sfNum(g.aliq)}|${_sfNum(g.vl)}|${_sfNum(g.bc)}|${_sfNum(g.icms)}|0|0|0|0||`));
   });
 
@@ -512,7 +593,9 @@ function spedFiscalMontar(d) {
       L.push(`|1300|${g.produto.codigo}|${_sfData(dia)}|${_sfNum(abert, 3)}|${_sfNum(entr, 3)}|${_sfNum(disp, 3)}|${_sfNum(said, 3)}|${_sfNum(escr, 3)}|${_sfNum(perda, 3)}|${_sfNum(ganho, 3)}|${_sfNum(fech, 3)}|`);
       porTanque.forEach(pt => {
         const dispT = pt.ab + pt.e, escrT = dispT - pt.s;
-        L.push(`|1310|${pt.t.numero}|${_sfNum(pt.ab, 3)}|${_sfNum(pt.e, 3)}|${_sfNum(dispT, 3)}|${_sfNum(pt.s, 3)}|${_sfNum(escrT, 3)}|${_sfNum(Math.max(0, escrT - pt.fc), 3)}|${_sfNum(Math.max(0, pt.fc - escrT), 3)}|${_sfNum(pt.fc, 3)}|`);
+        // campo 11 CAP_TANQUE (capacidade em litros, inteiro) a partir do leiaute 020 / 01-2026
+        const cap = codVer >= "020" ? `${Math.round(Number(pt.t.capacidade || 0))}|` : "";
+        L.push(`|1310|${pt.t.numero}|${_sfNum(pt.ab, 3)}|${_sfNum(pt.e, 3)}|${_sfNum(dispT, 3)}|${_sfNum(pt.s, 3)}|${_sfNum(escrT, 3)}|${_sfNum(Math.max(0, escrT - pt.fc), 3)}|${_sfNum(Math.max(0, pt.fc - escrT), 3)}|${_sfNum(pt.fc, 3)}|${cap}`);
         (bicosPorTanque.get(pt.t.id) || []).forEach(b => {
           const kb = vendasBico.get(b.numero + "|" + dia) || { vendas: 0, aferi: 0, encIni: null, encFim: null };
           L.push(`|1320|${b.numero}||||||${_sfNum(kb.encFim || 0, 3)}|${_sfNum(kb.encIni || 0, 3)}|${_sfNum(kb.aferi, 3)}|${_sfNum(kb.vendas, 3)}|`);
@@ -581,7 +664,7 @@ function spedFiscalMontar(d) {
   L.forEach(l => {
     const p = l.split("|");
     const t = p[1], n = p.length - 3;
-    const esperado = SPED_CAMPOS_REF[t];
+    const esperado = t === "1310" && codVer >= "020" ? 10 : SPED_CAMPOS_REF[t];   // 020 criou o CAP_TANQUE
     if (esperado != null && n !== esperado)
       errCampos.set(t, `${t}: gerado com ${n} campo(s), o arquivo real tem ${esperado}`);
   });

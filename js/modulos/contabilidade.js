@@ -172,7 +172,8 @@ async function renderSpedFiscal(empresaId, empresa) {
     + ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m,i) => '<option value="'+(i+1)+'" '+(i+1===mesAtual?'selected':'')+'>'+m+'</option>').join('')
     + '</select>'
     + '<select id="sped-ver" title="Versão do leiaute (COD_VER do 0000) — confirme com o contador" style="padding:8px 12px;border-radius:6px;border:1px solid #2a2d3e;background:#13151f;color:#e0e0e0">'
-    + ['018','019','020'].map(v => '<option value="'+v+'" '+(v==='019'?'selected':'')+'>leiaute '+v+'</option>').join('')
+    + '<option value="auto" selected>leiaute pelo período</option>'
+    + ['018','019','020'].map(v => '<option value="'+v+'">leiaute '+v+'</option>').join('')
     + '</select>'
     + '<button onclick="gerarSpedFiscal()" class="btn-salvar">Gerar SPED</button>'
     + '</div></div>'
@@ -220,7 +221,9 @@ async function gerarSpedFiscal() {
   // ============================================================
   const ano = parseInt(document.getElementById('sped-ano').value);
   const mes = parseInt(document.getElementById('sped-mes').value);
-  const codVer = document.getElementById('sped-ver').value;
+  // COD_VER pelo ano (020 a partir de 01/2026 — PVA recusou o 019 no out/2026 do Florestal); a tela ainda pode forçar
+  const verTela = document.getElementById('sped-ver').value;
+  const codVer = verTela && verTela !== 'auto' ? verTela : _sfVerDoAno(ano);
   const empresaId = window._contab_empresa_id;
   const empresa = window._contab_empresa;
   const div = document.getElementById('sped-fiscal-preview');
@@ -230,23 +233,20 @@ async function gerarSpedFiscal() {
   // dia anterior tambem: abre o estoque do 1o dia do 1300
   const dtAntes = new Date(new Date(dtIni + 'T12:00:00').getTime() - 86400000).toISOString().slice(0, 10);
   try {
-    const [nfces, entradas, produtos, tanques, bicos, medicoes, abastecimentos, cfgRow, ctes] = await Promise.all([
-      _spedTudo(q => sb.from('oct_nfce')
-        .select('numero,serie,chave_nfe,status,valor_total,data_emissao,criado_em,itens')
-        .eq('empresa_id', empresaId).gte('data_emissao', dtIni).lte('data_emissao', dtFim + 'T23:59:59')
-        .order('data_emissao').range(q * 1000, q * 1000 + 999)),
+    let [nfces, entradas, produtos, tanques, bicos, medicoes, abastecimentos, cfgRow, ctes] = await Promise.all([
+      // só PRODUÇÃO e o mês no horário de Brasília (04/11/2026): a homologação não existe para o fisco (out/2026 levava
+      // 3.570 do Florestal e deixava de fora os cupons do TecnoX), e o corte em meia-noite UTC jogava as 21h–23h59 do
+      // último dia para o mês seguinte
+      _spedTudo(q => _spedNfceDoMes(q, empresaId, dtIni, dtFim, 'numero,serie,modelo,chave_nfe,status,valor_total,data_emissao,criado_em,itens')),
       sb.from('oct_nfe_entrada')
         .select('numero,serie,chave_nfe,emissao,entrada,valor_total,valor_desconto,valor_frete,valor_icms,valor_pis,valor_cofins,fornecedor_id,oct_pessoas(nome,documento,cidade,uf,endereco,bairro),oct_nfe_entrada_itens(*)')
         .eq('empresa_id', empresaId).gte('emissao', dtIni).lte('emissao', dtFim)
         .then(r => (r.data || []).map(n => Object.assign({}, n, { fornecedor: n.oct_pessoas, itens: n.oct_nfe_entrada_itens }))),
       sb.from('oct_produtos').select('id,codigo,nome,unidade,ncm,cest,cod_anp,aliq_icms,tanque_id')
         .eq('empresa_id', empresaId).then(r => r.data || []),
-      sb.from('oct_tanques').select('id,numero').eq('empresa_id', empresaId).then(r => r.data || []),
+      sb.from('oct_tanques').select('id,numero,capacidade').eq('empresa_id', empresaId).then(r => r.data || []),
       sb.from('oct_bicos').select('numero,tanque_id').eq('empresa_id', empresaId).then(r => r.data || []),
-      _spedTudo(q => sb.from('oct_medicoes')
-        .select('tanque_numero,volume,medido_em').eq('empresa_id', empresaId)
-        .gte('medido_em', dtAntes).lte('medido_em', dtFim + 'T23:59:59')
-        .order('medido_em').range(q * 1000, q * 1000 + 999)),
+      Promise.resolve([]),   // medições: só a última de cada tanque por dia, logo abaixo (precisa dos tanques)
       _spedTudo(q => sb.from('oct_pdv_abastecimentos')
         .select('tanque_id,bico,litros,tipo,data_abast,venc_ini,venc_fin').eq('empresa_id', empresaId)
         .gte('data_abast', dtIni).lte('data_abast', dtFim + 'T23:59:59')
@@ -262,11 +262,20 @@ async function gerarSpedFiscal() {
     ]);
     const cfg = (cfgRow && cfgRow.sped_config) || {};
     _spedPreencherCfg(cfg);
+    medicoes = await _spedMedicoesDoMes(empresaId, tanques, dtAntes, dtFim);
+    // descargas da sonda casadas com as notas: a entrada vai para o dia da descarga (sped_fiscal.js)
+    const descargas = await sb.from('oct_nfe_descarga').select('tanque_numero,combustivel,descarga_ini,volume_salto,nf_chaves,status')
+      .eq('empresa_id', empresaId).gte('descarga_ini', dtAntes).lte('descarga_ini', dtFim + 'T23:59:59.999')
+      .then(r => r.data || [], () => []);
+    const hom = await _spedHomologacaoDoMes(empresaId, dtIni, dtFim);
+    await _spedXmlDasNfe(empresaId, nfces);
     const r = spedFiscalMontar({
       codVer: codVer, dtIni: dtIni, dtFim: dtFim, empresa: empresa, cfg: cfg,
       nfces: nfces, entradas: entradas, produtos: produtos, tanques: tanques,
-      bicos: bicos, medicoes: medicoes, abastecimentos: abastecimentos, ctes: ctes,
+      bicos: bicos, medicoes: medicoes, abastecimentos: abastecimentos, ctes: ctes, descargas: descargas,
     });
+    if (hom.n) r.avisos.unshift(hom.n + ' NFC-e de HOMOLOGAÇÃO no período (R$ ' + hom.v.toFixed(2) + ') ficaram fora: não têm valor fiscal. '
+      + 'As vendas desses dias precisam de documento válido — decisão do contador.');
     window._spedFiscalTxt = r.linhas.join('\r\n') + '\r\n';
     window._spedFiscalNome = 'SPED_FISCAL_' + ano + '_' + String(mes).padStart(2, '0') + '.txt';
     const rs = r.resumo;
@@ -299,6 +308,47 @@ async function gerarSpedFiscal() {
 }
 
 // paginacao do PostgREST (corta em 1000): busca ate acabar
+// NFC-e do mês para os SPEDs: só produção (a homologação fica fora) e o mês em horário de Brasília (04/11/2026)
+function _spedNfceDoMes(p, empresaId, dtIni, dtFim, campos) {
+  return sb.from('oct_nfce').select(campos).eq('empresa_id', empresaId)
+    .or('ambiente.is.null,ambiente.neq.homologacao')
+    .gte('data_emissao', dtIni + 'T00:00:00-03:00').lte('data_emissao', dtFim + 'T23:59:59.999-03:00')
+    .order('data_emissao').order('numero').range(p * 1000, p * 1000 + 999);
+}
+// o XML só das NF-e (modelo 55): é de onde saem os itens e o destinatário (o das NFC-e não é preciso e pesaria dezenas de MB)
+async function _spedXmlDasNfe(empresaId, notas) {
+  const ch = (notas || []).filter(n => String(n.modelo) === '55' && n.chave_nfe).map(n => n.chave_nfe);
+  for (let i = 0; i < ch.length; i += 50) {
+    const { data } = await sb.from('oct_nfce').select('chave_nfe,xml_autorizado').eq('empresa_id', empresaId).in('chave_nfe', ch.slice(i, i + 50));
+    (data || []).forEach(r => { const n = notas.find(x => x.chave_nfe === r.chave_nfe); if (n) n.xml_autorizado = r.xml_autorizado; });
+  }
+}
+// MEDIÇÕES DO 1300/1310 (04/11/2026, Florestal out/2026): a sonda grava 1 leitura por minuto (~43 mil por tanque no mês)
+// e a busca de tudo parava em 30 mil linhas (_spedTudo) — do dia 6 em diante nenhum tanque tinha medição, o fechamento caía
+// no escritural e o estoque ficava NEGATIVO (rejeição no PVA). O gerador só usa a ÚLTIMA leitura de cada tanque no dia:
+// uma consulta por tanque×dia, pelo índice (empresa_id, tanque_numero, medido_em desc). Mesmo dia de antes (o do texto).
+async function _spedMedicoesDoMes(empresaId, tanques, dtAntes, dtFim) {
+  const dias = [];
+  for (let x = new Date(dtAntes + 'T12:00:00'); x.toISOString().slice(0, 10) <= dtFim; x.setDate(x.getDate() + 1)) dias.push(x.toISOString().slice(0, 10));
+  const pedidos = [];
+  (tanques || []).forEach(t => dias.forEach(dia => pedidos.push(() => sb.from('oct_medicoes')
+    .select('tanque_numero,volume,medido_em').eq('empresa_id', empresaId).eq('tanque_numero', t.numero)
+    .gte('medido_em', dia).lte('medido_em', dia + 'T23:59:59.999').order('medido_em', { ascending: false }).limit(1)
+    .then(r => (r.data || [])[0] || null, () => null))));
+  const out = [];
+  for (let i = 0; i < pedidos.length; i += 16) {
+    (await Promise.all(pedidos.slice(i, i + 16).map(f => f()))).forEach(m => { if (m) out.push(m); });
+  }
+  return out;
+}
+// quantas NFC-e de homologação o mês tem (vão no aviso, não no arquivo)
+async function _spedHomologacaoDoMes(empresaId, dtIni, dtFim) {
+  const rows = await _spedTudo(p => sb.from('oct_nfce').select('valor_total').eq('empresa_id', empresaId)
+    .eq('ambiente', 'homologacao').eq('status', 'autorizada')
+    .gte('data_emissao', dtIni + 'T00:00:00-03:00').lte('data_emissao', dtFim + 'T23:59:59.999-03:00')
+    .range(p * 1000, p * 1000 + 999));
+  return { n: rows.length, v: rows.reduce((t, r) => t + Number(r.valor_total || 0), 0) };
+}
 async function _spedTudo(consulta) {
   const tudo = [];
   for (let p = 0; p < 30; p++) {
