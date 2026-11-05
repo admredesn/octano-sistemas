@@ -3195,11 +3195,25 @@ async function fcNodeDetalhe(tipo) {
   if (cfg.caixa && cfg.caixa.length) {
     const _depDe = m => ((window._fcConf || {})['caixa:' + m.id] || {}).ajuste && ((window._fcConf || {})['caixa:' + m.id] || {}).ajuste.deposito;
     // sangria que virou depósito (🏦): some do balão de sangria e aparece no de Depósito em Conta
-    const ms = (rC.data || []).filter(m => {
+    let ms = (rC.data || []).filter(m => {
       const ehSangria = String(m.tipo || '').toLowerCase().includes('sangria');
       if (ehSangria && _depDe(m)) return tipo === 'deposito';
       return cfg.caixa.some(p => String(m.tipo || '').toLowerCase().includes(p));
     });
+    // RECEITAS (05/11/2026, Ronan: "não precisa aparecer em receitas porque a informação já aparece em títulos recebidos"):
+    // o "Recebimento de título/fatura — CLIENTE" que o PDV lança no caixa quando o título é pago em DINHEIRO (receber_titulo.js)
+    // está em Títulos Recebidos; aqui sai — na mesma medida em que o painel tira da linha Receitas (receita_titulo).
+    // Continua no esperado da gaveta (Conferência de Caixa — dinheiro), porque o dinheiro está lá.
+    let recTitOcultos = 0;
+    if (tipo === 'receita') {
+      let resto = Number(((cache.porTurno || {})[turnoId] || {}).receita_titulo || 0) + 0.005;
+      ms = ms.filter(m => {
+        if (!/^recebimento de (t[ií]tulo|fatura)/i.test(String(m.descricao || ''))) return true;
+        const v = Number(m.valor || 0);
+        if (v <= resto) { resto -= v; recTitOcultos++; return false; }
+        return true;
+      });
+    }
     // sangria automática do cofre (TecnoX) em turno com cofre lido pelo Octano: é o mesmo
     // depósito da lista de baixo — aparece, com o aviso, e não desconta do esperado
     const cofreNoContado = Number((((cache.porTurno || {})[turnoId]) || {}).receb_ext_cofre || 0) > 0.009;
@@ -3219,6 +3233,7 @@ async function fcNodeDetalhe(tipo) {
       ? tab(['', 'Data/Hora', 'Descrição', 'Forma', 'Valor', ''], linhas,
             `<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(total)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum lançamento neste caixa.</p>');
+    if (recTitOcultos) secoes.push(`<p style="padding:4px 8px;color:#6b7688;font-size:0.74rem">Recebimento de título em dinheiro (${recTitOcultos}) não aparece aqui: está em <b>Títulos Recebidos</b>. O dinheiro dele entra na conferência da gaveta.</p>`);
   }
 
   // (18/08 — pedido Ronan) a lista de transações da MAQUININHA saiu deste
