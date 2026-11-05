@@ -2865,8 +2865,30 @@ async function fcNodeDetalhe(tipo) {
     return true;
   });
   rC.data = _apl(rC.data, 'caixa');
+  // MESMA RÉGUA DA TELA (05/11/2026, Ronan — Florestal caixa 1200, 13/10): o balão cortava os recebimentos pela janela
+  // exata do turno e a tela usa a régua do vão (_turnoDeposito / _turnoFila). O Estevão fechou às 12:58 e depositou mais
+  // 204,00 no cofre às 13:01, sem venda no meio (depósito de fechamento): a linha "Dinheiro (sangria / cofre)" mostrava
+  // 1.804,00 e o balão listava 1.600,00. Recebimento que a tela já pôs num turno segue esse turno; o resto, a janela.
+  const _turnoDoReceb = {};
+  Object.keys(cache.porTurno || {}).forEach(tid => {
+    const dT = cache.porTurno[tid] || {};
+    (dT.receb_ext || []).forEach(r => { _turnoDoReceb[r.id] = tid; });
+    (dT.sangrias_lst || []).forEach(r => { _turnoDoReceb[r.id] = tid; });
+    (dT.sangrias_dep || []).forEach(s => { if (String(s.ref || '').indexOf('receb:') === 0) _turnoDoReceb[String(s.ref).slice(6)] = tid; });
+  });
   rR.data = _apl(rR.data, 'receb')
-    .filter(r => { const ts = _fcTsLocal(r.recebido_em); return ts >= iniE && ts <= fimE; });
+    .filter(r => {
+      if (_turnoDoReceb[r.id] != null) return _turnoDoReceb[r.id] === turnoId;
+      const ts = _fcTsLocal(r.recebido_em); return ts >= iniE && ts <= fimE;
+    });
+  const _hm = ms => { const x = new Date(ms); return String(x.getHours()).padStart(2, '0') + ':' + String(x.getMinutes()).padStart(2, '0'); };
+  const _foraDoTurno = r => {
+    const ts = _fcTsLocal(r.recebido_em);
+    if (!ts) return '';
+    if (t.fechado_em && ts > fimE) return ` <span style="color:#f59e0b;font-size:0.72rem">— depois do fechamento (${_hm(fimE)}), sem venda no meio: depósito de fechamento deste caixa</span>`;
+    if (ts < iniE) return ` <span style="color:#f59e0b;font-size:0.72rem">— antes da abertura (${_hm(iniE)}), com o posto já vendendo: conta neste caixa</span>`;
+    return '';
+  };
 
   const secoes = [];
   let listaN = 0, listaTot = 0;   // rodapé: nº de títulos + total do balão
@@ -3162,7 +3184,7 @@ async function fcNodeDetalhe(tipo) {
       const dep = _depDeR(r);
       const depTxt = dep ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 sangria depositada em ${fcEsc(dep.conta_nome || 'conta')}${dep.data ? ' · ' + fcEsc(String(dep.data).split('-').reverse().join('/')) : ''}${_fcDepLote(dep)}</span>` : '';
       return _fcRow('receb', r.id, `<td class="fc-td" style="white-space:nowrap">${_fcDataHoraLocal(r.recebido_em)}</td>
-        <td class="fc-td">${fcEsc(r.origem) || 'cofre'}${depTxt}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
+        <td class="fc-td">${fcEsc(r.origem) || 'cofre'}${depTxt}${_foraDoTurno(r)}</td><td class="fc-td fc-r">${fcMoney(r.valor)}</td>`);
     });
     if (tipo === 'deposito' && !rs.length) { /* nenhuma sangria F7 depositada: sem seção */ } else {
     const total = rs.reduce((s, r) => s + Number(r.valor || 0), 0);
