@@ -2189,7 +2189,13 @@ async function fcDesfazerDeposito() {
 // CARTÃO FROTA também saiu daqui (17/10/2026): a aba 💳 Cartões passou a conferir a frota por venda e mandar para a
 // conta da operadora (com a taxa do contrato) — o total do turno aqui contaria em dobro. Nenhum turno tinha lançado
 // frota (nenhuma forma CARTÃO FROTA tinha conta), então não há linha antiga a apagar.
-const _FC_LIVRO_GRUPOS = { pix: 'PIX', pix_cnpj: 'PIX CNPJ', cheque: 'CHEQUE' };
+// O F.CAIXA NÃO LANÇA MAIS NO LIVRO (05/11/2026, OK do Ronan): o "CAIXA · turno N · PIX" repetia o que o livro já recebe
+// linha a linha — a venda Pix da maquininha (origem 'maquininha', conta PagBank) e o PIX RECEBIDO / liberação de cheque do
+// extrato Sicoob (origem 'extrato'), pela oct_fin_sincronizar_vendas. Florestal: 39.000,62 em dobro na conta PagBank; AC:
+// 26.003,35 (e o Pix da maquininha caindo na conta Sicoob); Pix CNPJ e cheque também. Sem grupos, o ✅ Fechar caixa só
+// apaga o que restar não conciliado deste turno (_fcLivroDoTurno). A sincronização roda no servidor (cron) — não depende
+// de abrir a Conciliação.
+const _FC_LIVRO_GRUPOS = {};
 function _fcGrupoDaForma(f) {
   const c = String((f && f.classificacao) || '');
   if (c === 'cartao_frota') return 'frota';
