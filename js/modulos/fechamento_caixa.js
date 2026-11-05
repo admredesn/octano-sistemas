@@ -3652,7 +3652,10 @@ function _fcTitCasca() {
     + '<div style="padding:12px;border-top:1px solid #2a2d3e;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'
     + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Forma</label>'
     + '<select id="fctit-forma" class="fc-inp2" style="width:150px">'
-    + ['Dinheiro', 'Pix', 'Cart\u00e3o D\u00e9bito', 'Cart\u00e3o Cr\u00e9dito', 'Cheque', 'Dep\u00f3sito']
+    // PIX CNPJ (05/11/2026, Ronan \u2014 Florestal caixas 1206 e 1219): sem esta op\u00e7\u00e3o quem recebia um Pix direto na conta do
+    // CNPJ escolhia "Pix" (vai para a linha Pix da maquininha) e lan\u00e7ava \u00e0 m\u00e3o um "Pix CNPJ" para acertar a conta \u2014 o mesmo
+    // dinheiro contava 2\u00d7 no Recebido e escondia a falta. "Pix CNPJ" cai na linha \ud83c\udfe6 Pix CNPJ (_fcGrupoNome).
+    + ['Dinheiro', 'Pix', 'Pix CNPJ', 'Cart\u00e3o D\u00e9bito', 'Cart\u00e3o Cr\u00e9dito', 'Cheque', 'Dep\u00f3sito']
         .map(function (x) { return '<option>' + x + '</option>'; }).join('')
     + '</select></div>'
     + '<div><label style="display:block;color:#9aa;font-size:0.75rem">Juros (R$)</label>'
