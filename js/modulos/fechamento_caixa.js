@@ -174,7 +174,7 @@ async function fcCarregarDados() {
   // Em 25/08 a consulta de notas a prazo entrou ANTES da pista e o destructuring
   // não acompanhou: `pRes` passou a receber as notas e a VENDA DE COMBUSTÍVEL do
   // Florestal foi a zero. Ao mexer nesta lista, conferir os dois lados.
-  const [vRes, cRes, aggRes, fRes, rRes, vlRes, tRes, npRes, pRes] = await Promise.all([
+  const [vRes, cRes, aggRes, fRes, rRes, vlRes, tRes, npRes, pRes, afRes] = await Promise.all([
     // PAGINADO: o PostgREST corta em 1000 linhas. Um mes do Florestal tem 3.851
     // vendas espelhadas do TecnoX -- sem paginar, os turnos do meio da lista
     // sumiam e a tela mostrava RECEBIMENTO ZERO num turno que tinha tudo
@@ -189,8 +189,11 @@ async function fcCarregarDados() {
     sb.from('oct_pdv_caixa').select('id,turno_id,tipo,forma,valor,descricao').eq('empresa_id', eid).in('turno_id', ids),
     // venda por turno ja' somada no banco (59 linhas em vez de 3.808 vendas). Colunas do valor COBRADO (19/10/2026,
     // SQL-VIEW-VENDA-TURNO-COBRADO.sql): sem o SQL rodado, cai na leitura antiga e a tela segue como antes.
-    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom')
+    // + loja_bruto/desconto/acrescimo (05/11/2026, SQL-VIEW-VENDA-TURNO-DESC-ACR.sql): descontos e acréscimos à parte.
+    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom,loja_bruto,desconto,acrescimo')
       .eq('empresa_id', eid).in('turno_id', ids)
+      .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom')
+        .eq('empresa_id', eid).in('turno_id', ids) : r)
       .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod')
         .eq('empresa_id', eid).in('turno_id', ids) : r),
     // FILA DE TRANSMISSÃO do PDV: abastecimento baixado mas ainda sem cupom.
@@ -225,6 +228,12 @@ async function fcCarregarDados() {
     // litro que saiu da bomba é venda; excluir lançamento afeta só o RECEBIMENTO.
     _fcTudo(() => sb.from('oct_pdv_abastecimentos').select('id,data_abast,litros,valor_total,tipo,status')
       .eq('empresa_id', eid).or('tipo.is.null,tipo.neq.afericao')
+      .gte('data_abast', janIni).lte('data_abast', janFim).order('data_abast')),
+    // AFERIÇÃO (05/11/2026, Ronan: "temos que adicionar um campo de aferição também"): o que a automação registrou
+    // como aferição (tipo 'afericao' ou status 'afericao_autorizada' — as duas que a pista acima deixa de fora).
+    // Entra em "Venda combustíveis" (tudo que a bomba registrou) e sai na linha "Aferição": o total não muda.
+    _fcTudo(() => sb.from('oct_pdv_abastecimentos').select('id,data_abast,litros,valor_total,tipo,status,bico,combustivel,vendedor')
+      .eq('empresa_id', eid).or('tipo.eq.afericao,status.eq.afericao_autorizada')
       .gte('data_abast', janIni).lte('data_abast', janFim).order('data_abast')),
   ]);
   // CONFERÊNCIA/AJUSTES do gerente (15/08 — modelo TecnoX): overlay por cima
@@ -281,6 +290,8 @@ async function fcCarregarDados() {
   const porTurno = {};
   ids.forEach(id => porTurno[id] = {
     venda_total: 0, venda_comb: 0, litros_comb: 0, venda_prod: 0, ajuste_tabela: 0,
+    desconto: 0, acrescimo: 0,   // 05/11/2026: à parte (venda_comb = só a bomba; venda_prod = preço cheio)
+    afericao: 0, afericao_litros: 0, afericao_itens: [],   // 05/11/2026: dentro de venda_comb e subtraída à parte
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0, haver: 0 },
     sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
@@ -394,6 +405,13 @@ async function fcCarregarDados() {
     if (turnosTecnox.has(tid)) t.litros_pista += Number(a.litros || 0);
     t.venda_comb += va; t.litros_comb += Number(a.litros || 0); t.venda_total += va;
   });
+  // AFERIÇÃO (05/11/2026): soma em venda_comb (o que a automação registrou) e na linha Aferição, que subtrai. NÃO entra
+  // em venda_total nem em litros vendidos — o combustível volta para o tanque, não houve venda.
+  ((afRes && afRes.data) || []).forEach(a => {
+    const tid = _turnoFila(a.data_abast); const t = tid && porTurno[tid]; if (!t) return;
+    const va = Number(a.valor_total || 0);
+    t.venda_comb += va; t.afericao += va; t.afericao_litros += Number(a.litros || 0); t.afericao_itens.push(a);
+  });
   // TURNOS COM RECEBIMENTO ESPELHADO DO TECNOX. Nos postos que ainda operam por
   // lá (Florestal, Antônio Carlos) o pagamento real está no cupom do TecnoX, e o
   // sync grava essa venda com status 'tecnox'. A FILA do núcleo também alimenta
@@ -410,7 +428,11 @@ async function fcCarregarDados() {
     const ehComb = (f.bico !== null && f.bico !== undefined && f.bico !== '') && litros > 0;
     // PRODUTO de loja: a fila é o único registro da venda → soma aqui (pago ou
     // não). COMBUSTÍVEL não soma venda: já veio da pista (fonte imutável).
-    if (!ehComb) { t.venda_total += vf; t.venda_prod += vf; }
+    // produto: venda pelo preço cheio; o desconto/acréscimo lançado na fila vai para as linhas próprias (05/11/2026)
+    if (!ehComb) {
+      t.venda_total += vf; t.venda_prod += Number(f.valor || 0);
+      t.desconto += Number(f.desconto || 0); t.acrescimo += Number(f.acrescimo || 0);
+    }
     if (!f.recebido_em) {
       t.fila_sem_pgto += vf; t.fila_sem_pgto_itens.push(f);
       return;
@@ -419,7 +441,12 @@ async function fcCarregarDados() {
     // (vf); a venda tem de contar o mesmo valor — a pista dá só o preço da bomba
     if (ehComb && !turnosTecnox.has(tid)) {
       const ajF = Number(f.acrescimo || 0) - Number(f.desconto || 0);
-      if (Math.abs(ajF) > 0.004) { t.venda_comb += ajF; t.venda_total += ajF; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajF; }
+      // 05/11/2026 (Ronan: "venda de combustível sempre vai registrar apenas o que foi registrado na automação/bomba"):
+      // o ajuste não entra mais em venda_comb; vai para Descontos/Acréscimos. O total do caixa é o mesmo.
+      if (Math.abs(ajF) > 0.004) {
+        t.venda_total += ajF; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajF;
+        t.desconto += Number(f.desconto || 0); t.acrescimo += Number(f.acrescimo || 0);
+      }
     }
     t.fila_total += vf; t.fila_litros += litros; t.fila_itens.push(f);
     if (turnosTecnox.has(tid)) return;               // recebimento vem do TecnoX
@@ -467,11 +494,22 @@ async function fcCarregarDados() {
     // entra o que o cupom cobrou a mais ou a menos (acréscimo/desconto de tabela). E o produto de loja dos cupons
     // entra em "Venda produtos" — inclusive o vendido como linha 'prod-' de abastecimento. Antes só o produto ainda
     // na fila somava: o já transmitido virava sobra (Florestal, caixa 1208: R$ 313,39 = 30,12 + 214,84 + 38,85 + 29,58).
+    // 05/11/2026 (Ronan: "o que for venda de combustível sempre vai registrar apenas o que foi registrado na
+    // automação/bomba e quero adicionar dois novos campos 'descontos' 'acréscimos'"): Venda combustíveis = só a bomba;
+    // Venda produtos = preço cheio; o que o cupom cobrou a menos/a mais vai para Descontos/Acréscimos, item a item.
+    // A venda TOTAL do caixa continua exatamente a mesma (bomba + cobrado − cheio + loja cobrada).
     if (!turnosTecnox.has(g.turno_id) && g.comb_cobrado != null && g.comb_bomba != null) {
       const ajT = Math.round((Number(g.comb_cobrado || 0) - Number(g.comb_bomba || 0)) * 100) / 100;
       const loja = Number(g.loja_cupom || 0);
-      t.venda_comb += ajT; t.venda_total += ajT; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajT;
-      t.venda_prod += loja; t.venda_total += loja;
+      t.venda_total += ajT; t.ajuste_tabela = (t.ajuste_tabela || 0) + ajT;
+      t.venda_total += loja;
+      if (g.loja_bruto != null && g.desconto != null && g.acrescimo != null) {
+        t.venda_prod += Number(g.loja_bruto || 0);
+        t.desconto += Number(g.desconto || 0); t.acrescimo += Number(g.acrescimo || 0);
+      } else {   // view sem as colunas de 05/11: só o líquido do turno
+        t.venda_prod += loja;
+        if (ajT < 0) t.desconto += -ajT; else t.acrescimo += ajT;
+      }
       return;
     }
     if (!turnosTecnox.has(g.turno_id)) return;
@@ -781,6 +819,8 @@ async function fcCarregarDados() {
       - Number(d.haver_gerado || 0)   // HAVER CRÉDITO: parte do recebido que virou crédito, não venda (20/10/2026)
       + Number(t.valor_fechamento || 0);
     const vendido = Number(d.venda_prod || 0) + Number(d.venda_comb || 0)
+      - Number(d.desconto || 0) + Number(d.acrescimo || 0)   // descontos/acréscimos à parte (05/11/2026)
+      - Number(d.afericao || 0)                              // aferição: dentro de venda_comb, não é venda (05/11/2026)
       + Number(d.titulos || 0) + abertura + Number(d.suprimento || 0)
       + Number(d.receita || 0) - Number(d.receita_titulo || 0)   // receita lançada entra na origem (menos a de título, que já está em Títulos Recebidos)
       - Math.min(Number(d.receita_haver || 0), Number(d.haver_din || 0));   // receita do crédito em dinheiro: a origem é o Haver crédito (à esquerda)
@@ -945,7 +985,13 @@ function fcDetalhe(turnoId) {
   const vendasBase = [
     ['Venda produtos', d.venda_prod],
     ['Venda serviços', 0],
-    ['Venda combustíveis', d.venda_comb],
+    ['Venda combustíveis', d.venda_comb],   // tudo que a bomba/automação registrou, com a aferição (05/11/2026)
+    // AFERIÇÃO (05/11/2026, Ronan): saiu da bomba mas voltou para o tanque — está dentro de Venda combustíveis e SUBTRAI.
+    ['Aferição', -Number(d.afericao || 0) || 0, { node: 'afericao' }],
+    // DESCONTOS / ACRÉSCIMOS (05/11/2026, Ronan): o que os cupons cobraram a menos (desconto do gerente, tabela, forma de
+    // pagamento) e a mais (acréscimo da nota a prazo) sobre o valor cheio. Desconto SUBTRAI do total. Clique = a lista.
+    ['Descontos', -Number(d.desconto || 0) || 0, { node: 'desc_acr' }],
+    ['Acréscimos', Number(d.acrescimo || 0), { node: 'desc_acr' }],
     // (06/10/2026) a linha "Combustível nos cupons (TecnoX)" saiu da tela a pedido do Ronan:
     // a venda de combustível é a bomba; o total dos cupons segue em d.cupom_comb, sem exibir.
     ['Títulos Recebidos', d.titulos],
@@ -1100,7 +1146,7 @@ function fcDetalhe(turnoId) {
             <li>📁 Detalhes<ul>
               ${nodo('🧾 Movimentação completa', 'movimentacao')}
               ${nodo('💳 Recebimentos (maquininha/cofre)', 'receb_ext')}
-              ${nodo('📑 Cupons Fiscais', 'cupons')}${nodo('👤 Demonstrativo Vendedor', 'vendedor')}
+              ${nodo('📑 Cupons Fiscais', 'cupons')}${nodo('🏷 Descontos e Acréscimos', 'desc_acr')}${nodo('🧪 Aferições', 'afericao')}${nodo('👤 Demonstrativo Vendedor', 'vendedor')}
               ${nodo('📋 Itens Vendidos', 'itens')}${nodo('⛽ Combustível Vendido', 'combustivel')}
               ${nodo('🗑 Cancelamentos de Pista', 'cancelados')}
               ${nodo('📦 Estoque Fech. Caixa', 'estoque')}
@@ -1128,7 +1174,7 @@ function fcDetalhe(turnoId) {
             <span>💰 Total movimentado no caixa</span>
             <span class="fc-box forte" style="background:#2a1e0f;border-color:#7a5a20;color:#f0b45c;cursor:pointer" onclick="fcNode('movimentacao')">${fcMoney(totalMov)}</span>
           </div>
-          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + pista/cupons/pendências ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''}${Math.abs(Number(d.ajuste_tabela || 0)) > 0.009 ? ' · combustível = bomba ' + (Number(d.ajuste_tabela) > 0 ? '+ ' : '− ') + fcMoney(Math.abs(d.ajuste_tabela)) + ' de acréscimo/desconto de tabela (valor cobrado nos cupons)' : ''}</div>
+          <div class="fc-litros">Fila ${fcMoney(d.fila_total)} + pista/cupons/pendências ${fcMoney(cuponsTransm)}${d.vale_desconto > 0.009 ? ' + Vale/consumo ' + fcMoney(d.vale_desconto) : ''}${rec.prazo > 0.009 ? ' · (nota a prazo ' + fcMoney(rec.prazo) + ' já incluída nas vendas)' : ''} · combustível = tudo o que a bomba/automação registrou (a aferição sai na linha Aferição); o que os cupons cobraram a menos ou a mais está em Descontos e Acréscimos</div>
         </div>
 
         <div class="fc-painel">
@@ -1242,6 +1288,8 @@ async function fcNode(tipo) {
       || tipo === 'movimentacao' || tipo === 'receb_ext' || tipo === 'titulos') {
     return fcNodeMov(tipo);
   }
+  if (tipo === 'desc_acr') return fcModalDescAcr(turnoId);
+  if (tipo === 'afericao') return fcModalAfericao(turnoId);
   if (tipo === 'cupons' || tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
     fcModalNav('Carregando...', '<p style="padding:20px;color:#888">Buscando...</p>');
     const { data: vendas } = await sb.from('oct_pdv_vendas')
@@ -3962,6 +4010,105 @@ async function fcTitExcluirOk(id) {
 // + cupons transmitidos — com filtro de forma, ordenação (horário/cliente/valor/
 // sequência), busca, coluna de desconto, conferência (☑/espaço) e clique para
 // ABRIR a venda e ver os dados completos.
+// ============================================================
+// DESCONTOS E ACRÉSCIMOS (05/11/2026, Ronan: "embaixo de cupons fiscais, quero adicionar um campo que dá para ver essas
+// vendas que tiveram o acréscimo e o desconto"). Item a item, com a MESMA régua das linhas do painel:
+//   cupom: cheio = _totalOriginal › dados.valor_total › total (a régua da view oct_v_turno_venda); cobrado = total.
+//   fila : desconto/acréscimo lançados no item da fila (produto sempre; combustível só pago e fora de turno TecnoX).
+// Turno espelhado do TecnoX: a venda vem do TecnoX — os itens dos cupons ficam de fora (como no painel).
+// ============================================================
+function _fcDaValor(v) { return (v === null || v === undefined || v === '') ? null : Number(v); }
+function _fcDaTipo(it, dif) {
+  if (dif > 0) return it._descontoAppDevolvido ? 'desconto do app devolvido' : it._ajusteForma ? 'forma de pagamento' : 'tabela de preço (a prazo)';
+  return it._ajusteForma ? 'forma de pagamento' : it._descontoTabela ? 'tabela de preço' : it._descontoDeclarado ? 'retaguarda' : 'manual (gerente)';
+}
+async function fcModalDescAcr(turnoId) {
+  fcModalNav('🏷 Descontos e Acréscimos', '<p style="padding:20px;color:#888">Buscando...</p>');
+  const d0 = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const { data: vendas, error } = await _fcTudo(() => sb.from('oct_pdv_vendas')
+    .select('id,numero,valor_total,itens,pagamentos,status,vendedor,operador,cliente_nome,data_venda')
+    .eq('turno_id', turnoId).order('id'));
+  if (error) { fcModalNav('🏷 Descontos e Acréscimos', `<p style="padding:20px;color:#f87171">Não consegui buscar as vendas: ${fcEsc(error.message)}</p>`); return; }
+  const vs = (vendas || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
+  const tecnox = vs.some(v => String(v.status || '').toLowerCase() === 'tecnox');
+  const linhas = [];
+  if (!tecnox) vs.forEach(v => {
+    (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
+      if (!it || _fcDaValor(it.total) === null) return;   // item sem total: a view também não o conta
+      const cobrado = Number(it.total || 0);
+      const d = it.dados || {};
+      let cheio = _fcDaValor(it._totalOriginal);
+      if (cheio === null) cheio = _fcDaValor(d.valor_total);
+      if (cheio === null) cheio = cobrado;
+      const dif = Math.round((cobrado - cheio) * 100) / 100;
+      if (Math.abs(dif) < 0.005) return;
+      linhas.push({ quando: v.data_venda, hora: _fcHora(v.data_venda), seq: v.numero ?? '', venda: v.id,
+        cliente: v.cliente_nome || '—', forma: (v.pagamentos || []).map(p => p.nome || _fcFormaNome(p.forma)).join(' + ') || '—',
+        item: it.desc || it.cod || 'item', qtd: Number(it.qtd || 0), un: _fcItemLoja(it) ? 'un' : 'L',
+        cheio, cobrado, desconto: dif < 0 ? -dif : 0, acrescimo: dif > 0 ? dif : 0, tipo: _fcDaTipo(it, dif), origem: '🧾 cupom' });
+    });
+  });
+  const ehComb = f => (f.bico !== null && f.bico !== undefined && f.bico !== '') && Number(f.litros || 0) > 0;
+  const filaVista = new Set();
+  [...(d0.fila_itens || []), ...(d0.fila_sem_pgto_itens || [])].forEach(f => {
+    if (!f || filaVista.has(f.id)) return; filaVista.add(f.id);
+    const des = Number(f.desconto || 0), acr = Number(f.acrescimo || 0);
+    if (des < 0.005 && acr < 0.005) return;
+    if (ehComb(f) && (!f.recebido_em || tecnox || Math.abs(acr - des) <= 0.004)) return;   // a régua do painel
+    linhas.push({ quando: f.ocorrido_em, hora: _fcHoraLocal(f.ocorrido_em), seq: '', venda: null,
+      cliente: f.vendedor || '—', forma: (f.forma_nome || f.forma || '—') + (f.bandeira ? ' ' + f.bandeira : ''),
+      item: f.descricao || (ehComb(f) ? 'combustível' : 'produto'), qtd: Number(f.litros || 0), un: ehComb(f) ? 'L' : 'un',
+      cheio: Number(f.valor || 0), cobrado: Number(f.valor || 0) - des + acr, desconto: des, acrescimo: acr,
+      tipo: 'lançado no retaguarda (fila)', origem: '⏳ fila' });
+  });
+  linhas.sort((a, b) => String(a.quando || '').localeCompare(String(b.quando || '')));
+  window._fcDaDados = { linhas, tecnox, turnoId, painel: { desconto: Number(d0.desconto || 0), acrescimo: Number(d0.acrescimo || 0) } };
+  window._fcDaFiltro = window._fcDaFiltro || 'todos';
+  _fcDescAcrRender();
+}
+function _fcDescAcrRender() {
+  const D = window._fcDaDados || { linhas: [] }, f = window._fcDaFiltro || 'todos';
+  const lista = D.linhas.filter(x => f === 'todos' || (f === 'desc' ? x.desconto > 0 : x.acrescimo > 0));
+  const tDes = lista.reduce((s, x) => s + x.desconto, 0), tAcr = lista.reduce((s, x) => s + x.acrescimo, 0);
+  const allDes = D.linhas.reduce((s, x) => s + x.desconto, 0), allAcr = D.linhas.reduce((s, x) => s + x.acrescimo, 0);
+  const confere = Math.abs(allDes - D.painel.desconto) < 0.01 && Math.abs(allAcr - D.painel.acrescimo) < 0.01;
+  const corpo = lista.map(x => `<tr class="fc-tr"${x.venda ? ` style="cursor:pointer" onclick="fcCupomResumo('${x.venda}', &quot;fcNode('desc_acr')&quot;)" title="Abrir o cupom"` : ''}>
+      <td class="fc-td">${x.hora || ''}</td><td class="fc-td">${x.seq || '—'}</td>
+      <td class="fc-td">${fcEsc(x.cliente)}</td><td class="fc-td">${fcEsc(x.forma)}</td>
+      <td class="fc-td">${fcEsc(x.item)}</td><td class="fc-td fc-r">${fcNum(x.qtd, x.un === 'L' ? 3 : 0)} ${x.un}</td>
+      <td class="fc-td fc-r">${fcMoney(x.cheio)}</td><td class="fc-td fc-r">${fcMoney(x.cobrado)}</td>
+      <td class="fc-td fc-r">${x.desconto > 0 ? '<span style="color:#7ee2a0">−' + fcMoney(x.desconto) + '</span>' : '—'}</td>
+      <td class="fc-td fc-r">${x.acrescimo > 0 ? '<span style="color:#f0b45c">+' + fcMoney(x.acrescimo) + '</span>' : '—'}</td>
+      <td class="fc-td" style="color:#9aa">${fcEsc(x.tipo)}</td><td class="fc-td">${x.origem}</td></tr>`).join('');
+  const sel = (v, t) => `<option value="${v}" ${f === v ? 'selected' : ''}>${t}</option>`;
+  fcModalNav(`🏷 Descontos e Acréscimos — ${lista.length} item(ns)`, `
+    <p style="padding:6px 10px;color:#888;font-size:0.78rem">Item a item: o <b>valor cheio</b> (bomba / preço do cadastro) e o que o cupom <b>cobrou</b>. Desconto = cobrado abaixo do cheio (gerente, tabela, forma de pagamento); acréscimo = cobrado acima (tabela da nota a prazo, forma de pagamento). Clique na linha para abrir o cupom.${D.tecnox ? '<br><span style="color:#f0b45c">Caixa espelhado do TecnoX: a venda vem do TecnoX, os cupons não entram aqui (só a fila).</span>' : ''}</p>
+    <table class="fc-grid"><thead><tr><th>Hora</th><th>Seq.</th><th>Cliente</th><th>Forma</th><th>Item</th><th>Qtd</th><th>Valor cheio</th><th>Cobrado</th><th>Desconto</th><th>Acréscimo</th><th>Tipo</th><th>Origem</th></tr></thead>
+    <tbody>${corpo || '<tr><td class="fc-td" colspan="12" style="text-align:center;color:#888;padding:16px">Nenhuma venda com desconto ou acréscimo neste caixa.</td></tr>'}
+      <tr><td class="fc-td" colspan="8"><b>Total</b></td><td class="fc-td fc-r"><b style="color:#7ee2a0">−${fcMoney(tDes)}</b></td><td class="fc-td fc-r"><b style="color:#f0b45c">+${fcMoney(tAcr)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>
+    ${confere ? '' : `<p style="padding:6px 10px;color:#f87171;font-size:0.78rem">⚠ A lista (−${fcMoney(allDes)} / +${fcMoney(allAcr)}) não bate com o painel (−${fcMoney(D.painel.desconto)} / +${fcMoney(D.painel.acrescimo)}). Recarregue o caixa.</p>`}`,
+    { topo: `<div class="fc-filtros"><label>Mostrar:</label><select class="fc-inp2" onchange="window._fcDaFiltro=this.value;_fcDescAcrRender()">${sel('todos', 'Descontos e acréscimos')}${sel('desc', 'Só descontos')}${sel('acr', 'Só acréscimos')}</select></div>`,
+      rodape: `<div class="fc-filtros" style="justify-content:flex-end;gap:14px;border-top:1px solid #2a2d3e;border-bottom:none">
+        <span>Descontos: <b style="color:#7ee2a0">−${fcMoney(tDes)}</b></span><span>Acréscimos: <b style="color:#f0b45c">+${fcMoney(tAcr)}</b></span>
+        <span>Líquido: <b style="color:#e5e7eb">${fcMoney(tAcr - tDes)}</b></span></div>` });
+}
+
+// AFERIÇÕES do caixa (05/11/2026): o que a automação registrou como aferição na janela do turno — a mesma lista que
+// soma na linha "Aferição" (dentro de Venda combustíveis, subtraída à parte).
+function fcModalAfericao(turnoId) {
+  const d0 = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const its = (d0.afericao_itens || []).slice().sort((a, b) => String(a.data_abast || '').localeCompare(String(b.data_abast || '')));
+  const st = s => s === 'afericao_autorizada' ? '<span style="color:#7ee2a0">autorizada</span>' : fcEsc(s || '—');
+  const corpo = its.map(a => `<tr class="fc-tr"><td class="fc-td">${_fcHoraLocal(a.data_abast)}</td><td class="fc-td">${a.bico ?? '—'}</td>
+      <td class="fc-td">${fcEsc(a.combustivel || '—')}</td><td class="fc-td fc-r">${fcNum(a.litros, 3)} L</td>
+      <td class="fc-td fc-r">${fcMoney(a.valor_total)}</td><td class="fc-td">${fcEsc(a.vendedor || '—')}</td><td class="fc-td">${st(a.status)}</td></tr>`).join('');
+  fcModalNav(`🧪 Aferições — ${its.length}`, `
+    <p style="padding:6px 10px;color:#888;font-size:0.78rem">Combustível que saiu da bomba para aferição e voltou para o tanque. Está dentro de <b>Venda combustíveis</b> (tudo o que a automação registrou) e sai na linha <b>Aferição</b> — não é venda, não entra no recebimento.</p>
+    <table class="fc-grid"><thead><tr><th>Hora</th><th>Bico</th><th>Combustível</th><th>Litros</th><th>Valor</th><th>Frentista</th><th>Situação</th></tr></thead>
+    <tbody>${corpo || '<tr><td class="fc-td" colspan="7" style="text-align:center;color:#888;padding:16px">Nenhuma aferição neste caixa.</td></tr>'}
+      <tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r"><b>${fcNum(d0.afericao_litros, 3)} L</b></td><td class="fc-td fc-r"><b>${fcMoney(d0.afericao)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`);
+}
+
 function fcModalCupons(vs) {
   const cache = window._fcCache || {};
   const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
