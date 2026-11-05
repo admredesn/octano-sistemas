@@ -1290,13 +1290,13 @@ async function fcNode(tipo) {
   }
   if (tipo === 'desc_acr') return fcModalDescAcr(turnoId);
   if (tipo === 'afericao') return fcModalAfericao(turnoId);
-  if (tipo === 'cupons' || tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
+  if (tipo === 'cupons') return fcModalCupons(turnoId);   // só o documento fiscal (05/11/2026)
+  if (tipo === 'itens' || tipo === 'combustivel' || tipo === 'vendedor') {
     fcModalNav('Carregando...', '<p style="padding:20px;color:#888">Buscando...</p>');
     const { data: vendas } = await sb.from('oct_pdv_vendas')
       .select('id,numero,valor_total,itens,pagamentos,status,vendedor,operador,cliente_nome,data_venda')
       .eq('turno_id', turnoId).order('numero');
     const vs = (vendas || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
-    if (tipo === 'cupons') return fcModalCupons(vs);
     if (tipo === 'itens') return fcModalItens(vs);
     if (tipo === 'combustivel') {
       // nome do cliente da nota a prazo: o cupom espelhado do TecnoX nem sempre traz
@@ -4109,84 +4109,126 @@ function fcModalAfericao(turnoId) {
       <tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r"><b>${fcNum(d0.afericao_litros, 3)} L</b></td><td class="fc-td fc-r"><b>${fcMoney(d0.afericao)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`);
 }
 
-function fcModalCupons(vs) {
+// ============================================================
+// CUPONS FISCAIS (05/11/2026, Ronan: "isso tá gerando muita confusão, nessa tela de cupons fiscais tem que aparecer
+// apenas os cupons transmitidos e os cupons cancelados na sefaz, apenas essas informações"). A lista antiga misturava a
+// fila de transmissão e a marca "✖ excluído" da conferência (o RECEBIMENTO do cupom trocado pelo extrato da
+// maquininha) — parecia cupom que estava na SEFAZ e não no sistema. Agora é só o DOCUMENTO FISCAL, como está na SEFAZ:
+//   - NFC-e das vendas do caixa (turno_id), inclusive as canceladas;
+//   - + NFC-e emitidas no horário do caixa sem venda ligada (cupons do TecnoX importados);
+//   - situação: transmitida (autorizada) ou cancelada na SEFAZ. Fila sem cupom, contingência ainda não transmitida e
+//     rejeitada ficam fora. Valor = vNF do XML (view oct_v_nfce_resumo). A lista não mexe nas somas do caixa.
+// ============================================================
+const _FC_CUP_COLS = 'id,chave_nfe,numero,serie,modelo,status,ambiente,valor_total,vnf,ver_proc,data_emissao,forma_pagamento,cpf_consumidor';
+async function _fcCupNfce(montar) {
+  const r = await montar('oct_v_nfce_resumo', _FC_CUP_COLS);
+  if (!r.error) return r.data || [];
+  // sem a view (SQL-VIEW-NFCE-RESUMO.sql): o valor da linha da nuvem
+  const r2 = await montar('oct_nfce', 'id,chave_nfe,numero,serie,modelo,status,ambiente,valor_total,data_emissao,forma_pagamento,cpf_consumidor');
+  return r2.data || [];
+}
+async function fcModalCupons(turnoId) {
+  fcModalNav('📑 Cupons Fiscais', '<p style="padding:20px;color:#888">Buscando os cupons na base fiscal...</p>');
   const cache = window._fcCache || {};
-  const d0 = (cache.porTurno || {})[window._fcTurnoAtual] || {};
-  // unifica: venda transmitida + item da fila num só formato
-  const unifica = [];
-  vs.forEach(v => {
-    // cupom excluído do fechamento continua aqui (lista documental), mas marcado
-    const aX = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
-    unifica.push({
-      ref: 'venda', id: v.id, seq: v.numero ?? '', quando: v.data_venda,
-      hfmt: _fcHora(v.data_venda),
-      cliente: v.cliente_nome || v.vendedor || v.operador || '—',
-      forma: (v.pagamentos || []).map(p => _fcFormaNome(p.forma)).join(' + ') || '—',
-      desconto: 0, valor: Number(v.valor_total || 0),
-      origem: (aX && aX.excluido) ? '🧾 cupom ✖ excluído' : '🧾 cupom', obj: v,
+  const t = (cache.turnos || []).find(x => x.id === turnoId) || {};
+  const eid = window._fcEmpresaId;
+  const { data: vendas } = await _fcTudo(() => sb.from('oct_pdv_vendas')
+    .select('id,numero,valor_total,pagamentos,status,cliente_nome,data_venda,nfce_chave')
+    .eq('turno_id', turnoId).order('id'));
+  const porChave = {};
+  (vendas || []).forEach(v => { if (v.nfce_chave) porChave[v.nfce_chave] = v; });
+  const chaves = Object.keys(porChave);
+  const notas = [];
+  for (let i = 0; i < chaves.length; i += 80) {
+    const lote = chaves.slice(i, i + 80);
+    notas.push(...await _fcCupNfce((tab, cols) => sb.from(tab).select(cols).in('chave_nfe', lote)));
+  }
+  // NFC-e do horário do caixa que nenhuma venda do sistema aponta (TecnoX importado)
+  if (eid && t.aberto_em) {
+    const fim = t.fechado_em || new Date().toISOString();
+    const soltas = await _fcCupNfce((tab, cols) => sb.from(tab).select(cols).eq('empresa_id', eid)
+      .gte('data_emissao', t.aberto_em).lte('data_emissao', fim).in('status', ['autorizada', 'cancelada']).order('id').limit(5000));
+    const cand = soltas.filter(n => n.chave_nfe && !porChave[n.chave_nfe]);
+    const ligadas = new Set();
+    for (let i = 0; i < cand.length; i += 80) {
+      const { data } = await sb.from('oct_pdv_vendas').select('nfce_chave').in('nfce_chave', cand.slice(i, i + 80).map(n => n.chave_nfe));
+      (data || []).forEach(v => ligadas.add(v.nfce_chave));
+    }
+    cand.forEach(n => { if (!ligadas.has(n.chave_nfe)) notas.push(n); });
+  }
+  const lista = [], vistas = new Set();
+  notas.forEach(n => {
+    if (!n || vistas.has(n.chave_nfe)) return;
+    vistas.add(n.chave_nfe);
+    const st = String(n.status || '').toLowerCase();
+    if (st !== 'autorizada' && st !== 'cancelada' && st !== 'cancelamento_pendente') return;
+    if (String(n.modelo || '65') !== '65') return;   // NF-e (55) do faturamento também mora no oct_nfce: não é cupom
+    const v = porChave[n.chave_nfe] || null;
+    const vp = String(n.ver_proc || '');
+    lista.push({
+      numero: n.numero, serie: n.serie, quando: n.data_emissao || (v && v.data_venda),
+      cliente: (v && v.cliente_nome) || (n.cpf_consumidor ? 'CPF/CNPJ ' + n.cpf_consumidor : 'Consumidor final'),
+      forma: v ? ((v.pagamentos || []).map(p => p.nome || _fcFormaNome(p.forma)).join(' + ') || '—') : _fcFormaNome(n.forma_pagamento),
+      valor: Number(n.vnf != null ? n.vnf : (n.valor_total != null ? n.valor_total : (v ? v.valor_total : 0))),
+      cancelado: st === 'cancelada', cancelando: st === 'cancelamento_pendente',
+      homolog: String(n.ambiente || '') === 'homologacao',
+      tecnox: !!vp && !/^octano/i.test(vp),
+      venda: v ? v.id : null,
     });
   });
-  (d0.fila_itens || []).forEach(f => unifica.push({
-    ref: 'fila', id: f.id, seq: '', quando: f.ocorrido_em,
-    hfmt: _fcHoraLocal(f.ocorrido_em),
-    cliente: f.vendedor || '—',
-    forma: (f.forma_nome || f.forma || '—') + (f.bandeira ? ' ' + f.bandeira : ''),
-    desconto: Number(f.desconto || 0),
-    valor: Number(f.valor || 0) - Number(f.desconto || 0) + Number(f.acrescimo || 0),
-    origem: '⏳ fila', obj: f,
-  }));
-  window._fcCuponsData = unifica;
-  window._fcCuponsFiltro = window._fcCuponsFiltro || { forma: '', ordem: 'hora', busca: '' };
+  window._fcCuponsData = lista;
+  window._fcCuponsFiltro = Object.assign({ forma: '', ordem: 'hora', busca: '', sit: '' }, window._fcCuponsFiltro || {});
   _fcCuponsRender();
 }
 
 function _fcCuponsRender() {
   const dados = window._fcCuponsData || [];
-  const f = window._fcCuponsFiltro;
+  const f = window._fcCuponsFiltro || { forma: '', ordem: 'hora', busca: '', sit: '' };
   const formas = [...new Set(dados.map(x => x.forma).filter(x => x && x !== '—'))].sort();
   let lista = dados.filter(x =>
     (!f.forma || x.forma === f.forma) &&
-    (!f.busca || String(x.cliente).toLowerCase().includes(f.busca.toLowerCase())));
+    (!f.sit || (f.sit === 'canc' ? x.cancelado : !x.cancelado)) &&
+    (!f.busca || String(x.cliente).toLowerCase().includes(f.busca.toLowerCase()) || String(x.numero).includes(f.busca)));
   const ord = {
     hora: (a, b) => String(a.quando || '').localeCompare(String(b.quando || '')),
     cliente: (a, b) => String(a.cliente).localeCompare(String(b.cliente)),
     valor: (a, b) => b.valor - a.valor,
-    seq: (a, b) => (Number(a.seq) || 9e9) - (Number(b.seq) || 9e9),
+    numero: (a, b) => (Number(a.numero) || 9e15) - (Number(b.numero) || 9e15),
   };
   lista = lista.slice().sort(ord[f.ordem] || ord.hora);
-  const linhas = lista.map(x => {
-    const desc = (x.obj && (x.obj.descricao || (x.obj.itens || []).map(i => i.desc).join(', '))) || '';
-    window._fcLancBase[x.ref + ':' + x.id] = { rotulo: (x.origem + ' ' + (x.seq || desc)).trim(), valor: x.valor, forma_nome: x.forma };
-    return _fcRow(x.ref, x.id, `<td class="fc-td">${x.seq || '—'}</td>
-      <td class="fc-td">${x.hfmt || _fcHora(x.quando)}</td>
+  const sit = x => x.cancelado ? '<span style="color:#f87171;font-weight:700">Cancelado na SEFAZ</span>'
+    : `<span style="color:#7ee2a0;font-weight:700">Transmitido</span>${x.cancelando ? ' <span style="color:#f0b45c">(cancelamento pedido)</span>' : ''}`;
+  const tags = x => (x.tecnox ? ' <span style="color:#9aa;font-size:0.72rem">· emitido pelo TecnoX</span>' : '')
+    + (x.homolog ? ' <span style="color:#f0b45c;font-size:0.72rem">· homologação (sem valor fiscal)</span>' : '');
+  const linhas = lista.map(x => `<tr class="fc-tr"${x.venda ? ` style="cursor:pointer" onclick="fcCupomResumo('${x.venda}','_fcCuponsRender()')" title="Abrir o cupom"` : ''}>
+      <td class="fc-td">${x.numero ?? '—'}${x.serie != null ? '<span style="color:#667"> / ' + x.serie + '</span>' : ''}</td>
+      <td class="fc-td">${_fcHora(x.quando)}</td>
       <td class="fc-td">${fcEsc(x.cliente)}</td>
       <td class="fc-td">${fcEsc(x.forma)}</td>
-      <td class="fc-td fc-r">${x.desconto > 0.004 ? '<span style="color:#f0b45c">' + fcMoney(x.desconto) + '</span>' : '—'}</td>
-      <td class="fc-td fc-r">${fcMoney(x.valor)}</td>
-      <td class="fc-td">${x.origem}</td>`, `fcCupomVer('${x.ref}','${x.id}')`);
-  });
-  const total = lista.reduce((s, x) => s + x.valor, 0);
-  fcModalNav(`📑 Vendas do caixa (fila + transmitidos) — ${lista.length}`, `
-    <div class="fc-filtros">
-      <label>Forma:</label>
-      <select class="fc-inp2" onchange="window._fcCuponsFiltro.forma=this.value;_fcCuponsRender()">
-        <option value="">Todas</option>
-        ${formas.map(x => `<option value="${fcEsc(x)}" ${f.forma === x ? 'selected' : ''}>${fcEsc(x)}</option>`).join('')}
-      </select>
-      <label>Ordenar:</label>
-      <select class="fc-inp2" onchange="window._fcCuponsFiltro.ordem=this.value;_fcCuponsRender()">
-        <option value="hora" ${f.ordem === 'hora' ? 'selected' : ''}>Horário</option>
-        <option value="cliente" ${f.ordem === 'cliente' ? 'selected' : ''}>Cliente</option>
-        <option value="valor" ${f.ordem === 'valor' ? 'selected' : ''}>Valor</option>
-        <option value="seq" ${f.ordem === 'seq' ? 'selected' : ''}>Sequência</option>
-      </select>
-      <input class="fc-inp2" placeholder="buscar cliente/vendedor..." value="${fcEsc(f.busca)}"
-        oninput="window._fcCuponsFiltro.busca=this.value;clearTimeout(window._fcCupT);window._fcCupT=setTimeout(_fcCuponsRender,300)">
-      <span style="color:#667">🔎 abre a venda · ☑ marca · ESPAÇO confere · ✎ altera</span>
-    </div>
-    <table class="fc-grid"><thead><tr><th></th><th>Seq.</th><th>Hora</th><th>Cliente/Vendedor</th><th>Forma</th><th>Desc.</th><th>Valor</th><th>Origem</th><th></th></tr></thead>
-    <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(total)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>`
-    , { topo: _fcToolbar(), rodape: _fcRodape(lista.length, total) });
+      <td class="fc-td fc-r"${x.cancelado ? ' style="text-decoration:line-through;color:#888"' : ''}>${fcMoney(x.valor)}</td>
+      <td class="fc-td">${sit(x)}${tags(x)}</td></tr>`);
+  const transm = lista.filter(x => !x.cancelado), canc = lista.filter(x => x.cancelado);
+  const soma = arr => arr.reduce((s, x) => s + x.valor, 0);
+  const sel = (campo, v, txt) => `<option value="${v}" ${f[campo] === v ? 'selected' : ''}>${txt}</option>`;
+  fcModalNav(`📑 Cupons Fiscais — ${transm.length} transmitido(s)${canc.length ? ', ' + canc.length + ' cancelado(s)' : ''}`, `
+    <p style="padding:6px 10px;color:#888;font-size:0.78rem">Os cupons deste caixa como estão na SEFAZ: <b>transmitidos</b> (autorizados) e <b>cancelados</b>. Valor = o da nota fiscal. Cupom em contingência aparece aqui depois de transmitido. Clique para abrir o cupom.</p>
+    <table class="fc-grid"><thead><tr><th>NFC-e / série</th><th>Hora</th><th>Cliente</th><th>Forma</th><th>Valor</th><th>Situação na SEFAZ</th></tr></thead>
+    <tbody>${linhas.join('') || '<tr><td class="fc-td" colspan="6" style="text-align:center;color:#888;padding:16px">Nenhum cupom fiscal neste caixa.</td></tr>'}</tbody></table>`,
+    { topo: `<div class="fc-filtros">
+        <label>Situação:</label>
+        <select class="fc-inp2" onchange="window._fcCuponsFiltro.sit=this.value;_fcCuponsRender()">${sel('sit', '', 'Todos')}${sel('sit', 'transm', 'Transmitidos')}${sel('sit', 'canc', 'Cancelados na SEFAZ')}</select>
+        <label>Forma:</label>
+        <select class="fc-inp2" onchange="window._fcCuponsFiltro.forma=this.value;_fcCuponsRender()">
+          <option value="">Todas</option>${formas.map(x => `<option value="${fcEsc(x)}" ${f.forma === x ? 'selected' : ''}>${fcEsc(x)}</option>`).join('')}
+        </select>
+        <label>Ordenar:</label>
+        <select class="fc-inp2" onchange="window._fcCuponsFiltro.ordem=this.value;_fcCuponsRender()">${sel('ordem', 'hora', 'Horário')}${sel('ordem', 'numero', 'Número')}${sel('ordem', 'cliente', 'Cliente')}${sel('ordem', 'valor', 'Valor')}</select>
+        <input class="fc-inp2" placeholder="buscar cliente ou número..." value="${fcEsc(f.busca)}"
+          oninput="window._fcCuponsFiltro.busca=this.value;clearTimeout(window._fcCupT);window._fcCupT=setTimeout(_fcCuponsRender,300)">
+      </div>`,
+      rodape: `<div class="fc-filtros" style="justify-content:flex-end;gap:14px;border-top:1px solid #2a2d3e;border-bottom:none">
+        <span>Transmitidos: <b style="color:#7ee2a0">${transm.length} · ${fcMoney(soma(transm))}</b></span>
+        <span>Cancelados na SEFAZ: <b style="color:#f87171">${canc.length} · ${fcMoney(soma(canc))}</b></span></div>` });
 }
 
 // abre UMA venda/abastecimento com os dados completos
