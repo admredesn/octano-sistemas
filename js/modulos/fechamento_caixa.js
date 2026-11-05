@@ -737,8 +737,14 @@ async function fcCarregarDados() {
     if (!fora.length) return;
     t.titulos_receb = t.titulos_receb || {};
     const livres = (t.manuais || []).filter(m => String(m.id || '').indexOf('ext-') === 0).map(m => ({
-      c: Math.round(Number(m.valor || 0) * 100), usado: false,
+      id: String(m.id), c: Math.round(Number(m.valor || 0) * 100), usado: false,
       pix: (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(m.forma_nome || ''), '') : '') === 'pix' }));
+    // VÍNCULO DIRETO (05/11/2026, Florestal caixa 1184: 3 títulos do GILBERTO LOPES — 278,15 + 39,66 + 182,19 — pagos numa
+    // passada só de R$ 500 no débito; nenhum casava sozinho pelo valor e os 500 contavam 2× → "sobra" de 434,99 que era
+    // falta de 65,01). O título guarda a transação da maquininha que o pagou (recebimento_id); se ela é uma linha do
+    // extrato deste caixa ('ext-' + id), o título já está no Cartão/Pix — vale para vários títulos na mesma passada.
+    const extPorId = {};
+    livres.forEach(l => { extPorId[l.id] = l; });
     // TÍTULO PAGO NO CARTÃO FROTA JÁ LANÇADO À MÃO NO BALÃO 🚛 (29/10/2026, Ronan, Florestal caixa 1205: a fatura 27 da AFLORA
     // foi paga na Ticket Log — a frota de R$ 2.072,06 (fatura 2.006,06 + 66,00 de juros) foi lançada à mão no balão E o PDV
     // gravou o recebimento; o mesmo dinheiro contava 2× e virava "sobra" de 1.949,58). O título de frota que casa com um
@@ -753,6 +759,12 @@ async function fcCarregarDados() {
           t.titulos_na_frota = Math.round(((t.titulos_na_frota || 0) + f.valor) * 100) / 100;
           return;
         }
+      }
+      const vinc = f.x && f.x.recebimento_id ? extPorId['ext-' + String(f.x.recebimento_id)] : null;
+      if (vinc && (f.g === 'cartao' || f.g === 'pix' || f.g === 'pix_cnpj')) {
+        vinc.usado = true; f.x._no_extrato = true;
+        t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.valor) * 100) / 100;
+        return;
       }
       if (livres.length && (f.g === 'cartao' || f.g === 'pix')) {
         const alvos = [Math.round(f.dinheiro * 100), Math.round(f.valor * 100)];
