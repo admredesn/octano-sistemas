@@ -190,8 +190,11 @@ async function fcCarregarDados() {
     // venda por turno ja' somada no banco (59 linhas em vez de 3.808 vendas). Colunas do valor COBRADO (19/10/2026,
     // SQL-VIEW-VENDA-TURNO-COBRADO.sql): sem o SQL rodado, cai na leitura antiga e a tela segue como antes.
     // + loja_bruto/desconto/acrescimo (05/11/2026, SQL-VIEW-VENDA-TURNO-DESC-ACR.sql): descontos e acréscimos à parte.
-    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom,loja_bruto,desconto,acrescimo')
+    // + desconto_tecnox/acrescimo_tecnox (05/11/2026): os mesmos, nos cupons espelhados do TecnoX (bomba casada no item).
+    sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom,loja_bruto,desconto,acrescimo,desconto_tecnox,acrescimo_tecnox')
       .eq('empresa_id', eid).in('turno_id', ids)
+      .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom,loja_bruto,desconto,acrescimo')
+        .eq('empresa_id', eid).in('turno_id', ids) : r)
       .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod,comb_cobrado,comb_bomba,loja_cupom')
         .eq('empresa_id', eid).in('turno_id', ids) : r)
       .then(r => (r && r.error) ? sb.from('oct_v_turno_venda').select('turno_id,cupons,venda_comb,litros_comb,venda_prod')
@@ -517,6 +520,13 @@ async function fcCarregarDados() {
     t.cupom_comb = Number(g.venda_comb || 0);
     t.venda_prod += prod;
     t.venda_total += prod;
+    // 05/11/2026 (Ronan escolheu "recalculando"): o desconto/acréscimo dos cupons do TecnoX — cupom × bomba casada item a
+    // item (_bombaTecnox) — entra em Descontos/Acréscimos, como no caixa do Octano. Saíram as receitas manuais
+    // "Venda pelo cupom do TecnoX (cupom − bomba)" que faziam esse papel no total do turno.
+    if (g.desconto_tecnox != null && g.acrescimo_tecnox != null) {
+      const dT = Number(g.desconto_tecnox || 0), aT = Number(g.acrescimo_tecnox || 0);
+      t.desconto += dT; t.acrescimo += aT; t.venda_total += aT - dT;
+    }
   });
   // FUNDO DE ABERTURA EM DOBRO (06/10/2026 — Florestal, turno 1188: Remessas R$ 679,50
   // = 339,75 + 339,75). O turno aberto no PDV do Octano já traz o fundo em
@@ -4032,6 +4042,19 @@ async function fcModalDescAcr(turnoId) {
   const vs = (vendas || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada');
   const tecnox = vs.some(v => String(v.status || '').toLowerCase() === 'tecnox');
   const linhas = [];
+  // caixa espelhado do TecnoX: só os cupons do TecnoX, com a bomba casada no item (_bombaTecnox) — a régua do painel
+  if (tecnox) vs.filter(v => String(v.status || '').toLowerCase() === 'tecnox').forEach(v => {
+    (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
+      if (!it || _fcDaValor(it.total) === null || _fcDaValor(it._bombaTecnox) === null) return;
+      const cobrado = Number(it.total || 0), cheio = Number(it._bombaTecnox);
+      const dif = Math.round((cobrado - cheio) * 100) / 100;
+      if (Math.abs(dif) < 0.005) return;
+      linhas.push({ quando: v.data_venda, hora: _fcHora(v.data_venda), seq: v.numero ?? '', venda: v.id,
+        cliente: v.cliente_nome || '—', forma: (v.pagamentos || []).map(p => p.nome || _fcFormaNome(p.forma)).join(' + ') || '—',
+        item: it.desc || it.cod || 'item', qtd: Number(it.qtd || 0), un: 'L',
+        cheio, cobrado, desconto: dif < 0 ? -dif : 0, acrescimo: dif > 0 ? dif : 0, tipo: 'cupom do TecnoX × bomba', origem: '🧾 TecnoX' });
+    });
+  });
   if (!tecnox) vs.forEach(v => {
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => {
       if (!it || _fcDaValor(it.total) === null) return;   // item sem total: a view também não o conta
@@ -4082,7 +4105,7 @@ function _fcDescAcrRender() {
       <td class="fc-td" style="color:#9aa">${fcEsc(x.tipo)}</td><td class="fc-td">${x.origem}</td></tr>`).join('');
   const sel = (v, t) => `<option value="${v}" ${f === v ? 'selected' : ''}>${t}</option>`;
   fcModalNav(`🏷 Descontos e Acréscimos — ${lista.length} item(ns)`, `
-    <p style="padding:6px 10px;color:#888;font-size:0.78rem">Item a item: o <b>valor cheio</b> (bomba / preço do cadastro) e o que o cupom <b>cobrou</b>. Desconto = cobrado abaixo do cheio (gerente, tabela, forma de pagamento); acréscimo = cobrado acima (tabela da nota a prazo, forma de pagamento). Clique na linha para abrir o cupom.${D.tecnox ? '<br><span style="color:#f0b45c">Caixa espelhado do TecnoX: a venda vem do TecnoX, os cupons não entram aqui (só a fila).</span>' : ''}</p>
+    <p style="padding:6px 10px;color:#888;font-size:0.78rem">Item a item: o <b>valor cheio</b> (bomba / preço do cadastro) e o que o cupom <b>cobrou</b>. Desconto = cobrado abaixo do cheio (gerente, tabela, forma de pagamento); acréscimo = cobrado acima (tabela da nota a prazo, forma de pagamento). Clique na linha para abrir o cupom.${D.tecnox ? '<br><span style="color:#f0b45c">Caixa espelhado do TecnoX: cupom do TecnoX × valor da bomba casada (litros + combustível + horário). Item sem bomba casada não entra.</span>' : ''}</p>
     <table class="fc-grid"><thead><tr><th>Hora</th><th>Seq.</th><th>Cliente</th><th>Forma</th><th>Item</th><th>Qtd</th><th>Valor cheio</th><th>Cobrado</th><th>Desconto</th><th>Acréscimo</th><th>Tipo</th><th>Origem</th></tr></thead>
     <tbody>${corpo || '<tr><td class="fc-td" colspan="12" style="text-align:center;color:#888;padding:16px">Nenhuma venda com desconto ou acréscimo neste caixa.</td></tr>'}
       <tr><td class="fc-td" colspan="8"><b>Total</b></td><td class="fc-td fc-r"><b style="color:#7ee2a0">−${fcMoney(tDes)}</b></td><td class="fc-td fc-r"><b style="color:#f0b45c">+${fcMoney(tAcr)}</b></td><td class="fc-td" colspan="2"></td></tr></tbody></table>
