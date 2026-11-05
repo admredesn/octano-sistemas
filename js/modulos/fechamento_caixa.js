@@ -3486,7 +3486,9 @@ async function _fcTituloDifSincronizar(turnoId, dif, pessoaId, pessoaNome) {
   const { error } = await sb.from('oct_pdv_notas_prazo').update(upd).eq('id', ja.id).eq('status', 'aberto').is('fatura_id', null);
   if (error) return { ok: false, msg: 'Não consegui acertar o título da falta: ' + error.message };
   return { ok: true, titulo: Object.assign({}, ja, upd),
-    aviso: 'Título de ' + nome + ' acertado: ' + fcMoney(antes) + ' → ' + fcMoney(alvo) + '.' };
+    aviso: trocaPessoa && Math.abs(antes - alvo) < 0.01
+      ? 'Título de ' + fcMoney(alvo) + ' passou de ' + ja.cliente_nome + ' para ' + nome + '.'
+      : 'Título de ' + nome + ' acertado: ' + fcMoney(antes) + ' → ' + fcMoney(alvo) + (trocaPessoa ? ' (antes no nome de ' + ja.cliente_nome + ')' : '') + '.' };
 }
 
 async function fcDifLancar(dif) {
@@ -3506,17 +3508,14 @@ async function fcDifLancar(dif) {
   // (Sobra não vira título a receber — ali o posto é que deve à pessoa.)
   let aviso = '';
   const ja = await _fcTituloDifExistente(turnoId);
-  // título de antes com outro valor (ou a falta virou sobra): acompanha o apurado agora (04/11/2026)
-  if (ja && (dif >= 0 || Math.abs(Number(ja.valor_original != null ? ja.valor_original : ja.valor || 0) - Math.abs(dif)) >= 0.01)) {
+  // título de antes com outro valor, OUTRA PESSOA (05/11/2026) ou a falta virou sobra: acompanha o que foi lançado agora.
+  // Era recusado ("exclua o título no Faturar e lance de novo") e o título ficava no nome errado. Título já faturado ou
+  // recebido continua travado (_fcTituloDifSincronizar diz o motivo).
+  const outraPessoa = !!(ja && pid && String(ja.cliente_id || '') !== String(pid));
+  if (ja && (dif >= 0 || outraPessoa || Math.abs(Number(ja.valor_original != null ? ja.valor_original : ja.valor || 0) - Math.abs(dif)) >= 0.01)) {
     const s = await _fcTituloDifSincronizar(turnoId, dif, pid || null, pnome);
     if (!s.ok) { alert(s.msg); return; }
     aviso = s.aviso || '';
-  }
-  if (dif < 0 && ja && !aviso) {
-    alert('Este caixa já tem título de diferença: ' + fcMoney(ja.valor)
-      + ' no nome de ' + ja.cliente_nome + ' (' + ja.status + ').' + N2
-      + 'Para trocar o responsável, exclua o título no Faturar e lance de novo.');
-    return;
   }
   if (dif < 0 && !ja) {
     const { error } = await sb.from('oct_pdv_notas_prazo').insert({
@@ -4804,9 +4803,10 @@ async function _fcModalResponsavel(turnoId, dif) {
   // já lançada com outro valor (caixa reaberto e mexido): diz o que estava e já marca quem era (04/11/2026)
   const st = _fcDifStatus(turnoId, dif);
   const antes = st.mudou ? st.respNome : '';
-  // só marca quando o tipo é o mesmo: sobra lançada para a gerente não vira, sozinha, título de falta dela
-  const mesmoTipo = st.regTipo === (dif < 0 ? 'falta' : 'sobra');
-  const marcaAntes = (n) => antes && mesmoTipo && _fcNorm(n) === _fcNorm(antes) ? 'checked' : '';
+  // NINGUÉM VEM MARCADO (05/11/2026, Ronan: "coloquei a falta de caixa em nome do everton e ficou registrada em nome do
+  // estevão"): o caixa 1186 tinha falta de 51,47 lançada para o Estevão pelo espelho do TecnoX; refechado com 666,00, o
+  // modal marcou o Estevão sozinho e o título nasceu no nome dele. O aviso abaixo diz quem era; quem escolhe é o gerente.
+  const marcaAntes = () => '';
   const opcao = (n) => {
     const p = _fcCasaPessoa(n, pessoas);
     const tag = p ? '<span style="color:#7ee2a0;font-size:0.72rem"> · cadastrado</span>'
