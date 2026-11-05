@@ -4209,7 +4209,7 @@ async function fcModalCupons(turnoId) {
       const { data } = await sb.from('oct_pdv_vendas').select('nfce_chave').in('nfce_chave', cand.slice(i, i + 80).map(n => n.chave_nfe));
       (data || []).forEach(v => ligadas.add(v.nfce_chave));
     }
-    cand.forEach(n => { if (!ligadas.has(n.chave_nfe)) notas.push(n); });
+    cand.forEach(n => { if (!ligadas.has(n.chave_nfe)) notas.push(Object.assign({}, n, { _solta: true })); });
   }
   const lista = [], vistas = new Set();
   notas.forEach(n => {
@@ -4220,7 +4220,12 @@ async function fcModalCupons(turnoId) {
     if (String(n.modelo || '65') !== '65') return;   // NF-e (55) do faturamento também mora no oct_nfce: não é cupom
     const v = porChave[n.chave_nfe] || null;
     const vp = String(n.ver_proc || '');
+    // NFC-e AGRUPADA DO TECNOX (05/11/2026, Ronan, Florestal caixa 1206: 93902/93903 às 11:43, 56 abastecimentos em
+    // "Dinheiro" p/ CPF 000…): veio da importação dos XML do TecnoX e nenhuma venda do Octano aponta para ela — a forma
+    // é o padrão do TecnoX, não o pagamento. Fica oculta (botão no rodapé) e FORA das somas do rodapé.
+    const oculta = !!n._solta && !!vp && !/^octano/i.test(vp);
     lista.push({
+      oculta,
       numero: n.numero, serie: n.serie, quando: n.data_emissao || (v && v.data_venda),
       cliente: (v && v.cliente_nome) || (n.cpf_consumidor ? 'CPF/CNPJ ' + n.cpf_consumidor : 'Consumidor final'),
       forma: v ? ((v.pagamentos || []).map(p => p.nome || _fcFormaNome(p.forma)).join(' + ') || '—') : _fcFormaNome(n.forma_pagamento),
@@ -4237,8 +4242,10 @@ async function fcModalCupons(turnoId) {
 }
 
 function _fcCuponsRender() {
-  const dados = window._fcCuponsData || [];
+  const todos = window._fcCuponsData || [];
   const f = window._fcCuponsFiltro || { forma: '', ordem: 'hora', busca: '', sit: '' };
+  const ocultas = todos.filter(x => x.oculta);
+  const dados = f.verOcultas ? todos : todos.filter(x => !x.oculta);
   const formas = [...new Set(dados.map(x => x.forma).filter(x => x && x !== '—'))].sort();
   let lista = dados.filter(x =>
     (!f.forma || x.forma === f.forma) &&
@@ -4253,7 +4260,8 @@ function _fcCuponsRender() {
   lista = lista.slice().sort(ord[f.ordem] || ord.hora);
   const sit = x => x.cancelado ? '<span style="color:#f87171;font-weight:700">Cancelado na SEFAZ</span>'
     : `<span style="color:#7ee2a0;font-weight:700">Transmitido</span>${x.cancelando ? ' <span style="color:#f0b45c">(cancelamento pedido)</span>' : ''}`;
-  const tags = x => (x.tecnox ? ' <span style="color:#9aa;font-size:0.72rem">· emitido pelo TecnoX</span>' : '')
+  const tags = x => (x.oculta ? ' <span style="color:#9aa;font-size:0.72rem">· nota agrupada do TecnoX (fora das somas)</span>'
+      : x.tecnox ? ' <span style="color:#9aa;font-size:0.72rem">· emitido pelo TecnoX</span>' : '')
     + (x.homolog ? ' <span style="color:#f0b45c;font-size:0.72rem">· homologação (sem valor fiscal)</span>' : '');
   const linhas = lista.map(x => `<tr class="fc-tr"${x.venda ? ` style="cursor:pointer" onclick="fcCupomResumo('${x.venda}','_fcCuponsRender()')" title="Abrir o cupom"` : ''}>
       <td class="fc-td">${x.numero ?? '—'}${x.serie != null ? '<span style="color:#667"> / ' + x.serie + '</span>' : ''}</td>
@@ -4262,7 +4270,7 @@ function _fcCuponsRender() {
       <td class="fc-td">${fcEsc(x.forma)}</td>
       <td class="fc-td fc-r"${x.cancelado ? ' style="text-decoration:line-through;color:#888"' : ''}>${fcMoney(x.valor)}</td>
       <td class="fc-td">${sit(x)}${tags(x)}</td></tr>`);
-  const transm = lista.filter(x => !x.cancelado), canc = lista.filter(x => x.cancelado);
+  const transm = lista.filter(x => !x.cancelado && !x.oculta), canc = lista.filter(x => x.cancelado && !x.oculta);
   const soma = arr => arr.reduce((s, x) => s + x.valor, 0);
   const sel = (campo, v, txt) => `<option value="${v}" ${f[campo] === v ? 'selected' : ''}>${txt}</option>`;
   fcModalNav(`📑 Cupons Fiscais — ${transm.length} transmitido(s)${canc.length ? ', ' + canc.length + ' cancelado(s)' : ''}`, `
@@ -4282,6 +4290,8 @@ function _fcCuponsRender() {
           oninput="window._fcCuponsFiltro.busca=this.value;clearTimeout(window._fcCupT);window._fcCupT=setTimeout(_fcCuponsRender,300)">
       </div>`,
       rodape: `<div class="fc-filtros" style="justify-content:flex-end;gap:14px;border-top:1px solid #2a2d3e;border-bottom:none">
+        ${ocultas.length ? `<a href="#" style="margin-right:auto;color:#889;font-size:0.76rem" title="NFC-e agrupadas do TecnoX (importadas do XML), sem venda do Octano — ficam fora das somas"
+          onclick="event.preventDefault();window._fcCuponsFiltro.verOcultas=!window._fcCuponsFiltro.verOcultas;_fcCuponsRender()">${f.verOcultas ? '🙈 esconder' : '👁 ver'} ${ocultas.length} nota(s) agrupada(s) do TecnoX (${fcMoney(ocultas.reduce((s, x) => s + x.valor, 0))})</a>` : ''}
         <span>Transmitidos: <b style="color:#7ee2a0">${transm.length} · ${fcMoney(soma(transm))}</b></span>
         <span>Cancelados na SEFAZ: <b style="color:#f87171">${canc.length} · ${fcMoney(soma(canc))}</b></span></div>` });
 }
