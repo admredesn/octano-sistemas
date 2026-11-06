@@ -201,7 +201,10 @@ async function fazerLogin(){
 }
 
 async function fazerLogout(){
-  await sb.auth.signOut();
+  // 06/11/2026: só ESTA sessão. O padrão do supabase-js ('global') apagava todas as
+  // sessões do usuário — o PDV do Florestal (mesmo login) caiu para anônimo e as
+  // faturas sumiram do Receber título.
+  await sb.auth.signOut({ scope: 'local' });
   renderLogin();
 }
 

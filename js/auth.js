@@ -18,7 +18,8 @@ async function login(email, password) {
 }
 
 async function logout() {
-  await sb.auth.signOut();
+  // 06/11/2026: só ESTA sessão (o padrão 'global' derrubava o PDV com o mesmo login)
+  await sb.auth.signOut({ scope: 'local' });
   location.reload();
 }
 
