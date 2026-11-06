@@ -465,10 +465,14 @@ async function fcCarregarDados() {
     // cupom EXCLUÍDO no fechamento (✖): sai das somas — o documento fiscal
     // continua existindo, só não conta neste caixa (pedido Ronan 19/08)
     const ajX = _aj('venda', v.id);
-    if (ajX && ajX.excluido) { v._excluido = true; return; }
-    // venda espelhada do TecnoX não é cupom emitido pelo Octano: entra pelos
-    // pagamentos (abaixo), mas não conta como cupom nem soma itens (vazios).
-    if (String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
+    // CUPOM COM DUAS FORMAS × SUBSTITUIÇÃO PELO EXTRATO (06/11/2026, Ronan — Florestal caixa 1226, cupom 4403: 20 Pix +
+    // 10 dinheiro; "Vendas em dinheiro" 2.836,94, recebidos 2.846,94). A substituição marcava o cupom inteiro como excluído
+    // e o DINHEIRO (ou prazo/frota/cheque) ia embora junto com o cartão/Pix que o extrato repôs — 99 caixas na rede. O cupom
+    // substituído só perde a parte de cartão/Pix; o resto continua contando. O ✖ do gerente (sem extrato_lote) segue
+    // excluindo o cupom inteiro.
+    if (ajX && ajX.excluido && !ajX.extrato_lote) { v._excluido = true; return; }
+    const _soForaExtrato = !!(ajX && ajX.excluido && ajX.extrato_lote);
+    let _contaCupom = !_soForaExtrato;   // substituído inteiro pelo extrato: não conta como cupom (como antes)
     // os ITENS não vêm mais nesta consulta (pesavam 1,3 MB); o total por turno
     // entra pela view, logo abaixo deste laço.
     const _pgsV = Array.isArray(v.pagamentos) ? v.pagamentos : [];
@@ -481,10 +485,15 @@ async function fcCarregarDados() {
       const g = p.haver ? 'haver'   // crédito do cliente (o PDV marca haver:true; o tPag 05 é o mesmo da nota a prazo)
         : (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : _fcGrupoForma(p.forma));
+      if (_soForaExtrato && (g === 'cartao' || g === 'pix')) return;   // esta parte está no extrato (linha ext-)
+      _contaCupom = true;
       const _vp = _fcPagValor(_pgsV, p, i, ajV);   // valor editado pelo ✎ (22/10/2026)
       t.rec[g] = (t.rec[g] || 0) + _vp;
       _fcRecConta(t, g, ajV && ajV.conta_id, _vp);
     });
+    // venda espelhada do TecnoX não é cupom emitido pelo Octano: entra pelos
+    // pagamentos (acima), mas não conta como cupom nem soma itens (vazios).
+    if (_contaCupom && String(v.status || '').toLowerCase() !== 'tecnox') t.qtd_vendas++;
   });
   // VENDA DO TURNO ESPELHADO vem da view (soma dos itens do cupom, feita no
   // banco). Nos turnos onde o PDV do Octano opera, a venda continua vindo da
@@ -3057,12 +3066,16 @@ async function fcNodeDetalhe(tipo) {
 
     // 1) cupons transmitidos — cupom EXCLUÍDO pelo ✖ sai da lista também (o
     // _apl só cobria caixa/receb; a venda ficava visível mesmo fora das somas)
+    // cupom SUBSTITUÍDO pelo extrato (06/11/2026): só a parte de cartão/Pix sai (está nas linhas ext-); dinheiro/prazo/
+    // frota/cheque do mesmo cupom continuam no balão da forma deles, igual à soma da tela
+    const _subst = (a, g) => !!(a && a.excluido && a.extrato_lote && (g === 'cartao' || g === 'pix'));
     const vs = (rV.data || []).filter(v => String(v.status || '').toLowerCase() !== 'cancelada')
-      .filter(v => { const a = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste; return !(a && a.excluido); });
+      .filter(v => { const a = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste; return !(a && a.excluido && !a.extrato_lote); });
     vs.forEach(v => (v.pagamentos || []).forEach((p, iPag) => {
       const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
       const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
         : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
+      if (_subst(ajV, gAj || _fcGrupoForma(p.forma))) return;
       const pertence = gAj
         ? gruposNode0.includes(gAj)
         : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
@@ -3263,6 +3276,7 @@ async function fcNodeDetalhe(tipo) {
         const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
         const gAj = (ajV && ajV.forma_nome) ? _fcGrupoNome(ajV.forma_nome, p.forma)
           : (p.nome ? _fcGrupoNome(p.nome, p.forma) : null);
+        if (_subst(ajV, gAj || _fcGrupoForma(p.forma))) return;
         const pertence = gAj ? gruposNode0.includes(gAj)
           : (cfg.formas || []).includes(String(p.forma || '').padStart(2, '0'));
         if (pertence) soma1(_fcRotPag(p, ajV), _fcPagValor(v.pagamentos, p, iPag, ajV));
