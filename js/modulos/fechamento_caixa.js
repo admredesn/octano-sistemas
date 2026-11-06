@@ -3222,6 +3222,7 @@ async function fcNodeDetalhe(tipo) {
       const quem = x.cliente_nome || x.pessoa_nome || '';
       const btnH = (f.haver && x.id)
         ? `<button class="fc-btn mini" title="Editar o crédito do cliente (forma, data, conta, valor)" onclick="event.stopPropagation();fcHaverForm('${x.id}')">✎</button>`
+          + `<button class="fc-btn mini" title="Excluir o crédito (apaga do caixa e da conta do cliente)" style="color:#f08080" onclick="event.stopPropagation();fcHaverExcluir('${x.id}')">✖</button>`
         : '';
       const aviso = (_temExtrato && (f.g === 'cartao' || f.g === 'pix'))
         ? ` <span style="color:#f59e0b;font-size:0.72rem" title="O caixa foi trocado pelo extrato da maquininha e nenhuma transação do extrato casa com este título (nem sozinho, nem somado com os outros do mesmo cliente). Se o cliente pagou na maquininha, ele já está numa linha do extrato e conta 2×; se o Pix caiu direto no banco, a forma certa é Pix CNPJ.">⚠ sem transação no extrato</span>`
@@ -5538,7 +5539,7 @@ async function fcNodeHaverCredito() {
       <td class="fc-td">${fcEsc(nomeConta(v.conta_id))}</td>
       <td class="fc-td" style="color:#889;font-size:0.72rem">${fcEsc(v.operador) || '—'}${v.descricao ? '<br>' + fcEsc(String(v.descricao).slice(0, 90)) : ''}</td>
       <td class="fc-td fc-r" style="color:#7ee2a0">${fcMoney(v.valor)}</td>
-      <td class="fc-td">${v.tipo === 'credito_adiantado' ? `<button class="fc-btn2" onclick="fcHaverForm('${v.id}')" title="Editar forma, data, conta ou valor">✎</button>` : ''}</td></tr>`);
+      <td class="fc-td" style="white-space:nowrap">${v.tipo === 'credito_adiantado' ? `<button class="fc-btn2" onclick="fcHaverForm('${v.id}')" title="Editar forma, data, conta ou valor">✎</button> <button class="fc-btn2" style="color:#f08080" onclick="fcHaverExcluir('${v.id}')" title="Excluir o crédito (apaga do caixa e da conta do cliente)">✖</button>` : ''}</td></tr>`);
   const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
   const btn = `<button class="fc-btn2" style="margin:10px;border-color:#2a5a3a;color:#7be0a0" onclick="fcHaverForm('')">➕ Lançar crédito do cliente</button>`;
   return fcModalNav('💰 Haver crédito — crédito pago pelo cliente neste caixa', `
@@ -5645,4 +5646,33 @@ async function fcHaverSalvar(id) {
   if (!r.data || !r.data.length) { msg.textContent = 'Nada foi gravado (sem permissão para alterar este lançamento?).'; return; }
   _fcToast(id ? '✔ Crédito alterado' : '✔ Crédito lançado');
   await fcRecarregar(window._fcHaverVolta || 'haver_credito');
+}
+
+// ✖ EXCLUIR o crédito (06/11/2026, Ronan: "tem que ter a opção de excluir também"). Como o ✎ mexe no lançamento real
+// (oct_vales), o ✖ também: APAGA a linha — some do caixa (linha da forma + Haver crédito) e da conta do cliente. Os
+// consumos (abastecido com o crédito) ficam: o saldo do cliente cai no valor do crédito. Não é o overlay do cupom.
+async function fcHaverExcluir(id) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  if (_fcTravado()) return;
+  const turnoId = window._fcTurnoAtual;
+  const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const v = (d.vales_lst || []).find(x => String(x.id) === String(id) && x.tipo === 'credito_adiantado');
+  if (!v) { alert('Lançamento não encontrado — atualize a tela.'); return; }
+  const val = Number(v.valor || 0);
+  let saldo = null;   // saldo do cliente é sempre SOMADO da fonte
+  try {
+    const { data } = await sb.from('oct_vales').select('valor').eq('empresa_id', window._fcEmpresaId).eq('pessoa_id', v.pessoa_id);
+    if (data) saldo = Math.round(data.reduce((s, x) => s + Number(x.valor || 0), 0) * 100) / 100;
+  } catch (e) { /* sem saldo no aviso */ }
+  const dt = s => s ? String(s).slice(8, 10) + '/' + String(s).slice(5, 7) + '/' + String(s).slice(0, 4) : '';
+  const msg = `Excluir o crédito de R$ ${fcMoney(val)} de ${v.pessoa_nome || 'cliente'}${v.forma ? ' (' + v.forma + (v.pago_em ? ', pago em ' + dt(v.pago_em) : '') + ')' : ''}?\n\n`
+    + `O lançamento é APAGADO: sai da linha da forma e do Haver crédito deste caixa e da conta do cliente`
+    + (saldo != null ? ` — o saldo de crédito dele vai de R$ ${fcMoney(saldo)} para R$ ${fcMoney(saldo - val)}.` : '.')
+    + `\nO que ele já abasteceu com o crédito continua lançado.\nNão dá para desfazer (para corrigir valor, forma ou data use o ✎).`;
+  if (!confirm(msg)) return;
+  const r = await sb.from('oct_vales').delete().eq('id', id).eq('tipo', 'credito_adiantado').select('id');
+  if (r.error) { alert('Erro: ' + r.error.message); return; }
+  if (!r.data || !r.data.length) { alert('Nada foi apagado (sem permissão para excluir este lançamento?).'); return; }
+  _fcToast('✖ Crédito excluído');
+  await fcRecarregar(window._fcNodeAtual);
 }
