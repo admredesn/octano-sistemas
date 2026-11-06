@@ -3212,12 +3212,17 @@ async function fcNodeDetalhe(tipo) {
     const _titsNo = (d0.titulos_receb_lst || []).filter(f => grupos.includes(f.g));
     const _rotTit = f => (_fcRotForma(String((f.x && f.x.forma) || ''), '', '') || 'Título') + ' · título';
     const _dataTit = f => {
-      const s = String((f.x && (f.x.data_recebimento || f.x.criado_em)) || '').slice(0, 10);
+      const s = String((f.x && (f.x.pago_em || f.x.data_recebimento || f.x.criado_em)) || '').slice(0, 10);
       return s ? s.split('-').reverse().slice(0, 2).join('/') : '—';
     };
+    // ✎ no crédito (haver) gerado (06/11/2026, Ronan: "não estou corrigindo esse lançamento, tem que dar a opção de editar"):
+    // abre o mesmo formulário do balão Haver crédito (forma, data, conta, valor, obs.) e volta para ESTE balão.
     _titsNo.filter(f => fBand({ forma_nome: String((f.x && f.x.forma) || ''), forma: '', bandeira: '' })).forEach(f => {
       const x = f.x || {};
       const quem = x.cliente_nome || x.pessoa_nome || '';
+      const btnH = (f.haver && x.id)
+        ? `<button class="fc-btn mini" title="Editar o crédito do cliente (forma, data, conta, valor)" onclick="event.stopPropagation();fcHaverForm('${x.id}')">✎</button>`
+        : '';
       const aviso = (_temExtrato && (f.g === 'cartao' || f.g === 'pix'))
         ? ` <span style="color:#f59e0b;font-size:0.72rem" title="O caixa foi trocado pelo extrato da maquininha e nenhuma transação do extrato casa com este título (nem sozinho, nem somado com os outros do mesmo cliente). Se o cliente pagou na maquininha, ele já está numa linha do extrato e conta 2×; se o Pix caiu direto no banco, a forma certa é Pix CNPJ.">⚠ sem transação no extrato</span>`
         : '';
@@ -3229,7 +3234,7 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td">${fcEsc(quem) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(f.valor)}</td>
-          <td class="fc-td" style="width:84px"></td></tr>`] });
+          <td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`] });
     });
 
     // 4) NOTAS A PRAZO espelhadas do TecnoX. Nos postos que ainda operam por lá
@@ -5549,6 +5554,8 @@ async function fcHaverForm(id) {
   if (!podeOuAvisa(id ? 'fcaixa.lanc_alterar' : 'fcaixa.lanc_incluir')) return;
   if (_fcTravado()) return;
   const turnoId = window._fcTurnoAtual;
+  // de onde veio (balão Haver crédito, ou o balão da forma — Cheque, Cartão + Pix... — pelo ✎ da linha "Crédito (haver) gerado")
+  window._fcHaverVolta = window._fcNodeAtual || 'haver_credito';
   const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
   const t = (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoId) || {};
   const v = id ? (d.vales_lst || []).find(x => String(x.id) === String(id)) : null;
@@ -5577,7 +5584,7 @@ async function fcHaverForm(id) {
       ${v ? '<p style="color:#f0b45c;font-size:0.74rem;margin-top:8px">Mudar o valor muda o saldo de crédito do cliente.</p>' : ''}
       <div id="fhc-msg" style="color:#f87171;font-size:0.78rem;min-height:16px;margin-top:8px"></div>
       <div style="display:flex;gap:8px;margin-top:6px">
-        <button class="fc-btn2" style="flex:1" onclick="fcNode('haver_credito')">Voltar</button>
+        <button class="fc-btn2" style="flex:1" onclick="fcNode(window._fcHaverVolta || 'haver_credito')">Voltar</button>
         <button class="fc-btn2" style="flex:2;border-color:#2a5a3a;color:#7be0a0" onclick="fcHaverSalvar('${id || ''}')">💾 Salvar</button>
       </div>
     </div>`);
@@ -5637,5 +5644,5 @@ async function fcHaverSalvar(id) {
   }
   if (!r.data || !r.data.length) { msg.textContent = 'Nada foi gravado (sem permissão para alterar este lançamento?).'; return; }
   _fcToast(id ? '✔ Crédito alterado' : '✔ Crédito lançado');
-  await fcRecarregar('haver_credito');
+  await fcRecarregar(window._fcHaverVolta || 'haver_credito');
 }
