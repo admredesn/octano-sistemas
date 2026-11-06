@@ -384,6 +384,8 @@ async function fcCarregarDados() {
       turnosTecnox.add(v.turno_id);
     }
   });
+  // o balão precisa saber (06/11/2026, AC caixa 829): no espelhado a fila do PDV do Octano não conta no recebimento
+  turnosTecnox.forEach(tid => { if (porTurno[tid]) porTurno[tid].espelho_tecnox = true; });
   // VENDA DE COMBUSTÍVEL = PISTA, imutável (regra Ronan 19/08): todo litro que
   // saiu da bomba conta como venda, pago ou não, excluído ou não. Exclusão de
   // lançamento (fila/cupom) tira apenas o RECEBIMENTO.
@@ -750,6 +752,7 @@ async function fcCarregarDados() {
     // gravou o recebimento; o mesmo dinheiro contava 2× e virava "sobra" de 1.949,58). O título de frota que casa com um
     // lançamento manual de frota (mesmo valor, com ou sem os juros; cada lançamento casa uma vez) já está no Cartão Frota.
     const frotaMan = (t.manuais || []).filter(m => m.secao === 'frota').map(m => ({ c: Math.round(Number(m.valor || 0) * 100), usado: false }));
+    const pend = [];   // não casou sozinho: tenta em grupo (abaixo) e o que sobrar soma na linha da forma
     fora.forEach(f => {
       if (f.g === 'frota' && frotaMan.length) {
         const alvos = [Math.round(f.dinheiro * 100), Math.round(f.valor * 100)];
@@ -775,7 +778,52 @@ async function fcCarregarDados() {
           return;
         }
       }
+      pend.push(f);
+    });
+    // VÁRIOS TÍTULOS NUMA PASSADA SEM O VÍNCULO (06/11/2026, Ronan — Florestal caixa 1226: os 3 títulos do JOAO TEIXEIRA,
+    // 692,38 + 17,79 + 684,93, pagos numa passada só de 1.395,10 no crédito, sem recebimento_id; nenhum casava sozinho e os
+    // 1.395,10 contavam 2× → "sobra" de 940,94 que era falta de 454,16). O que não casou sozinho casa em GRUPO: títulos do
+    // MESMO cliente e da mesma forma (cartão ou Pix) cuja soma bate no centavo com uma linha do extrato ainda livre — do
+    // maior grupo para o menor, cada linha e cada título casam uma vez. Crédito (haver) gerado fica de fora.
+    if (livres.length && pend.length > 1) {
+      const nomeK = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+      const porCli = {};
+      pend.forEach(f => {
+        if ((f.g !== 'cartao' && f.g !== 'pix') || f.haver || !f.x || !nomeK(f.x.cliente_nome)) return;
+        const k = f.g + '|' + nomeK(f.x.cliente_nome);
+        (porCli[k] = porCli[k] || []).push(f);
+      });
+      Object.values(porCli).forEach(gs => {
+        const n = gs.length;
+        if (n < 2 || n > 12) return;
+        const pix = gs[0].g === 'pix';
+        const masks = [];
+        for (let m = 1; m < (1 << n); m++) {
+          let b = 0; for (let i = 0; i < n; i++) if (m & (1 << i)) b++;
+          if (b >= 2) masks.push([b, m]);
+        }
+        masks.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+        let usados = 0;
+        masks.forEach(([, m]) => {
+          if (m & usados) return;
+          let cv = 0, cd = 0;
+          for (let i = 0; i < n; i++) if (m & (1 << i)) { cv += Math.round(gs[i].valor * 100); cd += Math.round(gs[i].dinheiro * 100); }
+          const l = livres.find(x => !x.usado && x.pix === pix && (x.c === cv || x.c === cd));
+          if (!l) return;
+          l.usado = true; usados |= m;
+          for (let i = 0; i < n; i++) if (m & (1 << i)) {
+            gs[i].x._no_extrato = true; gs[i].x._na_passada = l.id;
+            t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + gs[i].valor) * 100) / 100;
+          }
+        });
+      });
+    }
+    // o que soma na linha da forma também vai para o balão da forma (06/11/2026: tela e balão saem da mesma lista)
+    t.titulos_receb_lst = [];
+    pend.forEach(f => {
+      if (f.x && f.x._no_extrato) return;
       t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.valor;
+      t.titulos_receb_lst.push(f);
     });
   });
 
@@ -3064,7 +3112,10 @@ async function fcNodeDetalhe(tipo) {
     }));
 
     // 2) fila de transmissão (agrupada por marca — recebimento unificado)
-    const fsFila = (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma))).filter(fBand);
+    // caixa espelhado do TecnoX: o recebimento vem do TecnoX e a fila do PDV do Octano (que rodava junto) NÃO soma na tela —
+    // listar aqui fazia o balão passar da tela (06/11/2026, AC caixa 829: 12.897,64 × 9.987,39)
+    const _filaConta = f => !d0.espelho_tecnox && grupos.includes(_fcGrupoNome(f.forma_nome, f.forma));
+    const fsFila = (d0.fila_itens || []).filter(_filaConta).filter(fBand);
     const porMarca = {}; const ordemG = [];
     fsFila.forEach(f => {
       const k = (f.marca && String(f.marca)) || 'solo:' + f.id;
@@ -3139,6 +3190,35 @@ async function fcNodeDetalhe(tipo) {
     });
     manuaisMesclados = true;
 
+    // 3b) TÍTULOS RECEBIDOS NESTA FORMA (06/11/2026, Ronan: "o número que aparece ali tem que ser sempre o resultado dos
+    // recebimentos da tela cartão + pix"). A linha da tela soma o título pago fora do dinheiro (regra de 16/10) que não está
+    // no extrato — sem ele aqui, tela e balão nunca batiam (Florestal 1226: 10.273,55 × 8.456,02). Com o caixa trocado pelo
+    // extrato, o título que não achou a transação dele leva o aviso: ou o dinheiro caiu no banco (era Pix CNPJ), ou é a
+    // mesma passada contada de novo.
+    const _temExtrato = (d0.manuais || []).some(m => String(m.id || '').indexOf('ext-') === 0);
+    const _titsNo = (d0.titulos_receb_lst || []).filter(f => grupos.includes(f.g));
+    const _rotTit = f => (_fcRotForma(String((f.x && f.x.forma) || ''), '', '') || 'Título') + ' · título';
+    const _dataTit = f => {
+      const s = String((f.x && (f.x.data_recebimento || f.x.criado_em)) || '').slice(0, 10);
+      return s ? s.split('-').reverse().slice(0, 2).join('/') : '—';
+    };
+    _titsNo.filter(f => fBand({ forma_nome: String((f.x && f.x.forma) || ''), forma: '', bandeira: '' })).forEach(f => {
+      const x = f.x || {};
+      const quem = x.cliente_nome || x.pessoa_nome || '';
+      const aviso = (_temExtrato && (f.g === 'cartao' || f.g === 'pix'))
+        ? ` <span style="color:#f59e0b;font-size:0.72rem" title="O caixa foi trocado pelo extrato da maquininha e nenhuma transação do extrato casa com este título (nem sozinho, nem somado com os outros do mesmo cliente). Se o cliente pagou na maquininha, ele já está numa linha do extrato e conta 2×; se o Pix caiu direto no banco, a forma certa é Pix CNPJ.">⚠ sem transação no extrato</span>`
+        : '';
+      entradas.push({ val: Number(f.valor || 0), hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [
+        `<tr><td class="fc-td"></td>
+          <td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
+          <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'}${aviso}</td>
+          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
+          <td class="fc-td">${fcEsc(quem) || '—'}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
+          <td class="fc-td fc-r">${fcMoney(f.valor)}</td>
+          <td class="fc-td" style="width:84px"></td></tr>`] });
+    });
+
     // 4) NOTAS A PRAZO espelhadas do TecnoX. Nos postos que ainda operam por lá
     // a venda a prazo não gera cupom no Octano — a nota é o único registro, e
     // sem ela o balão ficava vazio embora o resumo somasse o valor.
@@ -3177,7 +3257,7 @@ async function fcNodeDetalhe(tipo) {
     {
       const totais = {};
       const soma1 = (rot, v) => { (totais[rot] = totais[rot] || { n: 0, v: 0 }); totais[rot].n++; totais[rot].v += v; };
-      (d0.fila_itens || []).filter(f => grupos.includes(_fcGrupoNome(f.forma_nome, f.forma)))
+      (d0.fila_itens || []).filter(_filaConta)
         .forEach(f => { const p = _rotParte(f); soma1(p.forma + (p.band ? ' ' + p.band : ''), vfDe(f)); });
       vs.forEach(v => (v.pagamentos || []).forEach((p, iPag) => {
         const ajV = ((window._fcConf || {})['venda:' + v.id] || {}).ajuste;
@@ -3188,6 +3268,7 @@ async function fcNodeDetalhe(tipo) {
         if (pertence) soma1(_fcRotPag(p, ajV), _fcPagValor(v.pagamentos, p, iPag, ajV));
       }));
       mans.forEach(m => soma1(_rotMan(m) || 'Manual', Number(m.valor || 0)));
+      _titsNo.forEach(f => soma1(_rotTit(f), Number(f.valor || 0)));   // títulos na forma (06/11/2026): TODOS = linha da tela
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
