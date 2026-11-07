@@ -545,11 +545,49 @@ async function manifBaixarXml(id, nsu) {
   } catch(e) { manifMsg('Erro: ' + e.message, 'erro'); }
 }
 
-function manifImprimir(id) {
+// Gera o DANFE (PDF) da nota pelo servidor SEFAZ (POST /danfe, o mesmo da NF-e de saida) e abre numa aba nova,
+// pronta para imprimir. O DANFE precisa do XML completo com o protocolo de autorizacao (nfeProc/protNFe) — o
+// resumo (resNFe) que a SEFAZ manda antes da ciencia nao serve.
+async function manifImprimir(id) {
   const n = _manifDados.find(x => x.id === id);
-  if (!n?.xml) { manifMsg('Baixe o XML antes de imprimir.', 'info'); return; }
-  // impressao do DANFE em PDF sera implementada futuramente
-  manifMsg('Impressão de DANFE em PDF: em desenvolvimento.', 'info');
+  const xml = n?.xml || '';
+  if (!xml) { manifMsg('Esta nota ainda não tem o XML no sistema. Clique em ⬇️ XML e depois em Imprimir.', 'info'); return; }
+  if (!/<protNFe/.test(xml)) {
+    manifMsg(/<resNFe/.test(xml)
+      ? 'A SEFAZ ainda não liberou o XML completo desta nota (só o resumo). O PDF sai assim que o XML completo chegar.'
+      : 'O XML desta nota não tem o protocolo de autorização da SEFAZ — não dá para gerar o PDF.', 'info');
+    return;
+  }
+  // abre a aba ja no clique (depois do await o navegador bloquearia como pop-up)
+  const aba = window.open('', '_blank');
+  if (aba) { try { aba.document.title = 'Gerando PDF...'; aba.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">Gerando o PDF da NF-e…</p>'; } catch (e) {} }
+  manifMsg('📄 Gerando o PDF da NF-e...', 'info');
+  try {
+    const resp = await fetch(`${SEFAZ_URL}/danfe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    });
+    if (!resp.ok) {
+      let detalhe = '';
+      try { const j = await resp.json(); detalhe = j.erro || ''; } catch (e) {}
+      throw new Error(detalhe || ('servidor respondeu ' + resp.status));
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+    if (aba && !aba.closed) {
+      aba.location.href = url;
+    } else {
+      // pop-up bloqueado: baixa o arquivo
+      const a = document.createElement('a');
+      a.href = url; a.download = `NFe_${n.numero || n.chave_nfe || id}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    manifMsg(`✓ PDF da NF-e ${n.numero || ''} gerado.`, 'ok');
+  } catch (e) {
+    if (aba && !aba.closed) aba.close();
+    manifMsg('Erro ao gerar o PDF: ' + e.message, 'erro');
+  }
 }
 
 async function manifExcluirImportacao(id, chave) {
