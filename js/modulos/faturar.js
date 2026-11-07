@@ -55,10 +55,12 @@ async function moduloFaturar() {
   window._fatAba = window._fatAba || "abertos";
   window._fatF = window._fatF || _fatFVazio();
   // clientes do posto: o filtro de cliente vale para as três abas
-  if (!window._fatClientes || window._fatClientes.eid !== eid) {
-    const r = await _fatTodas(() => sb.from("oct_pessoas").select("id,nome,tecnox_cod").eq("empresa_id", eid).order("nome").order("id"));
+  if (!window._fatClientes || window._fatClientes.eid !== eid || !window._fatClientes.func) {
+    const r = await _fatTodas(() => sb.from("oct_pessoas").select("id,nome,tecnox_cod,classificacoes").eq("empresa_id", eid).order("nome").order("id"));
     // código do cliente (20/10/2026): o do TecnoX para quem veio de lá, 10001+ para cliente novo
-    window._fatClientes = { eid, lista: r.data || [], cod: Object.fromEntries((r.data || []).filter(p => p.tecnox_cod != null).map(p => [p.id, p.tecnox_cod])) };
+    window._fatClientes = { eid, lista: r.data || [], cod: Object.fromEntries((r.data || []).filter(p => p.tecnox_cod != null).map(p => [p.id, p.tecnox_cod])),
+      // funcionário = cadastro de Pessoas com a classificação "Funcionário" (07/11/2026)
+      func: new Set((r.data || []).filter(p => (p.classificacoes || []).includes("funcionario")).map(p => p.id)) };
   }
   conteudo.innerHTML = `
     ${_fatEstilo()}
@@ -197,7 +199,18 @@ function _fatFormasOpts() {
 // título PAGO tem saldo (valor) zero: a lista mostra o valor da nota (23/10/2026 — aparecia R$ 0,00)
 function _fatValorTela(t) { return t.status === "pago" && t.valor_original != null ? Number(t.valor_original) : Number(t.valor || 0); }
 function _fatFVazio() {
-  return { cli: "", forma: "", status: "aberto", de: "", ate: "", vde: "", vate: "", lde: "", late: "", busca: "" };
+  return { cli: "", forma: "", status: "aberto", de: "", ate: "", vde: "", vate: "", lde: "", late: "", busca: "", func: false };
+}
+// FILTRO DE FUNCIONÁRIOS (07/11/2026, Ronan: "quando clicar aparecer só faturas relacionadas a funcionários"):
+// vale para as três abas; quem é funcionário vem do cadastro de Pessoas (classificação "Funcionário")
+function _fatEhFunc(id) { const s = (window._fatClientes || {}).func; return !!(id && s && s.has(id)); }
+function fatFiltroFunc() {
+  const F = window._fatF = window._fatF || _fatFVazio();
+  F.func = !F.func;
+  if (F.func && F.cli && !_fatEhFunc(F.cli)) F.cli = "";   // cliente escolhido não é funcionário: sai do filtro
+  if (window._fatAba === "abertos") window._fatSel = new Set();
+  _fatPainelRender();   // o botão acende e a lista de clientes passa a ser só de funcionários
+  _fatFiltrar();
 }
 function _fatIsoLocal(v) {
   if (!v) return "";
@@ -213,16 +226,21 @@ function _fatPainelRender() {
   const el = document.getElementById("fat-filtros-c");
   if (!el) return;
   const F = window._fatF = window._fatF || _fatFVazio();
-  const cli = (window._fatClientes || {}).lista || [];
+  const nFunc = ((window._fatClientes || {}).func || new Set()).size;
+  const cli = ((window._fatClientes || {}).lista || []).filter(p => !F.func || _fatEhFunc(p.id));
+  const nomesFunc = ((window._fatClientes || {}).lista || []).filter(p => _fatEhFunc(p.id)).map(p => p.nome).join(", ");
   const data = (campo, tit) => `<input type="date" class="fat-inp" id="fat-c-${campo}" value="${F[campo] || ""}"
       onchange="fatSetF('${campo}',this.value)" title="${tit}">`;
   el.innerHTML = `
     <div class="fat-filtros" style="border-bottom:none;padding-bottom:4px">
       <span class="fat-c-g">Cliente:
         <select class="fat-sel" id="fat-c-cli" onchange="fatSetF('cli',this.value)" style="max-width:360px">
-          <option value="">Todos os clientes</option>
+          <option value="">${F.func ? "Todos os funcionários" : "Todos os clientes"}</option>
           ${cli.map(p => `<option value="${p.id}" ${F.cli === p.id ? "selected" : ""}>${p.tecnox_cod != null ? p.tecnox_cod + " · " : ""}${_fatEsc(p.nome)}</option>`).join("")}
         </select></span>
+      <button class="fat-btn mini${F.func ? " fat-func-on" : ""}" id="fat-c-func" onclick="fatFiltroFunc()"
+        title="${nFunc ? (F.func ? "Mostrando só funcionários — clique para ver todos os clientes" : "Mostrar só o que é de funcionários") + " (" + nFunc + " no cadastro: " + _fatEsc(nomesFunc) + ")"
+          : "Nenhuma pessoa com a classificação Funcionário no cadastro de Pessoas deste posto"}">👷 Funcionários${F.func ? " ✓" : ""}</button>
       <input class="fat-inp" id="fat-c-busca" type="search" autocomplete="off" placeholder="🔍 nome, NFC-e ou nº da fatura"
         value="${_fatEsc(F.busca || "")}" oninput="fatSetFBusca(this.value)" style="width:230px">
       <span class="fat-c-g" id="fat-c-g-status">Status:
@@ -328,6 +346,7 @@ function _fatRenderTitulos(manterRolagem) {
     if (F.status === "pago" && t.status !== "pago") return false;
     if (F.status === "parcelado" && t.status !== "parcelado") return false;
     if (F.cli && t.cliente_id !== F.cli) return false;
+    if (F.func && !_fatEhFunc(t.cliente_id)) return false;
     if (F.forma) { const fn = (t.forma_nome || "").toLowerCase(); if (fn.indexOf(F.forma.toLowerCase()) < 0) return false; }
     const emi = _fatIsoLocal(t.registrado_em || t.criado_em);
     if (F.de && emi && emi < F.de) return false;
@@ -3196,6 +3215,15 @@ function _fatSelFSync() {
     const x = document.getElementById(b);
     if (x) x.disabled = !marcadas.length;
   });
+  // unificar: 2+ faturas do MESMO cliente
+  const un = document.getElementById("fatf-btn-unir");
+  if (un) {
+    const clis = new Set(marcadas.map(f => f.cliente_id || ""));
+    const ok = marcadas.length >= 2 && clis.size === 1 && !clis.has("");
+    un.disabled = !ok;
+    un.title = ok ? `Juntar as ${marcadas.length} faturas de ${marcadas[0].cliente_nome || "cliente"} numa só`
+      : marcadas.length < 2 ? "Marque 2 ou mais faturas do mesmo cliente" : "Só dá para unificar faturas do MESMO cliente";
+  }
   const mestre = document.getElementById("fatf-chk-todas");
   if (mestre) {
     const vis = _fatVisiveisF(), marcVis = vis.filter(f => s.has(f.id));
@@ -3222,6 +3250,7 @@ function _fatVisiveisF() {
     if (termo && !_fatNorm((f.cliente_nome || "") + " " + (f.numero ?? "") + " " + (_fatCod(f.cliente_id) ?? "") +
         (f.parcela_de ? " " + (f._origNum ?? "") + "/" + f.parcela_num : "")).includes(termo)) return false;
     if (F.cli && f.cliente_id !== F.cli) return false;
+    if (F.func && !_fatEhFunc(f.cliente_id)) return false;
     if (!entre(_fatIsoLocal(f.emissao || f.criado_em), F.de, F.ate)) return false;
     if (!entre(_fatIsoLocal(f.vencimento), F.vde, F.vate)) return false;
     if (liq && !entre(_fatIsoLocal(f.liquidado_em), F.lde, F.late)) return false;
@@ -3284,7 +3313,8 @@ function _fatRodapeF(faturas, status) {
       ${status === "aberta" ? b("fatf-btn-nf", "#0e7490", "🧾 Gerar NF", "fatLoteNf()") +
         b("fatf-btn-boleto", "#334155", "🏦 Gerar boletos", "fatLoteBoleto()") +
         b("fatf-btn-enviar", "#15803d", "📤 Enviar faturas", "fatLoteEnviar()") +
-        b("fatf-btn-cobrar", "#b45309", "📣 Cobrar", "fatLoteCobrar()") : ""}
+        b("fatf-btn-cobrar", "#b45309", "📣 Cobrar", "fatLoteCobrar()") +
+        b("fatf-btn-unir", "#7c3aed", "🔗 Unificar", "fatUnificar()") : ""}
     </span></div>`;
 }
 
@@ -3793,6 +3823,7 @@ function _fatDiretosVisiveis() {
     if (!comTecnox && !(t._recs || []).length) return false;   // quitado pelo TecnoX (sem baixa no Octano): só no botão
     if (termo && !_fatNorm((t.cliente_nome || "") + " " + (t.numero_nfe || "") + " " + (_fatCod(t.cliente_id) ?? "")).includes(termo)) return false;
     if (F.cli && t.cliente_id !== F.cli) return false;
+    if (F.func && !_fatEhFunc(t.cliente_id)) return false;
     if (!entre(_fatIsoLocal(t.registrado_em || t.criado_em), F.de, F.ate)) return false;
     if (!entre(t._pagoDia ? String(t._pagoDia).slice(0, 10) : null, F.lde, F.late)) return false;
     if (window._fatEsconderConf && t.conferido) return false;
@@ -4600,6 +4631,247 @@ async function fatExcluirFaturaOk(id) {
   _fatRecarregar();
 }
 
+// ---------- UNIFICAR FATURAS (07/11/2026) ----------
+// Ronan: "às vezes o mesmo cliente tem duas faturas separadas; em vez de excluir e criar novamente, quero que o sistema
+// consiga unificar". Uma das faturas FICA (número, emissão e NF-e anexada); os títulos das outras passam para ela, bruto,
+// desconto e acréscimo somam, e as outras saem como CANCELADAS com o histórico "unificada na Nº X" (nada é apagado).
+// O PDF da que fica é refeito. Travas como as do Excluir (boleto vivo ou pago no Sicoob, recebimento lançado) + parcela,
+// mais de uma NF-e e títulos que não somam o valor da fatura.
+function _fatUniTravas(ds) {
+  const t = [];
+  const clis = new Set(ds.map(d => d.f.cliente_id || ""));
+  if (clis.size > 1 || clis.has("")) t.push("As faturas são de clientes diferentes (ou sem cliente). Só dá para unificar faturas do mesmo cliente.");
+  ds.forEach(d => {
+    const f = d.f, n = `Nº <b>${f.numero ?? "?"}</b>`;
+    if (f.status !== "aberta") t.push(`A fatura ${n} não está mais em aberto (está "${_fatEsc(f.status)}").`);
+    if (f.parcela_de) t.push(`A fatura ${n} é parcela de outra fatura. Desfaça o parcelamento antes de unificar.`);
+    const vivo = d.boletos.find(b => b.status === "registrado" || b.status === "pendente");
+    if (vivo) t.push(`A fatura ${n} tem o boleto <b>${_fatEsc(vivo.nosso_numero || "")}</b> (${_fatBRL(vivo.valor)}) ${vivo.status === "pendente" ? "sendo registrado" : "registrado"} no Sicoob.
+      Depois de unificar ele continuaria valendo o valor antigo: <b>baixe o boleto no Sicoob primeiro</b> e gere um novo na fatura unificada.`);
+    if (d.boletos.some(b => b.status === "liquidado") || d.receb.some(r => r.boleto_id)) {
+      t.push(`O boleto da fatura ${n} já foi pago no Sicoob.`);
+    } else if (d.receb.length) {
+      t.push(`A fatura ${n} já tem recebimento lançado (${_fatBRL(d.receb.reduce((a, r) => a + _fatRecLiq(r), 0))}).
+        Unifique antes de receber, ou exclua o recebimento e lance de novo na fatura unificada.`);
+    }
+    const soma = d.titulos.reduce((a, x) => a + Number(x.valor || 0), 0);
+    if (Math.abs(soma - Number(f.valor || 0)) > 0.009) {
+      t.push(`Os títulos da fatura ${n} somam ${_fatBRL(soma)}, mas a fatura vale ${_fatBRL(f.valor)}. Confira em 👁 Detalhes antes de unificar.`);
+    }
+  });
+  if (ds.filter(d => d.f.nfe_chave).length > 1) t.push("Mais de uma fatura tem NF-e anexada, e a fatura unificada guarda uma NF-e só.");
+  return t;
+}
+// regra do desconto da unificada: a mesma, se todas têm desconto com a MESMA regra (por litro fecha: as linhas somam);
+// senão "valor total" — o valor do desconto não muda, só o PDF reparte pelo valor de cada abastecimento
+function _fatUniRegra(ds) {
+  const comDesc = ds.filter(d => Number(d.f.desconto || 0) > 0);
+  if (!comDesc.length) return { regra: null, muda: false };
+  const chave = d => JSON.stringify(d.f.desconto_regra || { modo: "total" });
+  if (comDesc.length === ds.length && comDesc.every(d => chave(d) === chave(comDesc[0]))) return { regra: comDesc[0].f.desconto_regra || { modo: "total" }, muda: false };
+  return { regra: { modo: "total" }, muda: comDesc.some(d => (d.f.desconto_regra || {}).modo && d.f.desconto_regra.modo !== "total") };
+}
+function _fatUniAvisos() {
+  const st = window._fatUni; if (!st) return;
+  const el = document.getElementById("fun-avisos"); if (!el) return;
+  const fica = (document.querySelector('input[name="fun-fica"]:checked') || {}).value || st.fica;
+  const venc = (document.getElementById("fun-venc") || {}).value || "";
+  const dF = st.ds.find(d => d.f.id === fica);
+  const sai = st.ds.filter(d => d.f.id !== fica);
+  const av = [];
+  if (venc && venc < _fatHojeIso()) av.push("O vencimento é anterior a hoje: a fatura unificada já nasce vencida.");
+  sai.filter(d => d.f.vencimento && d.f.vencimento < _fatHojeIso() && venc > d.f.vencimento).forEach(d =>
+    av.push(`A fatura Nº ${d.f.numero ?? "?"} está vencida desde ${_fatData(d.f.vencimento)}. Com o vencimento ${_fatData(venc)}, multa e juros dela só contam a partir da data nova.`));
+  if (dF && dF.f.nfe_chave) av.push(`A NF-e ${_fatEsc(dF.f.nfe_numero || "")} anexada na Nº ${dF.f.numero ?? "?"} cobre só os cupons dela (${_fatBRL(dF.f.nfe_valor || dF.f.valor)}). Os cupons das outras faturas não estão nessa NF-e.`);
+  const env = st.ds.filter(d => d.f.enviada_em);
+  if (env.length) av.push(`Já foi enviada ao cliente: ${env.map(d => "Nº " + (d.f.numero ?? "?") + " em " + _fatData(d.f.enviada_em)).join(", ")}. Depois de unificar, mande a fatura nova (📤 Enviar).`);
+  if (_fatUniRegra(st.ds).muda) av.push("Os descontos têm regras diferentes (por litro × valor total). O valor do desconto continua igual, mas no PDF ele passa a ser repartido pelo valor de cada abastecimento.");
+  el.innerHTML = av.map(a => `<div style="margin-top:8px;background:#2a2010;border:1px solid #63501f;border-radius:8px;padding:8px 11px;font-size:0.78rem;color:#f0c98a;line-height:1.45">⚠ ${a}</div>`).join("");
+}
+function fatUniFica(id) {
+  const st = window._fatUni; if (!st) return;
+  const d = st.ds.find(x => x.f.id === id);
+  const v = document.getElementById("fun-venc");
+  if (d && v && !st.vencMexido) v.value = d.f.vencimento || "";   // a data acompanha a fatura que fica, até alguém mexer nela
+  _fatUniAvisos();
+}
+
+async function fatUnificar() {
+  if (!podeOuAvisa('faturar.alterar_fatura') || !podeOuAvisa('faturar.excluir_fatura')) return;
+  const sel = _fatSelecionadas();
+  if (sel.length < 2) { alert("Marque 2 ou mais faturas do mesmo cliente."); return; }
+  _fatModal(`<div style="padding:24px;color:#9aa">Conferindo as ${sel.length} faturas...</div>`);
+  const ds = await Promise.all(sel.map(f => _fatExcluirDados(f.id)));
+  const falhou = ds.find(d => d.erro);
+  if (falhou) { _fatFechaModal(); alert(falhou.erro); return; }
+  ds.sort((a, b) => (Number(a.f.numero) || 0) - (Number(b.f.numero) || 0));
+  const travas = _fatUniTravas(ds);
+  const comNf = ds.find(d => d.f.nfe_chave);
+  const fica = (comNf || ds[0]).f.id;   // fica a que tem NF-e; sem NF-e, a mais antiga (menor número)
+  window._fatUni = { ds, fica, vencMexido: false };
+  const soma = k => ds.reduce((a, d) => a + Number(d.f[k] || 0), 0);
+  const liq = ds.reduce((a, d) => a + _fatLiquido(d.f), 0);
+  const nTit = ds.reduce((a, d) => a + d.titulos.length, 0);
+  const th = (r, al) => `<th style="padding:6px 7px;color:#8a93a3;font-weight:500;font-size:0.72rem;text-align:${al || "left"};border-bottom:1px solid #2a2d3e">${r}</th>`;
+  const td = (v, al, cor) => `<td style="padding:6px 7px;text-align:${al || "left"};${cor ? "color:" + cor + ";" : ""}font-variant-numeric:tabular-nums">${v}</td>`;
+  const linhas = ds.map(d => {
+    const f = d.f, travaNf = comNf && f.id !== comNf.f.id;
+    return `<tr style="border-bottom:1px solid #1d2030">
+      <td style="padding:6px 7px;text-align:center"><input type="radio" name="fun-fica" value="${f.id}" ${f.id === fica ? "checked" : ""} ${travaNf ? "disabled" : ""}
+        onchange="fatUniFica('${f.id}')" title="${travaNf ? "A fatura com NF-e anexada é a que fica" : "Esta fatura fica (com o número dela)"}"></td>
+      ${td("<b>" + (f.numero ?? "—") + "</b>")}${td(_fatData(f.emissao))}${td(_fatData(f.vencimento) || "—", "left", f.vencimento && f.vencimento < _fatHojeIso() ? "#f87171" : "")}
+      ${td(d.titulos.length, "center")}${td(_fatMoney(f.valor), "right")}
+      ${td(Number(f.desconto || 0) ? "− " + _fatMoney(f.desconto) : "—", "right", Number(f.desconto || 0) ? "#fca5a5" : "#4a5160")}
+      ${td(Number(f.acrescimo || 0) ? "+ " + _fatMoney(f.acrescimo) : "—", "right", Number(f.acrescimo || 0) ? "#86efac" : "#4a5160")}
+      ${td("<b>" + _fatMoney(_fatLiquido(f)) + "</b>", "right")}${td(f.nfe_numero ? "NF " + _fatEsc(String(f.nfe_numero)) : "—", "center", f.nfe_numero ? "" : "#4a5160")}
+    </tr>`;
+  }).join("");
+  const caixa = (cor, fundo, borda, html) =>
+    `<div style="margin-top:10px;background:${fundo};border:1px solid ${borda};border-radius:8px;padding:10px 12px;font-size:0.8rem;color:${cor};line-height:1.45">${html}</div>`;
+  const m = _fatModal(`
+    <div style="background:#13151f;color:#c4b5fd;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>🔗 Unificar ${ds.length} faturas · ${_fatEsc(ds[0].f.cliente_nome || "")}</span>
+      <span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:14px 18px;color:#cdd6e0">
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+        <thead><tr>${th("Fica", "center")}${th("Nº")}${th("Emissão")}${th("Vencimento")}${th("Títulos", "center")}${th("Bruto", "right")}${th("Desconto", "right")}${th("Acréscimo", "right")}${th("Líquido", "right")}${th("NF-e", "center")}</tr></thead>
+        <tbody>${linhas}</tbody>
+        <tfoot><tr style="color:#f59e0b;font-weight:700">
+          <td colspan="4" style="padding:8px 7px">Fatura unificada</td>${td(nTit, "center")}${td(_fatMoney(soma("valor")), "right")}
+          ${td(soma("desconto") ? "− " + _fatMoney(soma("desconto")) : "—", "right")}${td(soma("acrescimo") ? "+ " + _fatMoney(soma("acrescimo")) : "—", "right")}
+          ${td("R$ " + _fatMoney(liq), "right")}<td></td></tr></tfoot>
+      </table></div>
+      ${travas.length
+        ? `<div style="font-size:0.84rem;color:#fecaca;margin-top:12px">Estas faturas não podem ser unificadas agora:</div>` +
+          travas.map(t => caixa("#fecaca", "#2a1215", "#7f1d1d", "⛔ " + t)).join("") +
+          `<div style="display:flex;gap:8px;margin-top:14px"><button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Fechar</button></div>`
+        : caixa("#cdd6e0", "#13151f", "#2a2d3e", `A fatura marcada em <b>Fica</b> continua com o número dela e recebe os <b>${nTit} título(s)</b>.
+            As outras saem de Faturas em Aberto (ficam guardadas como <b>canceladas</b>, com o histórico). O PDF da fatura é refeito.`) + `
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;align-items:flex-end">
+        <label style="color:#9aa;font-size:0.74rem">Vencimento da fatura unificada<br>
+          <input id="fun-venc" type="date" value="${_fatEsc(ds.find(d => d.f.id === fica).f.vencimento || "")}" oninput="window._fatUni.vencMexido=true;_fatUniAvisos()"
+            style="margin-top:4px;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></label>
+        <label style="color:#9aa;font-size:0.74rem;flex:1;min-width:220px">Motivo <span style="color:#667">(opcional — fica no histórico)</span><br>
+          <input id="fun-motivo" placeholder="ex.: fechamento do mês saiu em duas faturas"
+            style="margin-top:4px;width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee"></label>
+      </div>
+      <div id="fun-avisos"></div>
+      <div id="fun-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
+        <button id="fun-ok" class="fat-btn" style="flex:2;background:#6d28d9;border-color:#6d28d9;color:#fff;font-weight:700"
+          onclick="fatUnificarOk()">🔗 Unificar em uma fatura de R$ ${_fatMoney(liq)}</button>
+      </div>`}
+    </div>`);
+  const caixaModal = m.lastElementChild;
+  if (caixaModal) caixaModal.style.width = "min(780px,96vw)";
+  if (!travas.length) _fatUniAvisos();
+}
+
+async function fatUnificarOk() {
+  if (!podeOuAvisa('faturar.alterar_fatura') || !podeOuAvisa('faturar.excluir_fatura')) return;
+  const st = window._fatUni; if (!st) return;
+  const msg = document.getElementById("fun-msg"), btn = document.getElementById("fun-ok");
+  const erro = t => { msg.style.color = "#f87171"; msg.innerHTML = t; btn.disabled = false; };
+  const fica = (document.querySelector('input[name="fun-fica"]:checked') || {}).value || st.fica;
+  const venc = (document.getElementById("fun-venc") || {}).value || "";
+  const motivo = (document.getElementById("fun-motivo")?.value || "").trim();
+  if (!venc) return erro("Informe o vencimento da fatura unificada.");
+  if (venc < _fatHojeIso() && !confirm("O vencimento é anterior a hoje: a fatura unificada nasce vencida. Unificar assim mesmo?")) return;
+  btn.disabled = true;
+  msg.style.color = "#9aa"; msg.textContent = "Conferindo de novo...";
+
+  // confere de novo: entre abrir a janela e confirmar alguém pode ter recebido, gerado boleto ou mexido nos títulos
+  const ds = await Promise.all(st.ds.map(d => _fatExcluirDados(d.f.id)));
+  if (ds.some(d => d.erro)) return erro(ds.find(d => d.erro).erro);
+  if (_fatUniTravas(ds).length) return erro("Apareceu uma trava agora (ex.: alguém recebeu ou gerou boleto). Feche e abra de novo para ver.");
+  const dF = ds.find(d => d.f.id === fica);
+  if (!dF) return erro("Escolha a fatura que fica.");
+  const comNf = ds.find(d => d.f.nfe_chave);
+  if (comNf && comNf.f.id !== fica) return erro(`A fatura Nº ${comNf.f.numero ?? "?"} tem NF-e anexada: ela é a que fica.`);
+  const sai = ds.filter(d => d.f.id !== fica);
+  const f0 = dF.f;
+  // os números da unificada saem ANTES de gravar qualquer coisa (depois, a linha lida já não é a de antes)
+  const soma = k => +ds.reduce((a, d) => a + Number(d.f[k] || 0), 0).toFixed(2);
+  const novo = { valor: soma("valor"), desconto: soma("desconto"), acrescimo: soma("acrescimo"), regra: _fatUniRegra(ds).regra };
+  novo.liq = +(novo.valor - novo.desconto + novo.acrescimo).toFixed(2);
+  const nTit = ds.reduce((a, d) => a + d.titulos.length, 0);
+  const enviada = ds.some(d => d.f.enviada_em);
+  const quem = await _fatUsuario();
+  const agora = new Date();
+  const quando = agora.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  const mot = motivo ? ` Motivo: ${motivo}.` : "";
+  const obsDesc = Array.from(new Set(ds.map(d => (d.f.observacao || "").trim()).filter(Boolean))).join(" | ") || null;
+
+  // 1) os títulos das que saem passam para a que fica (só o fatura_id muda; status de cada um fica como estava)
+  const movidos = [];
+  const desfazTitulos = async () => {
+    for (const mv of movidos) await sb.from("oct_pdv_notas_prazo").update({ fatura_id: mv.de }).in("id", mv.ids).eq("fatura_id", fica);
+  };
+  msg.textContent = "Passando os títulos...";
+  for (const d of sai) {
+    const ids = d.titulos.map(x => x.id);
+    if (!ids.length) continue;
+    const r = await sb.from("oct_pdv_notas_prazo").update({ fatura_id: fica })
+      .in("id", ids).eq("fatura_id", d.f.id).select("id");
+    if ((r.data || []).length) movidos.push({ de: d.f.id, ids: r.data.map(x => x.id) });
+    if (r.error || (r.data || []).length !== ids.length) {
+      await desfazTitulos();
+      return erro("Não consegui passar os títulos da fatura Nº " + (d.f.numero ?? "?") + (r.error ? ": " + _fatEsc(r.error.message) : " (algum título mudou)") + ". Nada foi alterado.");
+    }
+  }
+
+  // 2) a que fica soma os valores, pega o vencimento novo e pede o PDF de novo
+  msg.textContent = "Somando a fatura...";
+  const antes = { valor: f0.valor, desconto: f0.desconto, acrescimo: f0.acrescimo, desconto_regra: f0.desconto_regra, observacao: f0.observacao,
+    vencimento: f0.vencimento, observacoes: f0.observacoes, alterado_por: f0.alterado_por, alterado_em: f0.alterado_em,
+    fatura_pdf_path: f0.fatura_pdf_path, fatura_pdf_pedido_em: f0.fatura_pdf_pedido_em };
+  const listaSai = sai.map(d => `Nº ${d.f.numero ?? "?"} (${_fatBRL(_fatLiquido(d.f))}, ${d.titulos.length} título(s), venc. ${_fatData(d.f.vencimento)})`).join(", ");
+  const r2 = await sb.from("oct_faturas").update({
+    valor: novo.valor, desconto: novo.desconto, acrescimo: novo.acrescimo, desconto_regra: novo.regra,
+    observacao: obsDesc, vencimento: venc,
+    observacoes: (f0.observacoes ? f0.observacoes + "\n" : "") +
+      `[${quando}] Unificada por ${quem}: recebeu a(s) fatura(s) ${listaSai}. Antes: ${_fatBRL(_fatLiquido(f0))}, venc. ${_fatData(f0.vencimento)}.${mot}`,
+    alterado_por: quem, alterado_em: agora.toISOString(),
+    fatura_pdf_path: null, fatura_pdf_pedido_em: agora.toISOString(),   // o PDF guardado virou mentira
+  }).eq("id", fica).eq("status", "aberta").select("id");
+  if (r2.error || !(r2.data || []).length) {
+    await desfazTitulos();
+    return erro("Não consegui atualizar a fatura Nº " + (f0.numero ?? "?") + (r2.error ? ": " + _fatEsc(r2.error.message) : " (ela mudou de status)") + ". Nada foi alterado.");
+  }
+
+  // 3) as outras saem (canceladas, com o histórico); falhou = tudo volta como estava
+  msg.textContent = "Cancelando as faturas que entraram na unificada...";
+  const cancelei = [];
+  for (const d of sai) {
+    const r3 = await sb.from("oct_faturas").update({
+      status: "cancelada", auto_enviar: false, envio_pedido_em: null, fatura_pdf_pedido_em: null,
+      observacoes: (d.f.observacoes ? d.f.observacoes + "\n" : "") +
+        `[${quando}] Unificada na fatura Nº ${f0.numero ?? "?"} por ${quem}: ${d.titulos.length} título(s) passaram para ela.${mot}`,
+      alterado_por: quem, alterado_em: agora.toISOString(),
+    }).eq("id", d.f.id).eq("status", "aberta").select("id");
+    if (r3.error || !(r3.data || []).length) {
+      for (const c of cancelei) {
+        await sb.from("oct_faturas").update({ status: "aberta", auto_enviar: c.f.auto_enviar, envio_pedido_em: c.f.envio_pedido_em,
+          fatura_pdf_pedido_em: c.f.fatura_pdf_pedido_em, observacoes: c.f.observacoes, alterado_por: c.f.alterado_por, alterado_em: c.f.alterado_em }).eq("id", c.f.id);
+      }
+      await sb.from("oct_faturas").update(antes).eq("id", fica);
+      await desfazTitulos();
+      return erro("Não consegui cancelar a fatura Nº " + (d.f.numero ?? "?") + (r3.error ? ": " + _fatEsc(r3.error.message) : " (ela mudou de status)") + ". Desfiz a unificação: as faturas voltaram como estavam.");
+    }
+    cancelei.push(d);
+  }
+
+  _fatSelF().clear();
+  _fatFechaModal();
+  window._fatUni = null;
+  alert(`Pronto: a fatura Nº ${f0.numero ?? ""} agora tem ${nTit} título(s) e vale R$ ${_fatMoney(novo.liq)}, vence em ${_fatData(venc)}.\n` +
+    `Saíram (canceladas): ${sai.map(d => "Nº " + (d.f.numero ?? "?")).join(", ")}.\n\nO PDF da fatura está sendo refeito.` +
+    (enviada ? " Como uma delas já tinha sido enviada, mande a fatura nova ao cliente (📤 Enviar)." : ""));
+  _fatInvalidar();
+  _fatRecarregar();
+}
+
 // ---------- PARCELAR FATURA (03/10/2026) — o "Parcelar" do TecnoX ----------
 // Cada parcela vira uma fatura PRÓPRIA (número novo da série, boleto, envio e
 // recebimento próprios) que aponta para a original em parcela_de -- como o
@@ -5072,6 +5344,7 @@ function _fatEstilo() {
   .fat-btn:hover{background:#242c3e;color:#fff}
   .fat-btn.azul{background:#f97316;color:#fff;border-color:#f97316}.fat-btn.azul:hover{background:#ea6a0c}
   .fat-btn.mini{padding:4px 9px;font-size:11px}
+  .fat-btn.fat-func-on{background:#0e7490;border-color:#22d3ee;color:#fff;font-weight:600}
   .fat-btn:disabled,.fat-grid button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
   .fat-lote:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(.6)}
   .fat-grid thead th:first-child input,.fat-td input[type=checkbox]{cursor:pointer}

@@ -914,12 +914,44 @@ async function fcCarregarDados() {
   return { turnos: lista, porTurno };
 }
 
+// FILTRO POR FUNCIONÁRIO (07/11/2026, Ronan: "aqui também quero poder filtrar por funcionário"): o operador do caixa.
+// Filtra o que já foi lido (não volta ao banco); a navegação ⏮◀▶⏭ dentro do caixa segue o filtro.
+function _fcOpChave(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().replace(/\s+/g, ' ').toUpperCase(); }
+function _fcTurnosNav() {
+  const todos = ((window._fcCache || {}).turnos || []).slice()
+    .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+  const op = window._fcOp;
+  if (!op) return todos;
+  const so = todos.filter(t => _fcOpChave(t.operador) === op);
+  // caixa aberto por outro caminho (fora do filtro): navega por todos, como antes
+  return so.some(t => t.id === window._fcTurnoAtual) ? so : todos;
+}
+function fcFiltrarOperador(v) { window._fcOp = v || ''; fcListar(true); }
+
 // ---------- LISTA (1ª tela do TecnoX) ----------
-async function fcListar() {
+async function fcListar(doGuardado) {
   const conteudo = document.getElementById('conteudo');
-  conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando turnos...</p>';
-  const { turnos, porTurno } = await fcCarregarDados();
-  window._fcCache = { turnos, porTurno };
+  let turnos, porTurno;
+  if (doGuardado === true && window._fcCache) ({ turnos, porTurno } = window._fcCache);   // só o filtro mudou
+  else {
+    conteudo.innerHTML = '<p style="color:#888;padding:20px">Carregando turnos...</p>';
+    ({ turnos, porTurno } = await fcCarregarDados());
+    window._fcCache = { turnos, porTurno };
+  }
+  // operadores do período (o nome mais usado de cada um)
+  const ops = {};
+  turnos.forEach(t => {
+    const k = _fcOpChave(t.operador); if (!k) return;
+    const o = ops[k] = ops[k] || { k, n: 0, nomes: {} };
+    o.n++; o.nomes[String(t.operador).trim()] = (o.nomes[String(t.operador).trim()] || 0) + 1;
+  });
+  const opsLista = Object.values(ops).map(o => ({ k: o.k, n: o.n, nome: Object.entries(o.nomes).sort((a, b) => b[1] - a[1])[0][0] }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  if (window._fcOp && !ops[window._fcOp]) window._fcOp = '';   // o operador não tem caixa no período novo
+  const fOp = window._fcOp || '';
+  const visiveis = fOp ? turnos.filter(t => _fcOpChave(t.operador) === fOp) : turnos;
+  const somaV = campo => visiveis.reduce((s, t) => s + Number((porTurno[t.id] || {})[campo] || 0), 0);
+  const fTot = somaV('falta_caixa'), sTot = somaV('sobra_caixa'), dTot = somaV('diferenca_caixa');
 
   // TURNO DO DIA (pedido Ronan 15/08): a coluna "Turno" mostra a ordem DENTRO
   // do dia (1, 2...) — "dia 14/08 06:11 turno 1" — e não o nº global (31, 32...),
@@ -931,7 +963,7 @@ async function fcListar() {
       ordemDia[t.id] = (ordemDia[dia] = (ordemDia[dia] || 0) + 1);
     });
 
-  const linhas = turnos.map(t => {
+  const linhas = visiveis.map(t => {
     const d = porTurno[t.id] || {}; const rec = d.rec || {};
     const sit = _fcEstadoCx(t);
     const corSit = sit === 'ABERTO' ? '#c0392b' : sit === 'A CONFERIR' ? '#f0b45c' : '#127a2e';
@@ -966,7 +998,7 @@ async function fcListar() {
         <button class="fc-btn" onclick="fcLimparPeriodo()">🧽 F5 - Limpar</button>
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>🗒 F6 - Listar</button>
-        <span class="fc-count">${turnos.length} de ${turnos.length}</span>
+        <span class="fc-count">${visiveis.length} de ${turnos.length}</span>
         <span class="fc-sep"></span>
         <button class="fc-btn" disabled>➕ Incluir Caixa Zerado</button>
         <button class="fc-btn" disabled>📄 Importar XML</button>
@@ -975,6 +1007,15 @@ async function fcListar() {
         Período: <input type="date" id="fc-de" value="${window._fcDe}" class="fc-inp"> até
         <input type="date" id="fc-ate" value="${window._fcAte}" class="fc-inp">
         <button class="fc-btn azul" onclick="fcAplicarPeriodo()">🔍 F4 - Pesquisar</button>
+        <span class="fc-sep"></span>
+        Operador: <select id="fc-op" class="fc-inp" onchange="fcFiltrarOperador(this.value)" style="max-width:300px">
+          <option value="">Todos (${turnos.length} caixas)</option>
+          ${opsLista.map(o => `<option value="${fcEsc(o.k)}" ${o.k === fOp ? 'selected' : ''}>${fcEsc(o.nome)} (${o.n})</option>`).join('')}
+        </select>
+        ${fOp ? `<button class="fc-btn" onclick="fcFiltrarOperador('')" title="Mostrar os caixas de todos os operadores">✕</button>` : ''}
+        <span style="margin-left:auto;font-size:0.78rem;font-variant-numeric:tabular-nums">${visiveis.length} caixa(s) ·
+          falta <b style="color:#e06c6c">${fcMoney(fTot)}</b> · sobra <b style="color:#7ee2a0">${fcMoney(sTot)}</b> ·
+          diferença <b style="color:${Math.abs(dTot) < 0.01 ? '#7ee2a0' : dTot < 0 ? '#e06c6c' : '#f0b45c'}">${fcMoney(dTot)}</b></span>
       </div>
       <div class="fc-gridwrap">
         <table class="fc-grid">
@@ -984,7 +1025,7 @@ async function fcListar() {
             <th>Falta Caixa</th><th>Sobra Caixa</th><th>Diferença Caixa</th>
             <th>Venda</th><th>Movimentado</th><th>Dinheiro</th><th>Cartão</th><th>Nota a prazo</th><th>Cheque</th>
           </tr></thead>
-          <tbody>${linhas || '<tr><td colspan="17" style="padding:20px;text-align:center;color:#888">Nenhum turno no período.</td></tr>'}</tbody>
+          <tbody>${linhas || `<tr><td colspan="17" style="padding:20px;text-align:center;color:#888">${fOp ? 'Nenhum caixa deste operador no período.' : 'Nenhum turno no período.'}</td></tr>`}</tbody>
         </table>
       </div>
     </div>`;
@@ -996,7 +1037,9 @@ function fcAplicarPeriodo() {
 }
 function fcLimparPeriodo() {
   const hoje = new Date(), d = new Date(hoje.getTime() - 30 * 86400000);
-  window._fcAte = hoje.toISOString().slice(0, 10); window._fcDe = d.toISOString().slice(0, 10); fcListar();
+  window._fcAte = hoje.toISOString().slice(0, 10); window._fcDe = d.toISOString().slice(0, 10);
+  window._fcOp = '';   // F5 limpa o filtro de operador também
+  fcListar();
 }
 
 // ---------- DETALHE (2ª tela do TecnoX) ----------
@@ -1164,7 +1207,7 @@ function fcDetalhe(turnoId) {
         <span class="fc-sep"></span>
         ${(() => {
           // NAVEGAÇÃO ENTRE CAIXAS (19/08 — modelo TecnoX ⏮◀▶⏭ + "N de M")
-          const ts = (cache.turnos || []).slice().sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+          const ts = _fcTurnosNav();   // segue o filtro de operador da lista (07/11/2026)
           const i = ts.findIndex(x => x.id === turnoId);
           return `<button class="fc-btn" ${i <= 0 ? 'disabled' : ''} onclick="fcNavTurno('first')" title="Primeiro caixa">⏮</button>
             <button class="fc-btn" ${i <= 0 ? 'disabled' : ''} onclick="fcNavTurno(-1)" title="Caixa anterior">◀</button>
@@ -1445,8 +1488,7 @@ function fcRefKey(ev, tr) {
 
 // navega entre caixas (⏮◀▶⏭ do topo, modelo TecnoX)
 function fcNavTurno(onde) {
-  const ts = ((window._fcCache || {}).turnos || []).slice()
-    .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+  const ts = _fcTurnosNav();
   const i = ts.findIndex(x => x.id === window._fcTurnoAtual);
   const j = onde === 'first' ? 0 : onde === 'last' ? ts.length - 1 : i + onde;
   if (j < 0 || j >= ts.length || j === i) return;
@@ -4777,8 +4819,7 @@ function fcModal(titulo, html, opts) {
 // (fcNavTurno); a janela reabre o MESMO assunto (window._fcNodeAtual) no caixa novo.
 function fcModalNav(titulo, html, opts) { return fcModal(titulo, html, Object.assign({}, opts || {}, { nav: true })); }
 function _fcModalNavHtml() {
-  const ts = ((window._fcCache || {}).turnos || []).slice()
-    .sort((a, b) => String(a.aberto_em).localeCompare(String(b.aberto_em)));
+  const ts = _fcTurnosNav();
   const i = ts.findIndex(x => x.id === window._fcTurnoAtual);
   if (i < 0 || !window._fcNodeAtual) return '';
   const t = ts[i];
