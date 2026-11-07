@@ -1178,7 +1178,9 @@ function fcDetalhe(turnoId) {
     // sem título, o nome está lá mas a quebra ainda não virou cobrança: o rótulo
     // precisa dizer isso, senão o operador vê o nome e não entende o porquê do
     // caixa seguir aberto.
+    const _reg = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste || {};
     const pend = _st.mudou ? ' (lançada ' + _st.regTipo + ' de ' + fcMoney(_st.regValor) + ' — feche o caixa de novo)'
+      : (difApurada < 0 && !temTitulo && _reg.pessoa_id && !t.conferido_em) ? ' (o título vai para o Faturar ao fechar o caixa)'
       : (difApurada < 0 && !temTitulo) ? ' (sem título)' : '';
     return base + ' — ' + fcEsc(respNome) + pend;
   };
@@ -1523,16 +1525,51 @@ function _fcTravado(avisa) {
   if (trav && avisa !== false) alert('Caixa FECHADO (já conferido) — clique em 🔓 Reabrir caixa para editar.');
   return trav;
 }
+// CAIXA ABERTO NÃO TEM TÍTULO DE FALTA (07/11/2026, Ronan: "reabri o caixa e a fatura continua lá, com o caixa aberto a
+// fatura não pode aparecer"): ao reabrir, o título da falta (livre no Faturar) SAI; o registro do responsável fica, e ao
+// fechar de novo o título volta com a falta apurada naquele momento. Título já faturado/recebido não sai (avisa).
 async function fcReabrirCaixa(turnoId) {
   if (!podeOuAvisa('fcaixa.reabrir')) return;
-  if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.\nO que a confirmação lançou no livro financeiro (Conciliação) é apagado.')) return;
+  const tit = await _fcTituloDifExistente(turnoId);
+  const lv = tit ? await _fcTituloManualLivre(tit.id) : null;
+  const vTit = tit ? fcMoney(Number(tit.valor_original != null ? tit.valor_original : tit.valor || 0)) : '';
+  const avisoTit = !tit ? '' : lv.livre
+    ? '\n\nO título da falta (' + vTit + ', ' + (tit.cliente_nome || '') + ') sai do Faturar enquanto o caixa estiver aberto.\nAo fechar de novo, ele volta com a falta apurada.'
+    : '\n\n⚠ O título da falta (' + vTit + ', ' + (tit.cliente_nome || '') + ') ' + lv.motivo + ' e continua no Faturar.';
+  if (!confirm('Reabrir este caixa para edição?\nEle volta ao estado "A CONFERIR" até ser fechado de novo.\nO que a confirmação lançou no livro financeiro (Conciliação) é apagado.' + avisoTit)) return;
   // as linhas do livro saem junto — presa (conciliada com o extrato) trava a reabertura
   let des = { ok: true };
   try { des = await _fcLivroDesfazerTurno(turnoId); } catch (e) { des = { ok: true }; }
   if (!des.ok) { alert('Este caixa tem lançamento já conciliado com o extrato do banco (' + des.motivo + ').\nDesconcilie na tela de Conciliação antes de reabrir.'); return; }
   const { error } = await sb.from('oct_pdv_turnos').update({ conferido_em: null, conferido_por: null }).eq('id', turnoId);
   if (error) { alert('Erro: ' + error.message); return; }
+  // reaberto: o título livre sai (depois de reabrir — se falhar, o caixa já está aberto e o aviso diz o que ficou)
+  if (tit && lv.livre) {
+    const r = await _fcTituloDifRecolher(turnoId, tit);
+    if (!r.ok) alert('O caixa foi reaberto, mas o título da falta (' + vTit + ') não saiu do Faturar: ' + r.msg);
+  }
   fcRecarregar();
+}
+// tira do Faturar o título livre da falta de um caixa que não está fechado; o registro (responsável, valor) fica,
+// marcado sem título — o ✅ Fechar caixa gera de novo com a falta apurada
+async function _fcTituloDifRecolher(turnoId, tit) {
+  const r = await sb.from('oct_pdv_notas_prazo').delete().eq('id', tit.id).eq('status', 'aberto').is('fatura_id', null).select('id');
+  if (r.error) return { ok: false, msg: r.error.message };
+  if (!(r.data || []).length) return { ok: false, msg: 'ele mudou (entrou numa fatura ou foi recebido)' };
+  // o registro vem do banco (não do que está na memória da tela)
+  const { data: reg } = await sb.from('oct_fc_lancamentos').select('conferido,ajuste')
+    .eq('empresa_id', window._fcEmpresaId).eq('turno_id', turnoId).eq('ref_tipo', 'diferenca').eq('ref_id', turnoId).maybeSingle();
+  if (reg && reg.ajuste) {
+    const ajuste = Object.assign({}, reg.ajuste, { titulo_gerado: false, pessoa_id: reg.ajuste.pessoa_id || tit.cliente_id || null });
+    const { error } = await sb.from('oct_fc_lancamentos').upsert({
+      empresa_id: window._fcEmpresaId, turno_id: turnoId,
+      ref_tipo: 'diferenca', ref_id: turnoId, conferido: !!reg.conferido, ajuste,
+    }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+    if (error) return { ok: false, msg: 'o título saiu, mas o registro da falta não foi marcado: ' + error.message };
+    window._fcConf = window._fcConf || {};
+    window._fcConf['diferenca:' + turnoId] = { conferido: !!reg.conferido, ajuste };
+  }
+  return { ok: true };
 }
 
 function _fcConfPintar(tr, conferido) {
@@ -3656,7 +3693,15 @@ async function fcDifLancar(dif) {
   // cobrada/descontada pelo Faturar, junto com os demais títulos em aberto.
   // (Sobra não vira título a receber — ali o posto é que deve à pessoa.)
   let aviso = '';
-  const ja = await _fcTituloDifExistente(turnoId);
+  let ja = await _fcTituloDifExistente(turnoId);
+  // CAIXA AINDA NÃO FECHADO (07/11/2026): o título só nasce no ✅ Fechar caixa — aqui fica só o responsável. Título livre
+  // que já estava lá (lançado antes desta regra) sai do Faturar; faturado/recebido segue a regra de sempre (abaixo).
+  const cxFechado = !!t.conferido_em;
+  if (!cxFechado && ja && (await _fcTituloManualLivre(ja.id)).livre) {
+    const r = await _fcTituloDifRecolher(turnoId, ja);
+    if (!r.ok) { alert('Não consegui tirar o título da falta do Faturar: ' + r.msg); return; }
+    ja = null;
+  }
   // título de antes com outro valor, OUTRA PESSOA (05/11/2026) ou a falta virou sobra: acompanha o que foi lançado agora.
   // Era recusado ("exclua o título no Faturar e lance de novo") e o título ficava no nome errado. Título já faturado ou
   // recebido continua travado (_fcTituloDifSincronizar diz o motivo).
@@ -3666,7 +3711,7 @@ async function fcDifLancar(dif) {
     if (!s.ok) { alert(s.msg); return; }
     aviso = s.aviso || '';
   }
-  if (dif < 0 && !ja) {
+  if (dif < 0 && !ja && cxFechado) {
     const { error } = await sb.from('oct_pdv_notas_prazo').insert({
       empresa_id: window._fcEmpresaId,
       turno_id: turnoId,
@@ -3690,7 +3735,7 @@ async function fcDifLancar(dif) {
     responsavel: pnome, pessoa_id: pid || null,
     valor: Math.round(Math.abs(dif) * 100) / 100,
     tipo: dif < 0 ? 'falta' : 'sobra',
-    titulo_gerado: dif < 0,
+    titulo_gerado: dif < 0 && (cxFechado || !!ja),   // caixa aberto: o título nasce no ✅ Fechar caixa (07/11/2026)
   });
   await sb.from('oct_fc_lancamentos').upsert({
     empresa_id: window._fcEmpresaId, turno_id: turnoId,
@@ -3700,7 +3745,8 @@ async function fcDifLancar(dif) {
   await fcRecarregar();
   alert(rot + ' de ' + fcMoney(Math.abs(dif)) + ' lançada para ' + pnome + '.'
     + (aviso ? String.fromCharCode(10, 10) + '📄 ' + aviso
-      : dif < 0 ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
+      : dif < 0 && (cxFechado || ja) ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
+      : dif < 0 ? String.fromCharCode(10, 10) + '📄 O título vai para o Faturar (no nome dele) quando o caixa for fechado (✅ Fechar caixa).'
                : String.fromCharCode(10, 10) + 'Sobra: registrada como responsabilidade, sem título a receber.'));
 }
 // ---------- Nós de MOVIMENTAÇÃO (vales, recebimentos externos, ledger) ----------
@@ -4896,6 +4942,17 @@ async function fcConfirmarCaixa(turnoId) {
   // FALTA/SOBRA apurada → antes de fechar, IDENTIFICA O RESPONSÁVEL (pedido
   // Ronan 19/08): a diferença fica em nome do funcionário, registrada no caixa.
   const st = _fcDifStatus(turnoId, dif);
+  // CAIXA REABERTO (07/11/2026): o título da falta saiu do Faturar ao reabrir; se a falta continua a MESMA que foi lançada,
+  // fecha sem perguntar de novo e o título volta para a mesma pessoa. Mudou o valor → pergunta (modal), como antes.
+  const reg = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
+  if (dif <= -0.01 && reg && reg.tipo === 'falta' && reg.pessoa_id && st.respNome && !st.temTitulo
+      && Math.abs(Number(reg.valor || 0) - Math.abs(dif)) < 0.01 && !(await _fcTituloDifExistente(turnoId))) {
+    const L0 = String.fromCharCode(10);
+    if (!confirm('Confirmar a conferência deste caixa?' + L0 + L0 + 'Falta de ' + fcMoney(Math.abs(dif)) + ' já lançada para '
+      + st.respNome + '.' + L0 + 'O título volta para o Faturar no nome dele.')) return;
+    await _fcConfirmarGravar(turnoId, st.respNome, reg.pessoa_id);
+    return;
+  }
   // SÓ PERGUNTA SE AINDA NÃO FOI LANÇADA. Antes olhava só a diferença apurada,
   // que continua valendo -58,23 mesmo depois de resolvida — então o botão pedia
   // o responsável de novo, com a quebra já em nome do colaborador e o Resultado
