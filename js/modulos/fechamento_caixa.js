@@ -2944,6 +2944,9 @@ async function fcNodeDetalhe(tipo) {
           // quem já ficou como responsável por esta quebra (e se virou título)
           const aR = ((window._fcConf || {})['diferenca:' + turnoId] || {}).ajuste;
           if (!aR || !aR.responsavel) return '';
+          // o lançado não é mais o apurado (07/11/2026, Tijuco 193: lançada falta de 10,00, caixa agora com 8,00)
+          const apur = dif == null ? 0 : dif;
+          const bate = Math.abs(Number(aR.valor || 0) - Math.abs(apur)) < 0.01 && aR.tipo === (apur < 0 ? 'falta' : 'sobra');
           return `<div style="margin-top:10px;padding:10px 12px;border:1px solid #5a4a20;border-radius:8px;background:#1a1710">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span style="color:#f0b45c">👤 Responsável pela ${fcEsc(aR.tipo || 'diferença')}</span>
@@ -2951,14 +2954,23 @@ async function fcNodeDetalhe(tipo) {
             <div style="color:#8892a0;font-size:0.74rem;margin-top:4px">
               ${aR.titulo_gerado
                 ? '📄 Título de ' + fcMoney(aR.valor || 0) + ' gerado no nome dele — cobre em Faturar › Notas/Títulos em Aberto.'
-                : 'Registrado como responsável. Nenhum título foi gerado.'}
-            </div></div>`;
+                : (aR.tipo === 'falta' && aR.pessoa_id && !t.conferido_em)
+                  ? 'Falta de ' + fcMoney(aR.valor || 0) + ' registrada. O título vai para o Faturar quando o caixa for fechado.'
+                  : 'Registrado como responsável. Nenhum título foi gerado.'}
+            </div>
+            ${!bate ? `<div style="color:#f0c674;font-size:0.76rem;margin-top:6px">⚠ Foi lançada ${fcEsc(aR.tipo || '')} de <b>${fcMoney(aR.valor || 0)}</b>, mas o caixa agora tem
+              ${Math.abs(apur) < 0.01 ? '<b>nenhuma diferença</b>' : (apur < 0 ? 'falta' : 'sobra') + ' de <b>' + fcMoney(Math.abs(apur)) + '</b>'}. Lance de novo ou exclua o lançamento.</div>` : ''}
+            ${t.conferido_em ? '' : `<button class="fc-btn2" style="margin-top:8px;border-color:#7f1d1d;color:#fca5a5" onclick="fcDifExcluir()">
+              🗑 Excluir ${aR.tipo === 'sobra' ? 'a sobra lançada' : 'a falta lançada'}${aR.titulo_gerado ? ' (o título sai do Faturar)' : ''}</button>`}
+            </div>`;
         })()}
         ${dif != null && Math.abs(dif) > 0.009 ? `
         <button class="fc-btn2" style="margin-top:12px;border-color:#7a5a20;color:#f0b45c" onclick="fcDifResponsavel(${dif})">
-          👷 Lançar ${dif < 0 ? 'a FALTA' : 'a SOBRA'} para o responsável${dif < 0 ? ' (gera título a faturar)' : ''}
+          👷 ${t.conferido_em ? 'Lançar' : 'Escolher'} ${dif < 0 ? 'a FALTA' : 'a SOBRA'} para o responsável${dif < 0 ? (t.conferido_em ? ' (gera título a faturar)' : ' (o título nasce ao fechar o caixa)') : ''}
         </button>
-        <p style="color:#667;font-size:0.72rem;margin-top:6px">A FALTA vira <b>título a faturar</b> no nome do funcionário (Faturar › Notas/Títulos em Aberto), para descontar dele. A SOBRA só registra o responsável.</p>` : ''}
+        <p style="color:#667;font-size:0.72rem;margin-top:6px">${t.conferido_em
+          ? 'A FALTA vira <b>título a faturar</b> no nome do funcionário (Faturar › Notas/Títulos em Aberto), para descontar dele. A SOBRA só registra o responsável.'
+          : 'Não precisa lançar antes: o <b>✅ Fechar caixa</b> pergunta o responsável e gera o título da FALTA na hora (Faturar › Notas/Títulos em Aberto). Reabrir o caixa tira o título do Faturar, se ele ainda estiver pendente. A SOBRA só registra o responsável.'}</p>` : ''}
         <div style="margin-top:16px;padding-top:10px;border-top:1px dashed #2a3a4a">
           <div style="color:#7ea8d8;font-weight:700;font-size:0.78rem;margin-bottom:4px">Conferência do DINHEIRO físico (outra régua)</div>
           <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem"><span>Esperado na gaveta (sistema)</span><b>${fcMoney(d.dinheiro_esperado)}</b></div>
@@ -3749,6 +3761,51 @@ async function fcDifLancar(dif) {
       : dif < 0 ? String.fromCharCode(10, 10) + '📄 O título vai para o Faturar (no nome dele) quando o caixa for fechado (✅ Fechar caixa).'
                : String.fromCharCode(10, 10) + 'Sobra: registrada como responsabilidade, sem título a receber.'));
 }
+// EXCLUIR A FALTA/SOBRA LANÇADA (07/11/2026, Ronan: "não tem opção de excluir a falta de caixa" — Tijuco 193, falta de 10,00
+// lançada para o Michael e o caixa agora com 8,00): o lançamento do responsável sai e o título dele, se livre, sai do Faturar.
+// O caixa volta a mostrar a quebra sem dono (para fechar, lança de novo). Caixa FECHADO: reabra antes. Título já faturado ou
+// recebido não sai daqui — acerte no Faturar primeiro.
+async function fcDifExcluir() {
+  if (!podeOuAvisa('fcaixa.lancar_diferenca')) return;
+  if (_fcTravado()) return;
+  const turnoId = window._fcTurnoAtual;
+  const k = 'diferenca:' + turnoId;
+  const aR = ((window._fcConf || {})[k] || {}).ajuste;
+  const tit = await _fcTituloDifExistente(turnoId);
+  if (!(aR && aR.responsavel) && !tit) { alert('Não há falta nem sobra lançada neste caixa.'); return; }
+  const vTit = tit ? fcMoney(Number(tit.valor_original != null ? tit.valor_original : tit.valor || 0)) : '';
+  if (tit) {
+    const lv = await _fcTituloManualLivre(tit.id);
+    if (!lv.livre) {
+      alert('O título da falta deste caixa (' + vTit + ', ' + (tit.cliente_nome || '') + ') ' + lv.motivo + '.'
+        + String.fromCharCode(10, 10) + 'Acerte no Faturar primeiro (exclua a fatura ou o recebimento) e depois exclua a falta aqui.');
+      return;
+    }
+  }
+  const tipo = (aR && aR.tipo) || 'falta';
+  const quem = (aR && aR.responsavel) || (tit && tit.cliente_nome) || '';
+  const L = String.fromCharCode(10);
+  if (!confirm('Excluir a ' + tipo + ' de ' + fcMoney((aR && aR.valor) || (tit && tit.valor) || 0) + ' lançada para ' + quem + '?'
+    + (tit ? L + L + 'O título de ' + vTit + ' sai do Faturar.' : '')
+    + L + L + 'O caixa volta a mostrar a diferença sem responsável — para fechar, lance de novo.')) return;
+  if (tit) {
+    const r = await sb.from('oct_pdv_notas_prazo').delete().eq('id', tit.id).eq('status', 'aberto').is('fatura_id', null).select('id');
+    if (r.error || !(r.data || []).length) {
+      alert('Não consegui tirar o título do Faturar: ' + (r.error ? r.error.message : 'ele mudou (entrou numa fatura ou foi recebido)') + '. Nada foi alterado.');
+      return;
+    }
+  }
+  const { error } = await sb.from('oct_fc_lancamentos').upsert({
+    empresa_id: window._fcEmpresaId, turno_id: turnoId,
+    ref_tipo: 'diferenca', ref_id: turnoId, conferido: false, ajuste: null,
+  }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+  if (error) { alert((tit ? 'O título saiu do Faturar, mas o lançamento' : 'O lançamento') + ' não foi apagado: ' + error.message); return; }
+  window._fcConf = window._fcConf || {};
+  window._fcConf[k] = { conferido: false, ajuste: null };
+  _fcToast((tipo === 'sobra' ? 'Sobra' : 'Falta') + ' excluída' + (tit ? ' — título saiu do Faturar' : ''));
+  await fcRecarregar('diferenca');
+}
+
 // ---------- Nós de MOVIMENTAÇÃO (vales, recebimentos externos, ledger) ----------
 const _VALE_ROT = {
   credito_adiantado: 'Crédito adiantado', troco_pendente: 'Troco pendente',
