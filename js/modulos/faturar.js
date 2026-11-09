@@ -1380,6 +1380,168 @@ async function fatFaturaDetalhes(faturaId) {
     </div>`);
 }
 
+// ⬇ EXCEL DA FATURA (09/11/2026, Ronan: "coloca o botão de Excel na tela de faturas"). As MESMAS linhas, descontos e
+// totais do PDF da fatura (octano-sicoob/index.js montarFaturaPdf + fatura_pdf.js gerarFaturaPdf): títulos -> cupom ->
+// itens, hora do cupom em Brasília, placa/km da venda, desconto linha a linha por _fatDescontoPorLinha. Mudar lá = mudar
+// aqui. A biblioteca do Excel é a dos relatórios (_relCarregarXLSX), baixada só ao clicar.
+function _fatXlsLocal(iso, jaLocal) {               // = _local do montarFaturaPdf: o banco guarda UTC
+  const ms = Date.parse(iso || "");
+  if (jaLocal || isNaN(ms)) return iso;
+  return new Date(ms - 3 * 3600e3).toISOString().slice(0, 19);
+}
+async function _fatXlsLinhas(fat, orig) {
+  const { data: titulos, error } = await sb.from("oct_pdv_notas_prazo").select("numero_nfe,valor,registrado_em,observacao")
+    .eq("fatura_id", orig ? orig.id : fat.id).order("registrado_em");
+  if (error) throw new Error("não consegui ler os títulos da fatura (" + (error.message || error) + ")");
+  const nums = Array.from(new Set((titulos || []).map(t => String(t.numero_nfe || "")).filter(n => /^\d+$/.test(n))));
+  const porNum = {};
+  for (let i = 0; i < nums.length; i += 200) {
+    const { data: vs, error: ev } = await sb.from("oct_pdv_vendas").select("numero,status,data_venda,placa,odometro,veiculo,prazo_dados,itens")
+      .eq("empresa_id", fat.empresa_id).in("numero", nums.slice(i, i + 200));
+    if (ev) throw new Error("não consegui ler os cupons da fatura (" + (ev.message || ev) + ")");
+    (vs || []).forEach(v => { porNum[String(v.numero)] = v; });
+  }
+  const linhas = [];
+  (titulos || []).forEach(t => {
+    const v = porNum[String(t.numero_nfe)];
+    const quando = v && v.data_venda ? _fatXlsLocal(v.data_venda, v.status === "tecnox")
+                                     : _fatXlsLocal(t.registrado_em, /do TecnoX/i.test(String(t.observacao || "")));
+    const itens = (v && Array.isArray(v.itens)) ? v.itens : [];
+    if (!itens.length) {
+      const pm = /produto:\s*(.+?)\s*(?:\s-\s|;|$)/i.exec(String(t.observacao || ""));
+      linhas.push({ data: quando, produto: (pm && pm[1].trim().toUpperCase()) || "ABASTECIMENTO", cupom: t.numero_nfe,
+                    hora: String(quando || "").slice(11, 19), qtd: 0, unit: 0, total: Number(t.valor || 0) });
+      return;
+    }
+    const pd = (v.prazo_dados && typeof v.prazo_dados === "object") ? v.prazo_dados : {};
+    itens.forEach(it => linhas.push({
+      data: quando, produto: it.desc || it.produto || "", cod: it.cod,
+      placa: v.placa || pd.placa || null, odometro: v.odometro || pd.km || pd.odometro || null,
+      veiculo: v.veiculo || pd.veiculo || null,
+      hora: String(quando || "").slice(11, 19), cupom: t.numero_nfe,
+      qtd: Number(it.qtd || 0), unit: Number(it.unit || 0),
+      total: Number(it.total != null ? it.total : (it.qtd || 0) * (it.unit || 0)),
+    }));
+  });
+  return linhas;
+}
+async function fatExcelFatura(faturaId) {
+  if (typeof _relCarregarXLSX !== "function") { alert("A biblioteca do Excel não carregou nesta tela. Atualize a página (F5)."); return; }
+  let XLSX;
+  try { XLSX = await _relCarregarXLSX(); } catch (e) { alert(e.message); return; }
+  try {
+    const { data: fat } = await sb.from("oct_faturas").select("*").eq("id", faturaId).maybeSingle();
+    if (!fat) { alert("Fatura não encontrada."); return; }
+    let orig = null;
+    if (fat.parcela_de) orig = (await sb.from("oct_faturas").select("*").eq("id", fat.parcela_de).maybeSingle()).data || null;
+    const emp = (await sb.from("oct_empresas").select("nome,cnpj,endereco,cidade,uf,cep").eq("id", fat.empresa_id).maybeSingle()).data || {};
+    const cli = fat.cliente_id ? ((await sb.from("oct_pessoas").select("*").eq("id", fat.cliente_id).maybeSingle()).data || {}) : {};
+    const linhas = await _fatXlsLinhas(fat, orig);
+    let pagos = [];
+    try {
+      pagos = (await sb.from("oct_recebimentos_titulo").select("valor,forma,data_recebimento,criado_em")
+        .eq("fatura_id", fat.id).order("data_recebimento")).data || [];
+    } catch (e) { pagos = []; }
+
+    // ---- as contas do PDF (gerarFaturaPdf) ----
+    const base = orig || fat;
+    const descL = _fatDescontoPorLinha(linhas, base);
+    const comDesc = descL.some(v => v > 0);
+    const pago = +pagos.reduce((s, p) => s + Number(p.valor || 0), 0).toFixed(2);
+    const saldo = +(_fatLiquido(fat) - pago).toFixed(2);
+    const parcial = pago > 0.004 && saldo > 0.004;
+    const desc = Number(base.desconto || 0), acr = Number(base.acrescimo || 0);
+    const dNotas = comDesc ? +descL.reduce((s, x) => s + x, 0).toFixed(2) : 0;
+
+    const D = s => { s = String(s || "").slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T12:00:00") : (s || ""); };
+    const N = v => (v != null && /^\d+$/.test(String(v).trim())) ? Number(String(v).trim()) : (v || "");
+    const aoa = [];
+    aoa.push([orig ? `FATURA — PARCELA ${fat.parcela_num || "?"}/${fat.parcela_total || "?"} (FATURA ${orig.numero || "—"})` : `FATURA Nº ${fat.numero ?? ""}`]);
+    aoa.push(["Origem", emp.nome || "", "", "", "", "Número", fat.numero ?? ""]);
+    aoa.push(["CNPJ", emp.cnpj || "", "", "", "", "Emissão", D(fat.emissao || fat.criado_em)]);
+    aoa.push(["Endereço", `${emp.endereco || ""}  ${emp.cidade || ""} - ${emp.uf || ""}`, "", "", "", "Vencimento", D(fat.vencimento)]);
+    aoa.push(["Cliente", (cli.tecnox_cod != null ? cli.tecnox_cod + " - " : "") + (cli.nome || fat.cliente_nome || ""), "", "", "",
+              "CNPJ/CPF", cli.documento || ""]);
+    aoa.push(["Endereço", `${cli.endereco || ""}${cli.num_endereco ? ", " + cli.num_endereco : ""}${cli.bairro ? " — " + cli.bairro : ""}  ${cli.cidade || ""} - ${cli.uf || ""}  ${cli.cep || ""}`,
+              "", "", "", parcial ? "Saldo em aberto R$" : "Valor R$", parcial ? saldo : _fatLiquido(fat)]);
+    aoa.push([]);
+    const cab = ["Emissão", "Produto", "Placa", "Odômetro", "Hora", "Nota fiscal (cupom)", "Quantidade", "Val. unitário", "Valor"]
+      .concat(comDesc ? ["Desconto", "Líquido"] : []);
+    const L0 = aoa.length;                           // linha do cabeçalho (0-based)
+    aoa.push(cab);
+    linhas.forEach((it, k) => {
+      const r = [D(it.data), it.produto || "", it.placa || (it.veiculo ? String(it.veiculo) : ""), N(it.odometro), String(it.hora || "").slice(0, 8),
+                 N(it.cupom), Number(it.qtd || 0), Number(it.unit || 0), Number(it.total || 0)];
+      if (comDesc) r.push(descL[k] > 0 ? -descL[k] : 0, +(Number(it.total || 0) - descL[k]).toFixed(2));
+      aoa.push(r);
+    });
+    const ultL = aoa.length - 1;                     // última linha de item (0-based)
+    const totV = +linhas.reduce((s, l) => s + Number(l.total || 0), 0).toFixed(2);
+    const totQ = +linhas.reduce((s, l) => s + Number(l.qtd || 0), 0).toFixed(4);
+    aoa.push(["Totais", "", "", "", "", "", totQ, "", totV].concat(comDesc ? [-dNotas, +(totV - dNotas).toFixed(2)] : []));
+    const linTot = aoa.length - 1;
+    aoa.push([]);
+    const resumo = [["Total produtos", Number(base.valor || 0)], ["Multa + juros + acréscimos", acr],
+                    ["Descontos notas", -dNotas], ["Sub total", +(Number(base.valor || 0) + acr - dNotas).toFixed(2)],
+                    ["Despesa acessória", 0], ["Desconto manual", -(+(desc - dNotas).toFixed(2))],
+                    [orig ? `TOTAL DA FATURA ${orig.numero || ""}` : "TOTAL", _fatLiquido(base)]];
+    if (orig) resumo.push([`Esta parcela (${fat.parcela_num || "?"}/${fat.parcela_total || "?"})`, _fatLiquido(fat)]);
+    if (parcial) {
+      resumo.push(["Valor original da fatura", _fatLiquido(fat)]);
+      pagos.filter(p => Number(p.valor || 0) > 0.004).forEach(p =>
+        resumo.push([`Pago em ${_fatData(p.data_recebimento || p.criado_em)}${p.forma ? " (" + p.forma + ")" : ""}`, -Number(p.valor || 0)]));
+      resumo.push(["SALDO EM ABERTO", saldo]);
+    }
+    const linRes = aoa.length;
+    resumo.forEach(([r, v]) => aoa.push(["", "", "", "", "", "", "", r, v]));
+    if (fat.observacao) { aoa.push([]); aoa.push(["Observação", fat.observacao]); }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const A = (r, c) => XLSX.utils.encode_cell({ r, c });
+    const fmt = (r, c, z) => { const cel = ws[A(r, c)]; if (cel && cel.t === "n") cel.z = z; };
+    const MO = "#,##0.00;-#,##0.00;0.00";
+    for (let r = L0 + 1; r <= linTot; r++) {
+      fmt(r, 0, "dd/mm/yyyy"); fmt(r, 6, "#,##0.0000"); fmt(r, 7, "#,##0.000");
+      [8, 9, 10].forEach(c => fmt(r, c, MO));
+    }
+    // totais com fórmula (e o valor já calculado, para quem abrir sem recalcular)
+    const colL = c => XLSX.utils.encode_col(c);
+    [[6, totQ, "#,##0.0000"], [8, totV, MO]].concat(comDesc ? [[9, -dNotas, MO], [10, +(totV - dNotas).toFixed(2), MO]] : [])
+      .forEach(([c, v, z]) => { ws[A(linTot, c)] = { t: "n", v, z, f: `SUM(${colL(c)}${L0 + 2}:${colL(c)}${ultL + 1})` }; });
+    for (let r = linRes; r < linRes + resumo.length; r++) fmt(r, 8, MO);
+    [2, 3].forEach(r => fmt(r, 6, "dd/mm/yyyy"));
+    fmt(5, 6, MO);
+    ws["!cols"] = [11, 26, 12, 12, 9, 16, 12, 13, 13, 11, 13].slice(0, cab.length).map(w => ({ wch: w }));
+    ws["!autofilter"] = { ref: `A${L0 + 1}:${colL(cab.length - 1)}${ultL + 1}` };
+
+    // ---- por produto (o quadro "Totais de produtos" do PDF) ----
+    const porProd = {};
+    linhas.forEach((it, k) => {
+      const nm = it.produto || "—";
+      if (!porProd[nm]) porProd[nm] = { qtd: 0, total: 0, desc: 0 };
+      porProd[nm].qtd += Number(it.qtd || 0); porProd[nm].total += Number(it.total || 0); porProd[nm].desc += descL[k];
+    });
+    const aoaP = [["Produto", "Quantidade", comDesc ? "Média líquida (R$/L)" : "Custo unitário médio", "Total", "Desconto", "Líquido"]];
+    Object.entries(porProd).forEach(([nome, p]) => aoaP.push([nome, +p.qtd.toFixed(4),
+      p.qtd ? +((p.total - (comDesc ? p.desc : 0)) / p.qtd).toFixed(4) : 0, +p.total.toFixed(2), p.desc > 0 ? -(+p.desc.toFixed(2)) : 0,
+      +(p.total - p.desc).toFixed(2)]));
+    const wp = XLSX.utils.aoa_to_sheet(aoaP);
+    for (let r = 1; r < aoaP.length; r++) {
+      const c = (cc, z) => { const x = wp[XLSX.utils.encode_cell({ r, c: cc })]; if (x && x.t === "n") x.z = z; };
+      c(1, "#,##0.0000"); c(2, "#,##0.0000"); c(3, MO); c(4, MO); c(5, MO);
+    }
+    wp["!cols"] = [{ wch: 26 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 12 }, { wch: 13 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, ("Fatura " + (fat.numero ?? "")).slice(0, 31));
+    XLSX.utils.book_append_sheet(wb, wp, "Por produto");
+    const nomeCli = String(fat.cliente_nome || "cliente").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
+    XLSX.writeFile(wb, `Fatura_${fat.numero ?? ""}${fat.parcela_de ? "_parcela_" + (fat.parcela_num || "") : ""}_${nomeCli}.xlsx`);
+  } catch (e) {
+    alert("Não consegui gerar o Excel da fatura: " + (e.message || e));
+  }
+}
+
 // Gerar NF consolidada a partir de uma FATURA (usa os títulos dela)
 async function fatGerarNfFatura(faturaId) {
   if (!podeOuAvisa('faturar.emitir_nfe')) return;
@@ -4202,6 +4364,7 @@ function _fatRenderFaturas(status, dados, manterRolagem) {
     <td class="fat-td" style="white-space:nowrap">
       ${status === "aberta" ? `<button class="fat-abtn" style="background:#166534" onclick="fatLiquidar('${fatr.id}')">💰 Receber</button>` : ""}
       <button class="fat-abtn" style="background:#b45309" onclick="fatVerFatura('${fatr.id}')">📄 Fatura</button>
+      <button class="fat-abtn" style="background:#1e6b43" onclick="fatExcelFatura('${fatr.id}')" title="Baixar a fatura em planilha (abre no Excel): as mesmas linhas e totais do PDF">⬇ Excel</button>
       <button class="fat-abtn" style="background:#1d4ed8" onclick="fatFaturaDetalhes('${fatr.id}')">👁 Detalhes</button>
       ${status !== "aberta" || rec[fatr.id] > 0 ? `<button class="fat-abtn" style="background:#475569" onclick="fatRecibo('${fatr.id}')" title="Recibo do que foi pago">📃 Recibo</button>` : ""}
       ${status === "aberta" ? `${fatr.parcela_de ? "" : `<button class="fat-abtn" style="background:#0e7490" onclick="fatGerarNfFatura('${fatr.id}')">🧾 Gerar NF</button>
