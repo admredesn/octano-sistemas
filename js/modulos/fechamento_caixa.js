@@ -627,6 +627,15 @@ async function fcCarregarDados() {
       else (t._titFora = t._titFora || []).push({ g: ['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(gH) ? gH : 'deposito',
         valor: val, dinheiro: val, x: v, haver: true });
     } else if (val > 0) t.haver_sem_forma += val;
+    // VALE HAVER LANÇADO NO RETAGUARDA (09/11/2026, Ronan — Florestal caixa 1200: "o sistema não está deixando lançar o
+    // vale haver no retaguarda, tem que deixar criar, editar, excluir"): o cliente abasteceu com o crédito e o cupom não
+    // saiu na forma "Crédito do cliente" (ex.: espelho do TecnoX — o cupom 932 do Marcus saiu em cheque e foi tirado).
+    // SOMA em Vale Haver como o pagamento daquela venda. O consumo do PDV (origem 'pdv') NÃO soma aqui: ele já está em
+    // rec.haver pelo pagamento do cupom (p.haver) — somar de novo dobraria.
+    if (val < 0 && v.tipo === 'consumo' && v.origem !== 'pdv') {
+      t.rec.haver = (t.rec.haver || 0) + Math.abs(val);
+      t.haver_manual = (t.haver_manual || 0) + Math.abs(val);
+    }
     t.vales_lst.push(v);
   });
   // NOTA A PRAZO EMITIDA (TecnoX) -> entra em rec.prazo.
@@ -3843,24 +3852,35 @@ function fcNodeMov(tipo) {
     // o crédito gerado no turno aparece embaixo, separado (é a origem, não o pagamento)
     if (tipo === 'vale_haver') vs = vs.filter(v => v.tipo === 'consumo');
     else if (tipo === 'vale_motorista') vs = vs.filter(v => Number(v.valor || 0) < 0);
+    const vh = tipo === 'vale_haver';
+    // ✎ / ✖ no Vale Haver (09/11/2026): o lançado no retaguarda edita tudo e pode ser excluído; o do PDV veio do cupom
+    // pago com "Crédito do cliente" — o valor é o do cupom (é ele que soma na linha), então só troca cliente/obs.
+    const acoes = v => !vh ? '' : `<td class="fc-td" style="white-space:nowrap">
+        <button class="fc-btn2" onclick="fcValeHaverForm('${v.id}')" title="${v.origem === 'pdv' ? 'Trocar o cliente ou a observação (o valor é o do cupom)' : 'Editar cliente, valor ou observação'}">✎</button>
+        ${v.origem === 'pdv'
+          ? `<span title="Veio do cupom${_fcNumNfce(v.nfce_chave) ? ' NFC-e ' + _fcNumNfce(v.nfce_chave) : ''} pago com Crédito do cliente. Para desfazer, cancele o cupom ou troque a forma de pagamento dele." style="color:#667;cursor:help">🔒</span>`
+          : `<button class="fc-btn2" style="color:#f08080" onclick="fcValeHaverExcluir('${v.id}')" title="Excluir (sai do caixa e devolve o valor ao crédito do cliente)">✖</button>`}</td>`;
     const linhas = vs.map(v => {
       const val = Number(v.valor || 0);
-      return `<tr><td class="fc-td">${_fcHoraLocal(v.criado_em)}</td>
+      return `<tr><td class="fc-td">${vh ? _fcDataHoraLocal(v.criado_em) : _fcHoraLocal(v.criado_em)}</td>
         <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
-        <td class="fc-td">${_VALE_ROT[v.tipo] || fcEsc(v.tipo) || '—'}</td>
+        <td class="fc-td">${_VALE_ROT[v.tipo] || fcEsc(v.tipo) || '—'}${vh ? (v.origem === 'pdv' ? ' <span style="color:#667;font-size:0.72rem">(PDV)</span>' : ' <span style="color:#7ea8d8;font-size:0.72rem">(retaguarda)</span>') : ''}</td>
         <td class="fc-td">${fcEsc(v.descricao) || ''}</td>
         <td class="fc-td">${fcEsc(v.operador) || '—'}</td>
-        <td class="fc-td fc-r" style="color:${val >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(val)}</td></tr>`;
+        <td class="fc-td fc-r" style="color:${val >= 0 ? '#7ee2a0' : '#f0b45c'}">${fcMoney(val)}</td>${acoes(v)}</tr>`;
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
-    const gerados = tipo === 'vale_haver' ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
+    const gerados = vh ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
     const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito pago neste turno (está em Haver crédito, à esquerda; o dinheiro dele, na linha da forma): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : 'sem forma'})`).join(' · ')}</p>` : '';
-    const tit = tipo === 'vale_haver' ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
+    const btnVh = vh ? `<button class="fc-btn2" style="margin:10px;border-color:#2a5a3a;color:#7be0a0" onclick="fcValeHaverForm('')">➕ Lançar Vale Haver (abastecido com o crédito)</button>` : '';
+    const tit = vh ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
     return fcModalNav(tit, vs.length
-      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).</p>
-         <table class="fc-grid"><thead><tr><th>Hora</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>${tipo === 'vale_haver' ? 'Total abastecido com crédito' : 'Saldo do turno'}</b></td><td class="fc-td fc-r"><b>${fcMoney(tipo === 'vale_haver' ? Math.abs(tot) : tot)}</b></td></tr></tbody></table>${extraGer}`
-      : `<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>${extraGer}`);
+      ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">${vh
+          ? 'O que o cliente abasteceu pagando com o crédito dele. Soma em Vale Haver (é o pagamento da venda) e sai do saldo de crédito do cliente.'
+          : 'Conta corrente das pessoas neste turno. Positivo = haver do cliente (posto deve); negativo = vale a descontar (pessoa deve).'}</p>
+         <table class="fc-grid"><thead><tr><th>${vh ? 'Data' : 'Hora'}</th><th>Pessoa</th><th>Tipo</th><th>Obs.</th><th>Operador</th><th>Valor</th>${vh ? '<th></th>' : ''}</tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="5"><b>${vh ? 'Total abastecido com crédito' : 'Saldo do turno'}</b></td><td class="fc-td fc-r"><b>${fcMoney(vh ? Math.abs(tot) : tot)}</b></td>${vh ? '<td></td>' : ''}</tr></tbody></table>${btnVh}${extraGer}`
+      : `<p style="padding:24px;color:#777">Nenhum vale/haver neste caixa.</p>${btnVh}${extraGer}`);
   }
 
   if (tipo === 'receb_ext') {
@@ -5768,6 +5788,7 @@ function fcHaverEscolher(id, nome) {
   window._fcHaverSel = { id, nome };
   const el = document.getElementById('fhc-escolhido'); if (el) el.textContent = '✔ ' + nome;
   const l = document.getElementById('fhc-lista'); if (l) l.innerHTML = '';
+  if (document.getElementById('fvh-saldo')) _fcVhMostrarSaldo();   // formulário do Vale Haver: mostra o crédito dele
 }
 
 async function fcHaverSalvar(id) {
@@ -5830,4 +5851,142 @@ async function fcHaverExcluir(id) {
   if (!r.data || !r.data.length) { alert('Nada foi apagado (sem permissão para excluir este lançamento?).'); return; }
   _fcToast('✖ Crédito excluído');
   await fcRecarregar(window._fcNodeAtual);
+}
+
+// ============================================================
+// VALE HAVER — lançar / editar / excluir o ABASTECIDO COM O CRÉDITO (09/11/2026, Ronan — Florestal caixa 1200: "o sistema
+// não está deixando lançar o vale haver no retaguarda, tem que deixar criar, editar, excluir"). É uma linha de oct_vales
+// tipo 'consumo' (valor NEGATIVO: sai do saldo do cliente), origem 'retaguarda', no turno deste caixa. Soma na linha
+// Vale Haver (ver o laço dos vales em fcCarregarDados). O consumo do PDV (origem 'pdv') vem do cupom: só troca cliente/obs.
+// ============================================================
+function _fcNumNfce(chave) {
+  const c = String(chave || '').replace(/\D/g, '');
+  return c.length === 44 ? String(Number(c.slice(25, 34))) : '';
+}
+async function _fcSaldoPessoa(pessoaId) {   // saldo é sempre SOMADO da fonte (nunca guardado na pessoa)
+  try {
+    const { data, error } = await sb.from('oct_vales').select('valor').eq('empresa_id', window._fcEmpresaId).eq('pessoa_id', pessoaId);
+    if (error || !data) return null;
+    return Math.round(data.reduce((s, x) => s + Number(x.valor || 0), 0) * 100) / 100;
+  } catch (e) { return null; }
+}
+async function _fcVhMostrarSaldo() {
+  const el = document.getElementById('fvh-saldo'); if (!el) return;
+  const pes = window._fcHaverSel;
+  if (!pes || !pes.id) { el.innerHTML = ''; return; }
+  el.textContent = 'Consultando o crédito...';
+  const saldo = await _fcSaldoPessoa(pes.id);
+  window._fcVhSaldo = saldo;
+  if (saldo == null) { el.textContent = ''; return; }
+  // na edição, o lançamento atual já está no saldo DESTE cliente: devolve ele para mostrar o crédito disponível
+  const atual = String(pes.id) === String(window._fcVhPessoaOrig || '') ? Number(window._fcVhValorAtual || 0) : 0;
+  const disp = Math.round((saldo + atual) * 100) / 100;
+  el.innerHTML = `Crédito do cliente${atual ? ' (sem este lançamento)' : ''}: <b style="color:${disp > 0 ? '#7ee2a0' : '#f0b45c'}">R$ ${fcMoney(disp)}</b>`;
+}
+
+async function fcValeHaverForm(id) {
+  if (!podeOuAvisa(id ? 'fcaixa.lanc_alterar' : 'fcaixa.lanc_incluir')) return;
+  if (_fcTravado()) return;
+  const turnoId = window._fcTurnoAtual;
+  window._fcHaverVolta = 'vale_haver';
+  const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const v = id ? (d.vales_lst || []).find(x => String(x.id) === String(id) && x.tipo === 'consumo') : null;
+  if (id && !v) { alert('Lançamento não encontrado — atualize a tela.'); return; }
+  const doPdv = !!(v && v.origem === 'pdv');
+  window._fcHaverSel = v ? { id: v.pessoa_id, nome: v.pessoa_nome } : null;
+  window._fcVhValorAtual = v ? Math.abs(Number(v.valor || 0)) : 0;
+  window._fcVhPessoaOrig = v ? v.pessoa_id : null;
+  window._fcVhSaldo = null;
+  const inp = 'style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"';
+  const lab = txt => `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:10px">${txt}</label>`;
+  const nf = v ? _fcNumNfce(v.nfce_chave) : '';
+  fcModal(id ? '✎ Editar Vale Haver' : '➕ Lançar Vale Haver', `
+    <div style="padding:16px;font-size:0.85rem;color:#cdd6e0;max-width:460px">
+      <p style="color:#889;font-size:0.76rem;margin:0 0 4px">O cliente abasteceu pagando com o crédito dele. Soma em Vale Haver neste
+        caixa e sai do saldo de crédito do cliente.</p>
+      ${lab('Cliente')}
+      ${v ? `<div style="padding:8px;border:1px solid #2a2d3e;border-radius:6px;background:#0b0d14"><span id="fhc-escolhido">✔ ${fcEsc(v.pessoa_nome)}</span>
+               <a href="javascript:void(0)" onclick="document.getElementById('fvh-troca').style.display='block';this.style.display='none'" style="float:right;color:#7ea8d8;font-size:0.76rem">trocar</a></div>
+             <div id="fvh-troca" style="display:none;margin-top:6px"><input id="fhc-busca" placeholder="Buscar outro cliente por nome ou CPF/CNPJ..." oninput="fcHaverBuscar(this.value)" ${inp}>
+               <div id="fhc-lista" style="max-height:150px;overflow:auto"></div></div>`
+          : `<input id="fhc-busca" placeholder="Buscar por nome ou CPF/CNPJ..." oninput="fcHaverBuscar(this.value)" ${inp}>
+             <div id="fhc-lista" style="max-height:150px;overflow:auto"></div>
+             <div id="fhc-escolhido" style="margin-top:4px;color:#7ee2a0;font-size:0.8rem"></div>`}
+      <div id="fvh-saldo" style="margin-top:6px;color:#9aa;font-size:0.78rem"></div>
+      ${lab('Valor abastecido com o crédito (R$)')}
+      <input id="fvh-valor" type="number" step="0.01" min="0.01" value="${v ? Math.abs(Number(v.valor)).toFixed(2) : ''}" ${doPdv ? 'disabled' : ''} ${inp}>
+      ${doPdv ? `<p style="color:#889;font-size:0.74rem;margin-top:4px">🔒 Valor do cupom${nf ? ' NFC-e ' + fcEsc(nf) : ''} pago com Crédito do cliente — é o cupom que soma no caixa.</p>` : ''}
+      ${lab('Observação')}<input id="fvh-obs" value="${v && v.descricao ? fcEsc(v.descricao) : ''}" placeholder="ex.: cupom 932 (TecnoX), abastecido com o crédito do cheque 3192" ${inp}>
+      <div id="fhc-msg" style="color:#f87171;font-size:0.78rem;min-height:16px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="fc-btn2" style="flex:1" onclick="fcNode('vale_haver')">Voltar</button>
+        <button class="fc-btn2" style="flex:2;border-color:#2a5a3a;color:#7be0a0" onclick="fcValeHaverSalvar('${id || ''}')">💾 Salvar</button>
+      </div>
+    </div>`);
+  if (v) _fcVhMostrarSaldo();
+}
+
+async function fcValeHaverSalvar(id) {
+  if (!podeOuAvisa(id ? 'fcaixa.lanc_alterar' : 'fcaixa.lanc_incluir')) return;
+  if (_fcTravado()) return;
+  const msg = document.getElementById('fhc-msg');
+  const turnoId = window._fcTurnoAtual;
+  const d = ((window._fcCache || {}).porTurno || {})[turnoId] || {};
+  const t = (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoId) || {};
+  const v = id ? (d.vales_lst || []).find(x => String(x.id) === String(id) && x.tipo === 'consumo') : null;
+  if (id && !v) { msg.textContent = 'Lançamento não encontrado — atualize a tela.'; return; }
+  const doPdv = !!(v && v.origem === 'pdv');
+  const pes = window._fcHaverSel;
+  const obs = ((document.getElementById('fvh-obs') || {}).value || '').trim();
+  const valor = doPdv ? Math.abs(Number(v.valor || 0))
+    : Math.round(parseFloat(String((document.getElementById('fvh-valor') || {}).value || '').replace(',', '.')) * 100) / 100;
+  if (!pes || !pes.id) { msg.textContent = 'Escolha o cliente.'; return; }
+  if (!(valor > 0)) { msg.textContent = 'Informe o valor abastecido com o crédito.'; return; }
+  // crédito insuficiente: avisa, mas deixa (o histórico do TecnoX pode estar sendo acertado fora de ordem)
+  let saldo = window._fcVhSaldo;
+  const trocouCliente = v && String(v.pessoa_id) !== String(pes.id);
+  if (saldo == null || trocouCliente) saldo = await _fcSaldoPessoa(pes.id);
+  if (saldo != null) {
+    const disp = Math.round((saldo + (v && !trocouCliente ? Math.abs(Number(v.valor || 0)) : 0)) * 100) / 100;
+    if (valor > disp + 0.004 && !confirm(`${pes.nome} tem R$ ${fcMoney(disp)} de crédito e o lançamento é de R$ ${fcMoney(valor)}.\n\n`
+        + `O saldo dele fica NEGATIVO em R$ ${fcMoney(valor - disp)} (passa a dever ao posto). Lançar mesmo assim?`)) return;
+  }
+  let r;
+  if (id) {
+    const dados = { pessoa_id: pes.id, pessoa_nome: pes.nome, descricao: obs || null };
+    if (!doPdv) dados.valor = -valor;
+    r = await sb.from('oct_vales').update(dados).eq('id', id).eq('tipo', 'consumo').select('id');
+  } else {
+    // a data do consumo é a do CAIXA (não a de hoje): o extrato do cliente (Haver por cliente) fica na ordem certa
+    const quando = t.fechado_em || t.aberto_em || new Date().toISOString();
+    r = await sb.from('oct_vales').insert({
+      empresa_id: window._fcEmpresaId, pessoa_id: pes.id, pessoa_nome: pes.nome, tipo: 'consumo', valor: -valor,
+      descricao: obs || 'Vale Haver lançado no F.Caixa (caixa ' + (t.numero || '') + ')', origem: 'retaguarda',
+      turno_id: turnoId, operador: await _fcAutor(), criado_em: quando,
+    }).select('id');
+  }
+  if (r.error) { msg.textContent = 'Erro: ' + r.error.message; return; }
+  if (!r.data || !r.data.length) { msg.textContent = 'Nada foi gravado (sem permissão para alterar este lançamento?).'; return; }
+  _fcToast(id ? '✔ Vale Haver alterado' : '✔ Vale Haver lançado');
+  await fcRecarregar('vale_haver');
+}
+
+async function fcValeHaverExcluir(id) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  if (_fcTravado()) return;
+  const d = ((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {};
+  const v = (d.vales_lst || []).find(x => String(x.id) === String(id) && x.tipo === 'consumo');
+  if (!v) { alert('Lançamento não encontrado — atualize a tela.'); return; }
+  if (v.origem === 'pdv') { alert('Este Vale Haver veio do cupom pago com Crédito do cliente. Para desfazer, cancele o cupom ou troque a forma de pagamento dele.'); return; }
+  const val = Math.abs(Number(v.valor || 0));
+  const saldo = await _fcSaldoPessoa(v.pessoa_id);
+  if (!confirm(`Excluir o Vale Haver de R$ ${fcMoney(val)} de ${v.pessoa_nome || 'cliente'}?\n\n`
+      + `Sai da linha Vale Haver deste caixa e o valor VOLTA para o crédito do cliente`
+      + (saldo != null ? ` (saldo de R$ ${fcMoney(saldo)} para R$ ${fcMoney(saldo + val)}).` : '.')
+      + `\nNão dá para desfazer (para corrigir cliente ou valor use o ✎).`)) return;
+  const r = await sb.from('oct_vales').delete().eq('id', id).eq('tipo', 'consumo').or('origem.is.null,origem.neq.pdv').select('id');
+  if (r.error) { alert('Erro: ' + r.error.message); return; }
+  if (!r.data || !r.data.length) { alert('Nada foi apagado (sem permissão para excluir este lançamento?).'); return; }
+  _fcToast('✖ Vale Haver excluído');
+  await fcRecarregar('vale_haver');
 }
