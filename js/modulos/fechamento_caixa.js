@@ -3320,7 +3320,18 @@ async function fcNodeDetalhe(tipo) {
     // mesma passada contada de novo.
     const _temExtrato = (d0.manuais || []).some(m => String(m.id || '').indexOf('ext-') === 0);
     const _titsNo = (d0.titulos_receb_lst || []).filter(f => grupos.includes(f.g));
-    const _rotTit = f => (_fcRotForma(String((f.x && f.x.forma) || ''), '', '') || 'Título') + ' · título';
+    // TÍTULO PAGO NO CARTÃO FROTA soma na operadora (10/11/2026, Ronan: "não precisa ficar separado o que é recebimento de
+    // título e o que é fitcard já que tudo é fitcard"): "Frota FitCard / Prime" → "FitCard / Prime", "Frota (outra)" → "Outra",
+    // o mesmo rótulo da fila/cupom/manual (_fcRotFrota). Nos outros balões o "· título" fica (Cartão + Pix, regra de 06/11).
+    const _rotTit = f => {
+      const forma = String((f.x && f.x.forma) || '');
+      if (f.g === 'frota') {
+        let op = forma.replace(/^\s*frota\s*/i, '').trim();
+        if (/^\(?outr[ao]s?\)?$/i.test(op)) op = 'Outra';
+        return _fcRotFrota(op);
+      }
+      return (_fcRotForma(forma, '', '') || 'Título') + ' · título';
+    };
     const _dataTit = f => {
       const s = String((f.x && (f.x.pago_em || f.x.data_recebimento || f.x.criado_em)) || '').slice(0, 10);
       return s ? s.split('-').reverse().slice(0, 2).join('/') : '—';
@@ -3345,7 +3356,7 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'}${tLiq ? ' <span style="color:#8aa;font-size:0.72rem">(título ' + fcMoney(x.valor) + (Number(x.juros || 0) ? ' + juros ' + fcMoney(x.juros) : '') + (Number(x.desconto || 0) ? ' − desconto ' + fcMoney(x.desconto) : '') + ')</span>' : ''}${aviso}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">${fcEsc(quem) || '—'}</td>
-          <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
+          <td class="fc-td">${fcEsc(f.g === 'frota' ? _rotTit(f) : _fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
           <td class="fc-td fc-r"${tLiq}>${fcMoney(vLiq)}</td>`;
       // CONFERIR O TÍTULO (10/11/2026, Ronan — Cartão Frota do caixa 1230: "quando o recebimento é de título recebido ele não me
       // deixa conferir (deixar laranja)"): a linha do título entra na mesma régua das outras — ☑ marca, Espaço/F9/F10 conferem
