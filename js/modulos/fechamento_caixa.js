@@ -2597,10 +2597,7 @@ async function _fcFrotaOperadoras() {
 
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
 async function fcLancEditar(refTipo, refId) {
-  if (refTipo === 'titulo') {   // título recebido (10/11/2026): valor/forma/data são do recebimento; desfazer é pelo 🗑 da linha
-    alert('Título recebido: o valor, a forma e a data vêm do recebimento (Faturar/PDV). Para desfazer, use o 🗑 da linha.');
-    return;
-  }
+  if (refTipo === 'titulo') return fcTitEditarAbrir(refId);   // título recebido (10/11/2026): editor próprio (forma, conta, data, juros/desc.)
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
   const aj = (window._fcConf[k] || {}).ajuste || {};
@@ -3355,7 +3352,7 @@ async function fcNodeDetalhe(tipo) {
       // (laranja), gravado em oct_fc_lancamentos com ref_tipo 'titulo' e ref_id = id do recebimento. Ações da linha: só o 🗑 do
       // recebimento (o mesmo do balão 💵); ✎/✖ genéricos não valem para título (fcLancEditar/fcLancExcluir recusam).
       const rowTit = (!f.haver && x.id)
-        ? _fcRow('titulo', String(x.id), tdsTit, null, `<button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>`)
+        ? _fcRow('titulo', String(x.id), tdsTit, null, `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button><button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>`)
         : `<tr><td class="fc-td"></td>${tdsTit}<td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`;
       entradas.push({ val: vLiq, hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [rowTit] });
     });
@@ -3856,7 +3853,7 @@ function fcNodeMov(tipo) {
       <td class="fc-td fc-r" style="color:#8aa">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
       <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>`;
-      const lixo = x.id ? `<button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>` : '';
+      const lixo = x.id ? `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button><button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>` : '';
       // conferência da linha (10/11/2026): a mesma do balão da forma — ☑ marca, Espaço/F9/F10 conferem (laranja), ref_tipo 'titulo'
       return x.id ? _fcRow('titulo', String(x.id), tds, null, lixo) : `<tr><td class="fc-td"></td>${tds}<td class="fc-td">${lixo}</td></tr>`;
     });
@@ -4345,6 +4342,202 @@ async function fcTitExcluirOk(id) {
   _fcToast('✔ Recebimento excluído — ' + (d.fat ? 'a fatura ' + (d.fat.numero || '') : 'a nota ' + ((d.nota || {}).numero_nfe || '')) + ' voltou para em aberto');
   if (avisos.length) alert('Recebimento excluído, mas: ' + avisos.join('; ') + '.');
   await fcRecarregar('titulos');
+}
+
+// ---------- ALTERAR RECEBIMENTO DE TÍTULO (10/11/2026) ----------
+// Ronan: "os títulos recebidos não me permitem editar, por exemplo se a baixa tiver sido feita com a forma de pagamento
+// errada, eu não consigo corrigir". ✎ na linha do título (balão da forma e 💵): muda FORMA, conta do Pix, DATA, JUROS e
+// DESCONTO em oct_recebimentos_titulo — o registro real, porque é dele que vivem o F.Caixa, o Faturar e o livro. O valor
+// do título (bruto) não muda aqui: baixa no título errado = 🗑 e receber de novo. Efeitos da alteração:
+//  - dinheiro do PDV: a receita "Recebimento de título — CLIENTE" do caixa do turno acompanha (entra, sai ou ajusta), senão
+//    a gaveta esperaria dinheiro que não entrou (ou deixaria de esperar o que entrou);
+//  - livro: oct_fin_sincronizar refaz a linha 'receb_titulo' (conta pela conta_id/forma, data, valor líquido);
+//  - trilha: o motivo vai para a observação da nota/fatura e para o overlay oct_fc_lancamentos ('titulo:<id>', ajuste.editado).
+// TRAVAS: caixa conferido (reabra), recebimento automático (boleto/app/extrato), conciliado no livro. Ligado a uma
+// transação da maquininha (recebimento_id) → a forma é a da transação: só data/juros/desconto.
+const _FC_TIT_FORMAS = ['Dinheiro', 'Pix', 'Pix CNPJ', 'Cartão de débito', 'Cartão de crédito', 'Cheque'];
+function _fcTitGrupoForma(f) {
+  const s = String(f || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return /dinheiro/.test(s) ? 'dinheiro' : /pix/.test(s) ? (/cnpj/.test(s) ? 'pix_cnpj' : 'pix') : /frota/.test(s) ? 'frota'
+    : /cheque/.test(s) ? 'cheque' : /cart|credito|debito/.test(s) ? 'cartao' : 'deposito';
+}
+function _fcTitEdTravas(d) {
+  const r = d.rec, t = [];
+  if (_fcTravado(false)) t.push('O caixa deste turno já foi <b>conferido</b>. Reabra o caixa (🔓) antes de mexer nos recebimentos.');
+  if (r.boleto_id || r.pix_cobranca_id || r.cartao_cobranca_id || /^(boleto|pix_app|cartao_app|extrato_sicoob)$/.test(String(r.origem || '')))
+    t.push('Este recebimento é <b>automático</b> (boleto, app ou extrato do banco): a forma e a data são as do banco e não se alteram aqui.');
+  if (d.conciliado) t.push('Recebimento já <b>conciliado com o extrato</b> no Livro financeiro. Desfaça a conciliação antes de alterar.');
+  return t;
+}
+function _fcTitEdHoje() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+async function fcTitEditarAbrir(id) {
+  if (!podeOuAvisa('fcaixa.lanc_alterar')) return;
+  const TIT = '✎ Alterar recebimento de título';
+  fcModal(TIT, '<p style="padding:20px;color:#888">Carregando o recebimento...</p>');
+  const d = await _fcTitExcDados(id);
+  if (d.erro) { fcModal(TIT, `<p style="padding:20px;color:#f87171">${fcEsc(d.erro)}</p>`); return; }
+  window._fcTitEd = d;
+  const r = d.rec, travas = _fcTitEdTravas(d);
+  const caixaHtml = (cor, fundo, borda, html) => `<div style="margin:10px 12px 0;background:${fundo};border:1px solid ${borda};border-radius:8px;padding:10px 12px;font-size:0.8rem;color:${cor};line-height:1.5">${html}</div>`;
+  const voltar = `<button class="fc-btn" style="flex:1" onclick="fcNode(window._fcNodeAtual || 'titulos')">Voltar</button>`;
+  if (travas.length) {
+    fcModal(TIT, `<div style="padding:8px 0 14px">${travas.map(t => caixaHtml('#fecaca', '#2a1215', '#7f1d1d', '⛔ ' + t)).join('')}
+      <div style="display:flex;gap:8px;padding:12px 12px 0">${voltar}</div></div>`);
+    return;
+  }
+  const formaAtual = String(r.forma || '');
+  const ops = await _fcFrotaOperadoras();
+  const formas = _FC_TIT_FORMAS.concat(ops.map(o => 'Frota ' + o), ['Frota (outra)', 'Outro']);
+  if (formaAtual && !formas.includes(formaAtual)) formas.unshift(formaAtual);
+  const formaTravada = !!r.recebimento_id;
+  const g0 = _fcTitGrupoForma(formaAtual);
+  const contaHtml = await _fcContaPixHtml('fcte-conta', g0 === 'pix_cnpj' ? 'pix_cnpj' : 'pix', r.conta_id != null ? r.conta_id : null);
+  const campo = (rot, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span style="color:#8aa">${rot}</span><span style="color:#e5e7eb;text-align:right">${v}</span></div>`;
+  const doc = d.nota ? 'nota ' + fcEsc(d.nota.numero_nfe || '') + (d.nota.status === 'pago' ? ' (quitada)' : ' (saldo ' + fcMoney(d.nota.valor) + ')')
+    : d.fat ? 'fatura ' + fcEsc(d.fat.numero || '') + ' (' + fcEsc(d.fat.status || '') + ')' : '—';
+  const inp = 'class="fc-inp2" style="width:100%"';
+  fcModal(TIT, `<div style="padding:4px 12px 14px;color:#cdd6e0;font-size:0.84rem">
+    <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:8px;padding:10px 12px;margin:8px 0 10px">
+      ${campo('Cliente', fcEsc(r.cliente_nome) || '—')}
+      ${campo('Título', doc)}
+      ${campo('Valor do título (baixa)', '<b>' + fcMoney(r.valor) + '</b> <span style="color:#667;font-size:0.72rem">não muda aqui — baixa errada: 🗑 e receber de novo</span>')}
+      ${campo('Origem', fcEsc(r.origem || '—') + (r.autor ? ' · ' + fcEsc(r.autor) : ''))}
+      ${r.recebimento_id ? campo('Maquininha', '<span style="color:#f0b45c">ligado a uma transação da maquininha — a forma é a da transação</span>') : ''}
+    </div>
+    <label style="display:block;color:#9aa;font-size:0.75rem">Forma de pagamento${formaTravada ? ' (travada pela maquininha)' : ''}</label>
+    <select id="fcte-forma" ${inp} onchange="_fcTitEdForma()" ${formaTravada ? 'disabled' : ''}>
+      ${formas.map(f => `<option value="${fcEsc(f)}" ${f === formaAtual ? 'selected' : ''}>${fcEsc(f)}</option>`).join('')}
+    </select>
+    <div id="fcte-conta-box" style="display:${(g0 === 'pix' || g0 === 'pix_cnpj') ? 'block' : 'none'}">${contaHtml}</div>
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <div style="flex:1"><label style="display:block;color:#9aa;font-size:0.75rem">Data do recebimento</label>
+        <input type="date" id="fcte-data" value="${fcEsc(String(r.data_recebimento || '').slice(0, 10))}" max="${_fcTitEdHoje()}" ${inp}></div>
+      <div style="flex:1"><label style="display:block;color:#9aa;font-size:0.75rem">Juros / multa</label>
+        <input type="number" step="0.01" min="0" id="fcte-juros" value="${Number(r.juros || 0).toFixed(2)}" oninput="_fcTitEdRecalc()" ${inp}></div>
+      <div style="flex:1"><label style="display:block;color:#9aa;font-size:0.75rem">Desconto</label>
+        <input type="number" step="0.01" min="0" id="fcte-desc" value="${Number(r.desconto || 0).toFixed(2)}" oninput="_fcTitEdRecalc()" ${inp}></div>
+    </div>
+    <div style="text-align:right;margin-top:6px;font-size:0.8rem;color:#9aa">Recebido (título + juros − desconto): <b id="fcte-liq" style="color:#7ee2a0">${fcMoney(_fcTitLiq(r))}</b></div>
+    <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Motivo <span style="color:#667">(obrigatório — fica no histórico da nota/fatura)</span></label>
+    <input id="fcte-motivo" placeholder="ex.: frentista marcou dinheiro, mas foi no cartão" ${inp}>
+    <div id="fcte-msg" style="color:#f87171;font-size:0.8rem;min-height:18px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px">${voltar}
+      <button id="fcte-ok" class="fc-btn azul" style="flex:2;font-weight:700" onclick="fcTitEditarOk('${fcEsc(String(id))}')">✔ Salvar alteração</button>
+    </div></div>`);
+  document.getElementById('fcte-motivo')?.focus();
+}
+function _fcTitEdForma() {
+  const f = document.getElementById('fcte-forma'); const g = _fcTitGrupoForma(f && f.value);
+  const box = document.getElementById('fcte-conta-box');
+  if (box) box.style.display = (g === 'pix' || g === 'pix_cnpj') ? 'block' : 'none';
+  _fcTitEdRecalc();
+}
+function _fcTitEdRecalc() {
+  const d = window._fcTitEd; if (!d) return;
+  const el = id => document.getElementById(id);
+  const liq = Math.round((Number(d.rec.valor || 0) + Number((el('fcte-juros') || {}).value || 0) - Number((el('fcte-desc') || {}).value || 0)) * 100) / 100;
+  if (el('fcte-liq')) el('fcte-liq').textContent = fcMoney(liq);
+}
+async function fcTitEditarOk(id) {
+  if (!podeOuAvisa('fcaixa.lanc_alterar')) return;
+  const el = x => document.getElementById(x);
+  const msg = el('fcte-msg'), btn = el('fcte-ok');
+  const erro = t => { if (msg) { msg.style.color = '#f87171'; msg.textContent = t; } if (btn) btn.disabled = false; };
+  const motivo = String((el('fcte-motivo') || {}).value || '').trim();
+  if (!motivo) return erro('Escreva o motivo — fica registrado.');
+  if (btn) btn.disabled = true;
+  if (msg) { msg.style.color = '#9aa'; msg.textContent = 'Salvando...'; }
+  // confere de novo: entre abrir e salvar, alguém pode ter conferido o caixa / conciliado
+  const d = await _fcTitExcDados(id);
+  if (d.erro) return erro(d.erro);
+  if (_fcTitEdTravas(d).length) return erro('Apareceu uma trava agora. Feche e abra de novo para ver.');
+  const r = d.rec;
+  const forma = r.recebimento_id ? String(r.forma || '') : String((el('fcte-forma') || {}).value || r.forma || '').trim();
+  const dataRec = String((el('fcte-data') || {}).value || r.data_recebimento || '').slice(0, 10);
+  const juros = Math.round(Number((el('fcte-juros') || {}).value || 0) * 100) / 100;
+  const desconto = Math.round(Number((el('fcte-desc') || {}).value || 0) * 100) / 100;
+  if (!forma) return erro('Escolha a forma de pagamento.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataRec) || dataRec > _fcTitEdHoje()) return erro('Data do recebimento inválida (não pode ser no futuro).');
+  if (!(juros >= 0) || !(desconto >= 0)) return erro('Juros e desconto não podem ser negativos.');
+  if (desconto > Number(r.valor || 0) + 0.005) return erro('O desconto não pode passar do valor do título.');
+  const g = _fcTitGrupoForma(forma), gAntes = _fcTitGrupoForma(r.forma);
+  let contaId = r.conta_id != null ? Number(r.conta_id) : null;
+  if (g === 'pix' || g === 'pix_cnpj') {
+    const c = _fcContaPixEscolhida('fcte-conta');
+    if (c === false) return erro('Escolha em qual conta o Pix caiu.');
+    if (c) contaId = c.id;
+  } else if ((gAntes === 'pix' || gAntes === 'pix_cnpj') && contaId != null) {
+    contaId = null;   // deixou de ser Pix: a conta volta a ser a padrão da forma (livro)
+  }
+  const liqAntes = _fcTitLiq(r), liqNovo = Math.round((Number(r.valor || 0) + juros - desconto) * 100) / 100;
+  const de = { forma: String(r.forma || ''), data: String(r.data_recebimento || '').slice(0, 10), juros: Number(r.juros || 0), desconto: Number(r.desconto || 0), conta_id: r.conta_id != null ? Number(r.conta_id) : null };
+  const para = { forma, data: dataRec, juros, desconto, conta_id: contaId };
+  const mudou = Object.keys(para).some(k => (k === 'juros' || k === 'desconto') ? Math.abs(para[k] - de[k]) > 0.004 : para[k] !== de[k]);
+  if (!mudou) return erro('Nada mudou.');
+  // 1) o recebimento (confere que gravou: sem permissão o PostgREST não dá erro, só não grava)
+  const u = await sb.from('oct_recebimentos_titulo').update({ forma, data_recebimento: dataRec, juros, desconto, conta_id: contaId }).eq('id', r.id).select('id');
+  if (u.error || !(u.data || []).length) return erro('Não consegui alterar o recebimento' + (u.error ? ': ' + u.error.message : ' (sem permissão)') + '. Nada foi alterado.');
+  const avisos = [];
+  // 2) dinheiro do PDV: a receita do caixa do turno acompanha a forma e o valor
+  if (r.origem === 'pdv' && r.turno_id) {
+    const eraDin = gAntes === 'dinheiro', ficaDin = g === 'dinheiro';
+    try {
+      if (eraDin && !ficaDin) {
+        if (d.caixa) {
+          const novo = Math.round((Number(d.caixa.valor || 0) - liqAntes) * 100) / 100;
+          const c = novo > 0.005 ? await sb.from('oct_pdv_caixa').update({ valor: novo }).eq('id', d.caixa.id).select('id')
+                                 : await sb.from('oct_pdv_caixa').delete().eq('id', d.caixa.id).select('id');
+          if (c.error || !(c.data || []).length) avisos.push('o lançamento de dinheiro do caixa NÃO foi ajustado — confira o esperado da gaveta');
+        } else avisos.push('não achei o lançamento de dinheiro deste recebimento no caixa do turno — confira o esperado da gaveta');
+      } else if (!eraDin && ficaDin) {
+        const agora = new Date().toISOString();
+        const c = await sb.from('oct_pdv_caixa').insert({ empresa_id: window._fcEmpresaId, turno_id: r.turno_id, tipo: 'receita', forma: 'Dinheiro', valor: liqNovo,
+          descricao: 'Recebimento de título — ' + String(r.cliente_nome || '').trim(), operador: r.autor || 'retaguarda', created_at: agora, data_mov: agora }).select('id');
+        if (c.error || !(c.data || []).length) avisos.push('a receita de dinheiro NÃO entrou no caixa do turno (' + (c.error ? c.error.message : 'sem permissão') + ') — lance pelo balão Receitas');
+      } else if (eraDin && ficaDin && Math.abs(liqNovo - liqAntes) > 0.004) {
+        if (d.caixa) {
+          const novo = Math.round((Number(d.caixa.valor || 0) - liqAntes + liqNovo) * 100) / 100;
+          const c = novo > 0.005 ? await sb.from('oct_pdv_caixa').update({ valor: novo }).eq('id', d.caixa.id).select('id')
+                                 : await sb.from('oct_pdv_caixa').delete().eq('id', d.caixa.id).select('id');
+          if (c.error || !(c.data || []).length) avisos.push('o lançamento de dinheiro do caixa NÃO foi ajustado — confira o esperado da gaveta');
+        } else avisos.push('não achei o lançamento de dinheiro deste recebimento no caixa do turno — confira o esperado da gaveta');
+      }
+    } catch (e) { avisos.push('caixa do turno: ' + (e.message || e)); }
+  }
+  // 3) trilha: observação da nota/fatura + overlay do F.Caixa
+  let quem = 'retaguarda';
+  try { const s = await sb.auth.getSession(); quem = (s.data && s.data.session && s.data.session.user && s.data.session.user.email) || quem; } catch (e) { /* segue */ }
+  const quando = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  const mud = [];
+  if (para.forma !== de.forma) mud.push('forma ' + de.forma + ' → ' + para.forma);
+  if (para.data !== de.data) mud.push('data ' + de.data + ' → ' + para.data);
+  if (Math.abs(para.juros - de.juros) > 0.004) mud.push('juros ' + de.juros.toFixed(2) + ' → ' + para.juros.toFixed(2));
+  if (Math.abs(para.desconto - de.desconto) > 0.004) mud.push('desconto ' + de.desconto.toFixed(2) + ' → ' + para.desconto.toFixed(2));
+  if (para.conta_id !== de.conta_id) mud.push('conta ' + (de.conta_id == null ? '—' : de.conta_id) + ' → ' + (para.conta_id == null ? '—' : para.conta_id));
+  const linha = `[${quando}] Recebimento de R$ ${liqAntes.toFixed(2).replace('.', ',')} alterado por ${quem} (${mud.join(', ')}): ${motivo}.`;
+  try {
+    if (d.nota) await sb.from('oct_pdv_notas_prazo').update({ observacao: (d.nota.observacao ? d.nota.observacao + ' | ' : '') + linha }).eq('id', d.nota.id);
+    if (d.fat) await sb.from('oct_faturas').update({ observacoes: (d.fat.observacoes ? d.fat.observacoes + '\n' : '') + linha }).eq('id', d.fat.id);
+  } catch (e) { /* trilha é o melhor esforço */ }
+  try {
+    const k = 'titulo:' + r.id;
+    const cur = window._fcConf[k] = window._fcConf[k] || {};
+    const hist = ((cur.ajuste || {}).editado || []).concat([{ em: new Date().toISOString(), por: quem, motivo, de, para }]);
+    cur.ajuste = Object.assign({}, cur.ajuste || {}, { editado: hist });
+    await sb.from('oct_fc_lancamentos').upsert({
+      empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+      ref_tipo: 'titulo', ref_id: String(r.id), conferido: !!cur.conferido, ajuste: cur.ajuste,
+    }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+  } catch (e) { /* o registro já está certo; a trilha do overlay é o melhor esforço */ }
+  // 4) livro: a linha 'receb_titulo' é refeita pela sincronização (conta, data, valor líquido)
+  try {
+    const desde = dataRec < de.data ? dataRec : de.data;
+    await sb.rpc('oct_fin_sincronizar', { p_empresa: window._fcEmpresaId, p_desde: desde });
+  } catch (e) { avisos.push('o livro financeiro será refeito pela sincronização automática (a cada 20 min)'); }
+  fcModalFechar();
+  _fcToast('✔ Recebimento alterado — ' + forma + ' · ' + fcMoney(liqNovo));
+  if (avisos.length) alert('Recebimento alterado, mas: ' + avisos.join('; ') + '.');
+  await fcRecarregar(window._fcNodeAtual || 'titulos');
 }
 
 // CUPONS (15/08 — pedido Ronan): TODAS as vendas do turno — fila de transmissão
