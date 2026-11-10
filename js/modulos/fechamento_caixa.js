@@ -1465,7 +1465,8 @@ window._fcSel = new Set(); // seleção em massa (checkbox — NÃO é o conferi
 // linha interativa: ☑ = MARCAR (seleção p/ ações em massa, azul); ESPAÇO ou os
 // botões Conferir = CONFERIDO (persistido, fica laranja). Igual ao TecnoX:
 // checkbox seleciona, espaço confere.
-function _fcRow(refTipo, refId, tds, btnDetalhe) {
+function _fcRow(refTipo, refId, tds, btnDetalhe, acoes) {
+  // acoes (10/11/2026): HTML dos botões da linha no lugar do ✎/✖ padrão — o título recebido usa o 🗑 do recebimento
   const k = refTipo + ':' + refId;
   const conf = (window._fcConf && window._fcConf[k] || {}).conferido;
   const aj = (window._fcConf && window._fcConf[k] || {}).ajuste;
@@ -1475,7 +1476,7 @@ function _fcRow(refTipo, refId, tds, btnDetalhe) {
     <td class="fc-td" style="width:26px;text-align:center"><input type="checkbox" ${sel ? 'checked' : ''}
       onclick="event.stopPropagation();fcSelToggle('${k}',this)"></td>
     ${tds}
-    <td class="fc-td" style="width:84px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button><button class="fc-btn mini" title="Excluir lançamento" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('${refTipo}','${refId}')">✖</button></td></tr>`;
+    <td class="fc-td" style="width:84px;white-space:nowrap">${btnDetalhe ? `<button class="fc-btn mini" title="Abrir detalhes" onclick="event.stopPropagation();${btnDetalhe}">🔎</button>` : ''}${aj ? '<span title="editado" style="color:#f0b45c">•</span>' : ''}${acoes != null ? acoes : `<button class="fc-btn mini" title="Alterar lançamento" onclick="event.stopPropagation();fcLancEditar('${refTipo}','${refId}')">✎</button><button class="fc-btn mini" title="Excluir lançamento" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('${refTipo}','${refId}')">✖</button>`}</td></tr>`;
 }
 
 function fcSelToggle(k, cb) {
@@ -2061,6 +2062,10 @@ async function fcLancExcluir(marcados, alvosDiretos) {
   if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez (nota a prazo à mão: o título dela sai do Faturar junto); os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.`)) return;
   for (const k of alvos) {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
+    if (refTipo === 'titulo') {   // (10/11/2026) o overlay "excluído" não tira título do caixa — só o 🗑 do recebimento
+      alert('Título recebido não sai por aqui: use o 🗑 da linha (exclui o recebimento e a nota/fatura volta para em aberto).');
+      continue;
+    }
     try {
       if (refTipo === 'manual') {
         const ajM = ((window._fcConf || {})[k] || {}).ajuste || {};
@@ -2592,6 +2597,10 @@ async function _fcFrotaOperadoras() {
 
 // modal de EDIÇÃO do lançamento — grava só o que mudou (overlay)
 async function fcLancEditar(refTipo, refId) {
+  if (refTipo === 'titulo') {   // título recebido (10/11/2026): valor/forma/data são do recebimento; desfazer é pelo 🗑 da linha
+    alert('Título recebido: o valor, a forma e a data vêm do recebimento (Faturar/PDV). Para desfazer, use o 🗑 da linha.');
+    return;
+  }
   const k = refTipo + ':' + refId;
   const base = window._fcLancBase[k] || {};
   const aj = (window._fcConf[k] || {}).ajuste || {};
@@ -3335,15 +3344,20 @@ async function fcNodeDetalhe(tipo) {
       const vLiq = Number(f.dinheiro != null ? f.dinheiro : f.valor || 0);
       const tLiq = (Number(x.juros || 0) || Number(x.desconto || 0))
         ? ` title="Título ${fcMoney(x.valor)} + juros ${fcMoney(x.juros)} − desconto ${fcMoney(x.desconto)}"` : '';
-      entradas.push({ val: vLiq, hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [
-        `<tr><td class="fc-td"></td>
-          <td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
+      const tdsTit = `<td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
           <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'}${tLiq ? ' <span style="color:#8aa;font-size:0.72rem">(título ' + fcMoney(x.valor) + (Number(x.juros || 0) ? ' + juros ' + fcMoney(x.juros) : '') + (Number(x.desconto || 0) ? ' − desconto ' + fcMoney(x.desconto) : '') + ')</span>' : ''}${aviso}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">${fcEsc(quem) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
-          <td class="fc-td fc-r"${tLiq}>${fcMoney(vLiq)}</td>
-          <td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`] });
+          <td class="fc-td fc-r"${tLiq}>${fcMoney(vLiq)}</td>`;
+      // CONFERIR O TÍTULO (10/11/2026, Ronan — Cartão Frota do caixa 1230: "quando o recebimento é de título recebido ele não me
+      // deixa conferir (deixar laranja)"): a linha do título entra na mesma régua das outras — ☑ marca, Espaço/F9/F10 conferem
+      // (laranja), gravado em oct_fc_lancamentos com ref_tipo 'titulo' e ref_id = id do recebimento. Ações da linha: só o 🗑 do
+      // recebimento (o mesmo do balão 💵); ✎/✖ genéricos não valem para título (fcLancEditar/fcLancExcluir recusam).
+      const rowTit = (!f.haver && x.id)
+        ? _fcRow('titulo', String(x.id), tdsTit, null, `<button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>`)
+        : `<tr><td class="fc-td"></td>${tdsTit}<td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`;
+      entradas.push({ val: vLiq, hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [rowTit] });
     });
 
     // 4) NOTAS A PRAZO espelhadas do TecnoX. Nos postos que ainda operam por lá
@@ -3835,13 +3849,17 @@ function fcNodeMov(tipo) {
 
   if (tipo === 'titulos') {
     const ts = d.titulos_lst || [];
-    const linhas = ts.map(x => `<tr><td class="fc-td">${_fcData(x.data_recebimento)}</td>
+    const linhas = ts.map(x => {
+      const tds = `<td class="fc-td">${_fcData(x.data_recebimento)}</td>
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
       <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}</td>
       <td class="fc-td fc-r" style="color:#8aa">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
-      <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>
-      <td class="fc-td fc-r">${x.id ? `<button class="fc-btn" title="Excluir este recebimento (o título/fatura volta para em aberto)" onclick="fcTitExcluirAbrir('${fcEsc(String(x.id))}')" style="padding:2px 8px;color:#f87171">🗑</button>` : ''}</td></tr>`);
+      <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>`;
+      const lixo = x.id ? `<button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>` : '';
+      // conferência da linha (10/11/2026): a mesma do balão da forma — ☑ marca, Espaço/F9/F10 conferem (laranja), ref_tipo 'titulo'
+      return x.id ? _fcRow('titulo', String(x.id), tds, null, lixo) : `<tr><td class="fc-td"></td>${tds}<td class="fc-td">${lixo}</td></tr>`;
+    });
     // RECEBIDO = líquido (10/11/2026, Ronan: "o desconto não está sendo subtraído no valor final"): valor do título + juros
     // − desconto, o que o cliente pagou — é esse número que soma em Títulos Recebidos e na linha da forma.
     const tot = ts.reduce((s, x) => s + _fcTitLiq(x), 0);
@@ -3853,10 +3871,11 @@ function fcNodeMov(tipo) {
     return fcModalNav('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
          ${btnBuscar}
-         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th title="Valor que baixou do título no Faturar">Título</th><th>Juros/Desc.</th><th title="O que o cliente pagou: título + juros − desconto">Recebido</th><th></th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r" style="color:#8aa">${fcMoney(totTit)}</td><td class="fc-td fc-r">${(totJ || totD) ? '+' + fcMoney(totJ) + ' / -' + fcMoney(totD) : '—'}</td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
+         <table class="fc-grid"><thead><tr><th></th><th>Data</th><th>Cliente</th><th>Forma</th><th title="Valor que baixou do título no Faturar">Título</th><th>Juros/Desc.</th><th title="O que o cliente pagou: título + juros − desconto">Recebido</th><th></th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" style="color:#8aa">${fcMoney(totTit)}</td><td class="fc-td fc-r">${(totJ || totD) ? '+' + fcMoney(totJ) + ' / -' + fcMoney(totD) : '—'}</td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
          <p style="padding:6px 10px;color:#777;font-size:0.74rem">🗑 exclui um recebimento lançado por engano: a nota/fatura volta para em aberto (motivo obrigatório).</p>
-         <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">Recebido = título + juros − desconto: é o que entrou no caixa e o que soma em Títulos Recebidos e na linha da forma.</p>`
+         <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">Recebido = título + juros − desconto: é o que entrou no caixa e o que soma em Títulos Recebidos e na linha da forma.</p>
+         <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">☑ marca · <b>Espaço</b> confere a linha (fica laranja) · F9 confere todas · F10 desconfere.</p>`
       : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
   }
 
