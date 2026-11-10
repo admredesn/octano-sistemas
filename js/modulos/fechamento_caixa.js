@@ -669,7 +669,11 @@ async function fcCarregarDados() {
   // TÍTULOS RECEBIDOS (baixa de a-prazo antigo) — por turno_id
   ((tRes && tRes.data) || []).forEach(x => {
     const t = porTurno[x.turno_id]; if (!t) return;
-    t.titulos += Number(x.valor || 0);
+    // LÍQUIDO (10/11/2026, Ronan — Florestal caixa 1230, 09/11: título da UFV de 7.459,49 pago no Cartão Frota com desconto de
+    // 298,79; "o desconto não está sendo subtraído no valor final"). O título entra no caixa pelo que o cliente PAGOU
+    // (valor + juros − desconto). O bruto é o que baixou do título no Faturar; no caixa ele inflava Títulos Recebidos e a
+    // linha da forma (frota/cartão/Pix) no valor do desconto, e no dinheiro acusava falta falsa (a gaveta só tem o líquido).
+    t.titulos += _fcTitLiq(x);
     t.titulos_lst.push(x);
     if (x.origem === 'pdv' && /dinheiro/i.test(String(x.forma || '')))
       t.titulos_din_pdv = (t.titulos_din_pdv || 0) + Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0);
@@ -777,14 +781,14 @@ async function fcCarregarDados() {
         const m = frotaMan.find(l => !l.usado && alvos.includes(l.c));
         if (m) {
           m.usado = true; f.x._na_frota = true;
-          t.titulos_na_frota = Math.round(((t.titulos_na_frota || 0) + f.valor) * 100) / 100;
+          t.titulos_na_frota = Math.round(((t.titulos_na_frota || 0) + f.dinheiro) * 100) / 100;
           return;
         }
       }
       const vinc = f.x && f.x.recebimento_id ? extPorId['ext-' + String(f.x.recebimento_id)] : null;
       if (vinc && (f.g === 'cartao' || f.g === 'pix' || f.g === 'pix_cnpj')) {
         vinc.usado = true; f.x._no_extrato = true;
-        t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.valor) * 100) / 100;
+        t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.dinheiro) * 100) / 100;
         return;
       }
       if (livres.length && (f.g === 'cartao' || f.g === 'pix')) {
@@ -792,7 +796,7 @@ async function fcCarregarDados() {
         const m = livres.find(l => !l.usado && l.pix === (f.g === 'pix') && alvos.includes(l.c));
         if (m) {
           m.usado = true; f.x._no_extrato = true;
-          t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.valor) * 100) / 100;
+          t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + f.dinheiro) * 100) / 100;
           return;
         }
       }
@@ -831,7 +835,7 @@ async function fcCarregarDados() {
           l.usado = true; usados |= m;
           for (let i = 0; i < n; i++) if (m & (1 << i)) {
             gs[i].x._no_extrato = true; gs[i].x._na_passada = l.id;
-            t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + gs[i].valor) * 100) / 100;
+            t.titulos_no_extrato = Math.round(((t.titulos_no_extrato || 0) + gs[i].dinheiro) * 100) / 100;
           }
         });
       });
@@ -840,7 +844,7 @@ async function fcCarregarDados() {
     t.titulos_receb_lst = [];
     pend.forEach(f => {
       if (f.x && f.x._no_extrato) return;
-      t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.valor;
+      t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.dinheiro;   // líquido (10/11/2026): o que o cliente pagou nessa forma
       t.titulos_receb_lst.push(f);
     });
   });
@@ -3327,14 +3331,18 @@ async function fcNodeDetalhe(tipo) {
       const aviso = (_temExtrato && (f.g === 'cartao' || f.g === 'pix'))
         ? ` <span style="color:#f59e0b;font-size:0.72rem" title="O caixa foi trocado pelo extrato da maquininha e nenhuma transação do extrato casa com este título (nem sozinho, nem somado com os outros do mesmo cliente). Se o cliente pagou na maquininha, ele já está numa linha do extrato e conta 2×; se o Pix caiu direto no banco, a forma certa é Pix CNPJ.">⚠ sem transação no extrato</span>`
         : '';
-      entradas.push({ val: Number(f.valor || 0), hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [
+      // líquido (10/11/2026): valor do título + juros − desconto = o que o cliente pagou nesta forma
+      const vLiq = Number(f.dinheiro != null ? f.dinheiro : f.valor || 0);
+      const tLiq = (Number(x.juros || 0) || Number(x.desconto || 0))
+        ? ` title="Título ${fcMoney(x.valor)} + juros ${fcMoney(x.juros)} − desconto ${fcMoney(x.desconto)}"` : '';
+      entradas.push({ val: vLiq, hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [
         `<tr><td class="fc-td"></td>
           <td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
-          <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'}${aviso}</td>
+          <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'}${tLiq ? ' <span style="color:#8aa;font-size:0.72rem">(título ' + fcMoney(x.valor) + (Number(x.juros || 0) ? ' + juros ' + fcMoney(x.juros) : '') + (Number(x.desconto || 0) ? ' − desconto ' + fcMoney(x.desconto) : '') + ')</span>' : ''}${aviso}</td>
           <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
           <td class="fc-td">${fcEsc(quem) || '—'}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
-          <td class="fc-td fc-r">${fcMoney(f.valor)}</td>
+          <td class="fc-td fc-r"${tLiq}>${fcMoney(vLiq)}</td>
           <td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`] });
     });
 
@@ -3388,7 +3396,7 @@ async function fcNodeDetalhe(tipo) {
         if (pertence) soma1(_fcRotPag(p, ajV), _fcPagValor(v.pagamentos, p, iPag, ajV));
       }));
       mans.forEach(m => soma1(_rotMan(m) || 'Manual', Number(m.valor || 0)));
-      _titsNo.forEach(f => soma1(_rotTit(f), Number(f.valor || 0)));   // títulos na forma (06/11/2026): TODOS = linha da tela
+      _titsNo.forEach(f => soma1(_rotTit(f), Number(f.dinheiro != null ? f.dinheiro : f.valor || 0)));   // títulos na forma (06/11/2026): TODOS = linha da tela; líquido (10/11/2026)
       const chavesT = Object.keys(totais).sort((a, b) => totais[b].v - totais[a].v);
       if (chavesT.length) {
         const totalGeral = chavesT.reduce((s, k) => s + totais[k].v, 0);
@@ -3830,19 +3838,25 @@ function fcNodeMov(tipo) {
     const linhas = ts.map(x => `<tr><td class="fc-td">${_fcData(x.data_recebimento)}</td>
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
       <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}</td>
+      <td class="fc-td fc-r" style="color:#8aa">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
-      <td class="fc-td fc-r">${fcMoney(x.valor)}</td>
+      <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>
       <td class="fc-td fc-r">${x.id ? `<button class="fc-btn" title="Excluir este recebimento (o título/fatura volta para em aberto)" onclick="fcTitExcluirAbrir('${fcEsc(String(x.id))}')" style="padding:2px 8px;color:#f87171">🗑</button>` : ''}</td></tr>`);
-    const tot = ts.reduce((s, x) => s + Number(x.valor || 0), 0);
+    // RECEBIDO = líquido (10/11/2026, Ronan: "o desconto não está sendo subtraído no valor final"): valor do título + juros
+    // − desconto, o que o cliente pagou — é esse número que soma em Títulos Recebidos e na linha da forma.
+    const tot = ts.reduce((s, x) => s + _fcTitLiq(x), 0);
+    const totTit = ts.reduce((s, x) => s + Number(x.valor || 0), 0);
+    const totJ = ts.reduce((s, x) => s + Number(x.juros || 0), 0), totD = ts.reduce((s, x) => s + Number(x.desconto || 0), 0);
     const btnBuscar = `<div style="padding:8px 10px">
         <button class="fc-btn azul" onclick="fcTitBuscar()">🔎 Buscar notas a prazo em aberto</button>
       </div>`;
     return fcModalNav('💵 Títulos Recebidos (baixa de a-prazo)', ts.length
       ? `<p style="padding:8px 10px;color:#888;font-size:0.78rem">Clientes que pagaram nota a prazo antiga neste turno. Entra no lado Vendas/Saídas do fechamento.</p>
          ${btnBuscar}
-         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th>Juros/Desc.</th><th>Valor</th><th></th></tr></thead>
-         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
-         <p style="padding:6px 10px;color:#777;font-size:0.74rem">🗑 exclui um recebimento lançado por engano: a nota/fatura volta para em aberto (motivo obrigatório).</p>`
+         <table class="fc-grid"><thead><tr><th>Data</th><th>Cliente</th><th>Forma</th><th title="Valor que baixou do título no Faturar">Título</th><th>Juros/Desc.</th><th title="O que o cliente pagou: título + juros − desconto">Recebido</th><th></th></tr></thead>
+         <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="3"><b>Total</b></td><td class="fc-td fc-r" style="color:#8aa">${fcMoney(totTit)}</td><td class="fc-td fc-r">${(totJ || totD) ? '+' + fcMoney(totJ) + ' / -' + fcMoney(totD) : '—'}</td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
+         <p style="padding:6px 10px;color:#777;font-size:0.74rem">🗑 exclui um recebimento lançado por engano: a nota/fatura volta para em aberto (motivo obrigatório).</p>
+         <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">Recebido = título + juros − desconto: é o que entrou no caixa e o que soma em Títulos Recebidos e na linha da forma.</p>`
       : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
   }
 
