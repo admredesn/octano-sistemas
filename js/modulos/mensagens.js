@@ -25,6 +25,25 @@ const MSG_MODELOS = [
     desc: 'Via da compra a prazo, enviada na hora do abastecimento.' },
   { chave: 'comprovante_whatsapp', rot: '🧾 Comprovante — WhatsApp', email: false,
     desc: 'Legenda da foto do cupom no WhatsApp.' },
+  // 11/11/2026: aviso que SAI SOZINHO quando a fatura é paga (quitada ou parcial) — retaguarda, PDV, boleto, Pix do app.
+  // Quem envia é o servidor (/srv/octano/aviso_pagamento), não o núcleo. Desmarcado = o posto NÃO manda o aviso.
+  { chave: 'pagamento_whatsapp', rot: '✅ Pagamento recebido — WhatsApp', email: false, rows: 14,
+    rotAtivo: 'enviar este aviso',
+    desc: 'Sai sozinho, uns 2 minutos depois que uma fatura é paga — inteira ou em parte — no retaguarda, no PDV, ' +
+          'pelo boleto ou pelo Pix do app. Os blocos {saldo_fatura}, {credito_liberado} e {em_aberto} o sistema monta ' +
+          'conforme o caso (ficam vazios quando não se aplicam). Desmarque "enviar este aviso" para não mandar neste posto.',
+    vars: [
+      ['{cliente}',          'nome do cliente'],
+      ['{posto}',            'nome do posto'],
+      ['{titulo}',           'fatura nº 180 quitada / fatura nº 180 (parcial) / faturas nº 150 e 168 quitadas'],
+      ['{numero}',           'número da fatura'],
+      ['{valor_pago}',       'valor pago agora'],
+      ['{data_pagamento}',   'data do pagamento'],
+      ['{forma}',            'Dinheiro, Pix, Boleto, Cartão de débito...'],
+      ['{saldo_fatura}',     'só no parcial: "📌 Ainda falta R$ X desta fatura"'],
+      ['{credito_liberado}', 'só quando a fatura estava vencida e o crédito voltou'],
+      ['{em_aberto}',        'outras faturas em aberto + compras já lançadas para a próxima fatura (ou "Você está em dia")'],
+    ] },
 ];
 
 // o que o nucleo troca na hora do envio
@@ -48,13 +67,22 @@ const MSG_EXEMPLO = {
   '{emissao}': '02/09/2026',
   '{situacao}': 'venceu há 5 dias',
   '{atraso}': '5',
+  // aviso de pagamento (11/11/2026)
+  '{titulo}': 'fatura nº 3 quitada',
+  '{valor_pago}': '2.057,58',
+  '{data_pagamento}': '10/09/2026',
+  '{forma}': 'Pix',
+  '{saldo_fatura}': '',
+  '{credito_liberado}': '\n🔓 Seu crédito para abastecer a prazo está liberado novamente.',
+  '{em_aberto}': '📋 *Já lançado para a próxima fatura:*\n• 04/09 — R$ 33,34\n• 07/09 — R$ 86,37\n' +
+                 'Total até agora: *R$ 119,71*\n📅 Fechamento em 01/10 · vencimento em *10/10/2026*',
 };
 
 // 13/10/2026 (Florestal): alguem colou a PREVIA ("Como o cliente vê") dentro do campo Texto e as 44 cobranças
 // saíram, para todos os clientes, com o nome, o nº da fatura e o valor do EXEMPLO. Estes trechos só existem na prévia:
 // se aparecerem no texto salvo, é dado fixo no lugar da variável.
 const MSG_LITERAIS_EXEMPLO = ['CENTRO DE FORMAÇÃO DE CONDUTORES', '2.057,58', '10/09/2026', '02/09/2026',
-                              'vencida há 5 dias', 'venceu há 5 dias'];
+                              'vencida há 5 dias', 'venceu há 5 dias', 'fatura nº 3 quitada', '119,71'];
 function _msgLiteraisDeExemplo(texto) {
   const s = String(texto || '').toUpperCase();
   return MSG_LITERAIS_EXEMPLO.filter(l => s.includes(l.toUpperCase()));
@@ -96,18 +124,18 @@ async function msgAbrirEditor() {
         <div style="font-weight:700;color:#f97316">${m.rot}</div>
         <label style="display:flex;align-items:center;gap:6px;color:#8892a0;font-size:0.74rem;cursor:pointer">
           <input type="checkbox" id="msg-ativo-${i}" ${at.ativo === false ? '' : 'checked'} style="width:auto">
-          usar este texto</label>
+          ${m.rotAtivo || 'usar este texto'}</label>
       </div>
       <div style="color:#8892a0;font-size:0.76rem;margin:3px 0 10px">${m.desc}</div>
       ${m.email ? `<label style="color:#9aa;font-size:0.74rem">Assunto</label>
         <input id="msg-assunto-${i}" value="${_msgEsc(at.assunto || '')}" oninput="_msgPreview(${i})"
           style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#e8eef5;margin-bottom:8px">` : ''}
       <label style="color:#9aa;font-size:0.74rem">Texto</label>
-      <textarea id="msg-corpo-${i}" rows="${m.email ? 9 : 5}" oninput="_msgPreview(${i})"
+      <textarea id="msg-corpo-${i}" rows="${m.rows || (m.email ? 9 : 5)}" oninput="_msgPreview(${i})"
         style="width:100%;padding:9px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;
                color:#e8eef5;font-family:inherit;font-size:0.85rem;resize:vertical">${_msgEsc(at.corpo || '')}</textarea>
-      <div style="margin-top:6px">${MSG_VARS.map(v =>
-        `<span onclick="_msgInserir(${i},'${v[0]}')" title="${v[1]}"
+      <div style="margin-top:6px">${(m.vars || MSG_VARS).map(v =>
+        `<span onclick="_msgInserir(${i},'${v[0]}')" title="${_msgEsc(v[1])}"
           style="display:inline-block;background:#1b2130;border:1px solid #2f3446;border-radius:5px;
                  padding:2px 7px;margin:2px 3px 2px 0;font-size:0.72rem;color:#9fb0c4;cursor:pointer">${v[0]}</span>`).join('')}</div>
       <div style="color:#6b7688;font-size:0.72rem;margin-top:8px">Como o cliente vê:</div>
