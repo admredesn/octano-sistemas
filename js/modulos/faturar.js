@@ -667,8 +667,9 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     if (semItens.length) throw new Error(`Não achei os itens de ${semItens.length} cupom(ns): ${semItens.map(t => t.numero_nfe || String(t.chave_nfe).slice(25, 34)).join(", ")}. A NF-e não foi emitida (sairia com valor menor que a fatura).`);
     if (!emp) throw new Error("Empresa não encontrada.");
     if (!emp.cert_path) throw new Error("Certificado não configurado (tela Empresa).");
+    // CPF ou CNPJ (12/11/2026, fatura 176 do Eros Agnes: a tela só aceitava CNPJ; o servidor já emitia com CPF — NF-e 790)
     const docDest = (cli.documento || "").replace(/\D/g, "");
-    if (docDest.length !== 14) throw new Error("Consolidação exige cliente PJ (CNPJ). Este cliente não tem CNPJ.");
+    if (docDest.length !== 14 && docDest.length !== 11) throw new Error("Cliente sem CPF/CNPJ válido no cadastro.");
     const senha = (typeof getCertSenha === "function") ? getCertSenha() : null;
     if (!senha) throw new Error("Senha do certificado não encontrada (tela Empresa).");
 
@@ -746,9 +747,15 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const descL = (fatura && Number(fatura.desconto) > 0) ? _fatDescontoPorLinha(linhas, fatura) : linhas.map(() => 0);
     // agrupa por produto + CST + preço cobrado (como o TecnoX: S-10 a 6,96 e S-10 a 6,98 em linhas separadas)
     const _cst = c => String(c || "").replace(/^0(?=\d\d$)/, "");
+    // Contribuinte de ICMS? Se o cliente tem IE, indIEDest=1 + IE; senão 9. O que não é 61/60 vai sem destaque: CST 90
+    // para contribuinte (como o TecnoX); para NÃO contribuinte a SEFAZ recusa o 90 (rejeição 508, fatura 176 do Eros
+    // Agnes, 01/11) -> CST 41, não tributada (Ronan, 12/11/2026). Mesma regra em sefaz/nfe_fatura.py.
+    const cliIE = (cli.ie || "").replace(/\D/g, "");
+    const contribIE = !!cliIE && cliIE !== "0" && !/isent/i.test(cli.ie || "");
+    const cstOutros = (contribIE || emp.regime_tributario === "simples") ? "90" : "41";
     const grupos = new Map();
     linhas.forEach((l, k) => {
-      const cst = ["61", "60"].includes(_cst(l.f.cst_icms)) ? _cst(l.f.cst_icms) : "90";
+      const cst = ["61", "60"].includes(_cst(l.f.cst_icms)) ? _cst(l.f.cst_icms) : cstOutros;
       const preco = Math.round(l.total / l.qtd * 100) / 100;
       const ch = [l.cod, l.f.ncm, cst, preco.toFixed(2)].join("|");
       const g = grupos.get(ch) || { l, cst, q: 0, v: 0, d: 0 };
@@ -793,10 +800,6 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       municipio: emp.cidade || "", c_mun: emp.c_mun || "3123205", uf: emp.uf || "MG",
       cep: (emp.cep || "").replace(/\D/g, ""), crt: emp.regime_tributario === "simples" ? "1" : "3",
     };
-    // Contribuinte de ICMS? Se o cliente tem IE, indIEDest=1 + IE (senão a SEFAZ
-    // rejeita CST x Não Contribuinte — rejeição 508). Cliente de frota é contribuinte.
-    const cliIE = (cli.ie || "").replace(/\D/g, "");
-    const contribIE = !!cliIE && cliIE !== "0" && !/isent/i.test(cli.ie || "");
     const destinatario = {
       cnpj_cpf: docDest, documento: docDest, nome: cli.nome || cli.razao_social || "CLIENTE",
       logradouro: cli.endereco || "SEM ENDERECO", numero: cli.num_endereco || "S/N", bairro: cli.bairro || "CENTRO",
@@ -804,6 +807,8 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
       cep: (cli.cep || "").replace(/\D/g, ""),
       ie: contribIE ? cliIE : "", ind_ie: contribIE ? "1" : "9",
     };
+    // 225 (schema) na NF-e do Eros Agnes, 01/11: endereço do cadastro com 77 caracteres; o XSD aceita até 60
+    ["nome", "logradouro", "numero", "bairro", "municipio"].forEach(c => { destinatario[c] = String(destinatario[c] || "").trim().slice(0, 60); });
     // número da NF-e 55: por AMBIENTE e SÉRIE (a numeração de homologação não empurra a de produção); em produção
     // nunca abaixo do último do TecnoX (nfe_ultimo_numero). A data limita a busca: sem ela o oct_nfce (83 mil
     // cupons) estourava o tempo e a leitura voltava vazia — a NF-e saía de novo com o nº 1 (539).
