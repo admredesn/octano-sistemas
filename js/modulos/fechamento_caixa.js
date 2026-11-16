@@ -5151,6 +5151,35 @@ function fcModalVendedor(vs) {
     <td class="fc-td">${fcEsc(k)}</td><td class="fc-td fc-r">${fcMoney(val)}</td></tr>`).join('');
   fcModalNav('Demonstrativo por Vendedor', `<table class="fc-grid"><thead><tr><th>Vendedor</th><th>Total</th></tr></thead><tbody>${linhas}</tbody></table>`);
 }
+// ÁREA DO BALÃO (16/11/2026, Ronan: "quando abre uma aba dentro do fechamento de caixa ela abre muito alta, quero que ela
+// abra no máximo nesse intervalo" — o quadro Recebimentos + Vendas/Saídas + painel, abaixo do cabeçalho do caixa e ao lado da
+// árvore). Devolve o retângulo VISÍVEL dessa área na janela ({left, top, width, height} em px) ou null quando o detalhe do
+// caixa não está na tela (lista, outro módulo) ou a área visível é pequena demais — aí vale o CSS de sempre (8vh / 88vh).
+function _fcModalArea(rolar) {
+  const corpo = document.querySelector('.fc-corpo');
+  if (!corpo || !corpo.getBoundingClientRect) return null;
+  const M = 6;   // respiro dentro da área
+  const calc = () => {
+    const rc = corpo.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth, vh = window.innerHeight || document.documentElement.clientHeight;
+    let left = rc.left;
+    const tree = corpo.querySelector('.fc-tree');
+    if (tree) {   // ao lado da árvore (se ela estiver na lateral e sobrar largura — em tela estreita a árvore pode empilhar)
+      const rt = tree.getBoundingClientRect();
+      if (rt.width > 0 && rc.right - rt.right >= 400) left = rt.right;
+    }
+    return { l: Math.max(left, 0) + M, t: Math.max(rc.top, 0) + M, r: Math.min(rc.right, vw) - M, b: Math.min(rc.bottom, vh) - M, cheio: rc.height };
+  };
+  let a = calc();
+  // TELA BAIXA (monitor do posto): o quadro começa no meio da janela e sobra pouca altura visível. Em vez de voltar a abrir
+  // lá em cima, a página rola até o quadro encostar no topo da janela e o balão abre dentro dele.
+  if (rolar !== false && a.b - a.t < 360 && a.cheio > (a.b - a.t) + 40 && corpo.scrollIntoView) {
+    try { corpo.scrollIntoView({ block: 'start' }); } catch (e) { /* segue com o que der */ }
+    a = calc();
+  }
+  if (a.r - a.l < 360 || a.b - a.t < 300) return null;
+  return { left: Math.round(a.l), top: Math.round(a.t), width: Math.round(a.r - a.l), height: Math.round(a.b - a.t) };
+}
 function fcModal(titulo, html, opts) {
   window._fcModalVolta = false;   // editor de lançamento liga isto p/ voltar ao balão
   opts = opts || {};
@@ -5167,6 +5196,12 @@ function fcModal(titulo, html, opts) {
   // arrastável pela barra do título + redimensionável (canto inferior direito)
   if (typeof octArrastavel === 'function')
     octArrastavel(m.querySelector('.fc-modal-cx'), m.querySelector('.fc-modal-tit'));
+  // abre dentro da área das colunas do fechamento (16/11/2026): topo no topo da área, centrado nela, sem passar dela
+  const _ar = _fcModalArea(), _cx0 = m.querySelector('.fc-modal-cx');
+  if (_ar && _cx0) Object.assign(_cx0.style, {
+    top: _ar.top + 'px', left: (_ar.left + _ar.width / 2) + 'px',
+    width: Math.min(1020, _ar.width) + 'px', maxWidth: _ar.width + 'px', maxHeight: _ar.height + 'px',
+  });
   // trocou de caixa pelas setas da janela: ela fica onde o usuário tinha arrastado
   if (opts.nav && window._fcNavPos) {
     const cx = m.querySelector('.fc-modal-cx');
