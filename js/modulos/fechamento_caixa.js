@@ -5198,9 +5198,12 @@ function fcModal(titulo, html, opts) {
     octArrastavel(m.querySelector('.fc-modal-cx'), m.querySelector('.fc-modal-tit'));
   // abre dentro da área das colunas do fechamento (16/11/2026): topo no topo da área, centrado nela, sem passar dela
   const _ar = _fcModalArea(), _cx0 = m.querySelector('.fc-modal-cx');
+  // a janela de assunto (aberta pela árvore, opts.nav) já abre AMPLIADA (16/11/2026, Ronan: "quando a aba abrir, já abrir
+  // ampliado, sem precisar ficar ampliando manualmente" — com 1020 px a lista ganhava barra horizontal e os botões da linha
+  // ficavam cortados): largura toda da área. Formulário/detalhe (✎, ➕, 🗑, cupom) continua com até 1020 px.
   if (_ar && _cx0) Object.assign(_cx0.style, {
-    top: _ar.top + 'px', left: (_ar.left + _ar.width / 2) + 'px',
-    width: Math.min(1020, _ar.width) + 'px', maxWidth: _ar.width + 'px', maxHeight: _ar.height + 'px',
+    top: _ar.top + 'px', left: (_ar.left + _ar.width / 2) + 'px', boxSizing: 'border-box',
+    width: (opts.nav ? _ar.width : Math.min(1020, _ar.width)) + 'px', maxWidth: _ar.width + 'px', maxHeight: _ar.height + 'px',
   });
   // trocou de caixa pelas setas da janela: ela fica onde o usuário tinha arrastado
   if (opts.nav && window._fcNavPos) {
