@@ -684,10 +684,24 @@ async function fcCarregarDados() {
     if (!/dinheiro/.test(_ft)) {
       const _g = /pix/.test(_ft) ? (/cnpj/.test(_ft) ? 'pix_cnpj' : 'pix') : /frota/.test(_ft) ? 'frota' : /cheque/.test(_ft) ? 'cheque'
                : /cart|credito|debito/.test(_ft) ? 'cartao' : 'deposito';
-      // a soma na forma fica para depois dos lançamentos manuais: no caixa substituído pelo extrato, o título pago na
-      // maquininha já está no extrato (ver "TÍTULO PAGO NA MAQUININHA" abaixo)
-      (t._titFora = t._titFora || []).push({ g: _g, valor: Number(x.valor || 0),
-        dinheiro: Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0), x });
+      // TIRADO DO RECEBIDO (16/11/2026, Ronan — Florestal caixa 1228, Pix CNPJ com 2 faturas do Patrick de 107,95 + 107,94:
+      // "o sistema só deixa excluir se o recebimento da fatura for excluído, mas ele não pode gerar esse vínculo, até porque
+      // o título pode ter sido recebido de outra forma; tem que deixar excluir e gerar apenas a quebra de caixa para que aí
+      // sim possamos descobrir onde está o pagamento"). O ✖ da linha grava o overlay 'titulo:<id>' com `excluido`: o título
+      // CONTINUA baixado e em Títulos Recebidos (Vendas), mas deixa de somar na linha da forma — a diferença é a falta do
+      // caixa. ↩ devolve; ✎ trocando a forma (achou o pagamento) também devolve, já na forma certa.
+      const _ajT = _aj('titulo', x.id);
+      if (_ajT && _ajT.excluido) {
+        const _liqT = _fcTitLiq(x);
+        x._fora_caixa = _g;
+        t.titulos_fora = Math.round((Number(t.titulos_fora || 0) + _liqT) * 100) / 100;
+        (t.titulos_fora_lst = t.titulos_fora_lst || []).push({ g: _g, valor: Number(x.valor || 0), dinheiro: _liqT, x });
+      } else {
+        // a soma na forma fica para depois dos lançamentos manuais: no caixa substituído pelo extrato, o título pago na
+        // maquininha já está no extrato (ver "TÍTULO PAGO NA MAQUININHA" abaixo)
+        (t._titFora = t._titFora || []).push({ g: _g, valor: Number(x.valor || 0),
+          dinheiro: Number(x.valor || 0) + Number(x.juros || 0) - Number(x.desconto || 0), x });
+      }
     }
   });
   // LANÇAMENTOS MANUAIS (botão ➕ Incluir do balão): entram nas somas do lado
@@ -1107,6 +1121,9 @@ function fcDetalhe(turnoId) {
     // aparece depois em Vale Haver. Clique para lançar ou editar (forma, data do pagamento, conta).
     ['Haver crédito', -Number(d.haver_gerado || 0), { node: 'haver_credito' }],
     ...(Number(d.haver_sem_forma || 0) > 0.004 ? [['Haver crédito sem forma de pagamento', d.haver_sem_forma, { info: true, node: 'haver_credito' }]] : []),
+    // TÍTULO TIRADO DO RECEBIDO (16/11/2026): baixado no Faturar, mas o pagamento não foi achado neste caixa — é ele a falta.
+    // (mov.): não soma; só mostra de onde vem a diferença. Clique = 💵 Títulos Recebidos (↩ devolve, ✎ corrige a forma).
+    ...(Number(d.titulos_fora || 0) > 0.004 ? [['Títulos sem pagamento localizado', d.titulos_fora, { info: true, node: 'titulos' }]] : []),
     // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
     // heranca do layout TecnoX e so' mostrava numero errado — os R$349,38 que
     // apareceram no turno 52 eram a MESMA falta de caixa lancada 6x como vale,
@@ -2059,12 +2076,26 @@ async function fcLancExcluir(marcados, alvosDiretos) {
     if (foco) alvos = [foco.dataset.fcref];
   }
   if (!alvos.length) { alert('Marque (☑) ou clique num lançamento antes de excluir.'); return; }
-  if (!confirm(`Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez (nota a prazo à mão: o título dela sai do Faturar junto); os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.`)) return;
+  // TÍTULO RECEBIDO (16/11/2026, Ronan: "tem que deixar excluir e gerar apenas a quebra de caixa"): o ✖ tira o título só do
+  // RECEBIDO da forma neste caixa (overlay `excluido`) — a nota/fatura continua baixada; desfazer a baixa é o 🗑 do 💵.
+  const _nTit = alvos.filter(k => k.indexOf('titulo:') === 0).length;
+  const _msgTit = 'Título recebido: sai só do recebido desta forma neste caixa e o valor vira FALTA do caixa. A nota/fatura continua baixada (para desfazer a baixa, use o 🗑 em Títulos Recebidos). Dá para devolver no ↩.';
+  if (!confirm(_nTit === alvos.length
+    ? `Tirar ${alvos.length} título(s) recebido(s) deste recebido?\n${_msgTit}`
+    : `Excluir ${alvos.length} lançamento(s) do fechamento?\nManual apaga de vez (nota a prazo à mão: o título dela sai do Faturar junto); os demais (inclusive cupom transmitido) ficam como excluídos — o documento fiscal continua existindo e dá pra desfazer no ✎.` + (_nTit ? '\n' + _msgTit : ''))) return;
+  let _quemTit = null, _nTitFeitos = 0;
   for (const k of alvos) {
     const i = k.indexOf(':'); const refTipo = k.slice(0, i); const refId = k.slice(i + 1);
-    if (refTipo === 'titulo') {   // (10/11/2026) o overlay "excluído" não tira título do caixa — só o 🗑 do recebimento
-      alert('Título recebido não sai por aqui: use o 🗑 da linha (exclui o recebimento e a nota/fatura volta para em aberto).');
-      continue;
+    let _histTit = null;
+    if (refTipo === 'titulo') {
+      // em DINHEIRO não há linha de forma para tirar: o título já está no esperado da gaveta (a falta aparece lá)
+      const tx = ((((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {}).titulos_lst || []).find(x => String(x.id) === String(refId));
+      if (tx && /dinheiro/i.test(String(tx.forma || ''))) {
+        alert('Título recebido em DINHEIRO não sai por aqui: ele já conta no esperado da gaveta — se o dinheiro não entrou, a falta aparece na conferência do dinheiro.');
+        continue;
+      }
+      if (_quemTit == null) _quemTit = (await _fcAutor()) || 'retaguarda';
+      _histTit = { em: new Date().toISOString(), por: _quemTit, acao: 'tirou' };
     }
     try {
       if (refTipo === 'manual') {
@@ -2089,16 +2120,42 @@ async function fcLancExcluir(marcados, alvosDiretos) {
         delete window._fcConf[k];
       } else {
         const cur = window._fcConf[k] = window._fcConf[k] || {};
-        cur.ajuste = Object.assign({}, cur.ajuste || {}, { excluido: true });
-        await sb.from('oct_fc_lancamentos').upsert({
+        const ajNovo = Object.assign({}, cur.ajuste || {}, { excluido: true });
+        if (_histTit) ajNovo.fora_hist = (ajNovo.fora_hist || []).concat([_histTit]);
+        const uX = await sb.from('oct_fc_lancamentos').upsert({
           empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
-          ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido, ajuste: cur.ajuste,
+          ref_tipo: refTipo, ref_id: refId, conferido: !!cur.conferido, ajuste: ajNovo,
         }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+        if (uX && uX.error) throw new Error(uX.error.message || 'não gravou');   // sem isto a tela dizia "excluído" sem ter gravado
+        cur.ajuste = ajNovo;
+        if (_histTit) _nTitFeitos++;
       }
     } catch (e) { alert('Erro ao excluir: ' + (e.message || e)); return; }
   }
   window._fcSel.clear();
-  _fcToast('✔ Lançamento(s) excluído(s)');
+  _fcToast(_nTitFeitos && _nTitFeitos === alvos.length ? '✔ Título(s) tirado(s) do recebido — o valor entra como falta do caixa' : '✔ Lançamento(s) excluído(s)');
+  await _fcRecarregarNode();
+}
+
+// ↩ DEVOLVE o título tirado do recebido (16/11/2026): limpa o `excluido` do overlay 'titulo:<id>' — ele volta a somar na
+// linha da forma. A trilha (quem tirou / quem devolveu) fica em ajuste.fora_hist.
+async function fcTitVoltarCaixa(id) {
+  if (!podeOuAvisa('fcaixa.lanc_excluir')) return;
+  if (_fcTravado()) return;
+  const k = 'titulo:' + id;
+  window._fcConf = window._fcConf || {};
+  const cur = window._fcConf[k] = window._fcConf[k] || {};
+  const aj = Object.assign({}, cur.ajuste || {});
+  if (!aj.excluido) { await _fcRecarregarNode(); return; }
+  delete aj.excluido;
+  aj.fora_hist = (aj.fora_hist || []).concat([{ em: new Date().toISOString(), por: (await _fcAutor()) || 'retaguarda', acao: 'voltou' }]);
+  const u = await sb.from('oct_fc_lancamentos').upsert({
+    empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
+    ref_tipo: 'titulo', ref_id: String(id), conferido: !!cur.conferido, ajuste: aj,
+  }, { onConflict: 'empresa_id,turno_id,ref_tipo,ref_id' });
+  if (u && u.error) { alert('Não consegui devolver o título ao recebido: ' + u.error.message); return; }
+  cur.ajuste = aj;
+  _fcToast('✔ Título voltou a contar no recebido da forma');
   await _fcRecarregarNode();
 }
 
@@ -3360,10 +3417,11 @@ async function fcNodeDetalhe(tipo) {
           <td class="fc-td fc-r"${tLiq}>${fcMoney(vLiq)}</td>`;
       // CONFERIR O TÍTULO (10/11/2026, Ronan — Cartão Frota do caixa 1230: "quando o recebimento é de título recebido ele não me
       // deixa conferir (deixar laranja)"): a linha do título entra na mesma régua das outras — ☑ marca, Espaço/F9/F10 conferem
-      // (laranja), gravado em oct_fc_lancamentos com ref_tipo 'titulo' e ref_id = id do recebimento. Ações da linha: só o 🗑 do
-      // recebimento (o mesmo do balão 💵); ✎/✖ genéricos não valem para título (fcLancEditar/fcLancExcluir recusam).
+      // (laranja), gravado em oct_fc_lancamentos com ref_tipo 'titulo' e ref_id = id do recebimento. Ações da linha (16/11/2026):
+      // ✎ do recebimento e ✖ = TIRA DO RECEBIDO desta forma (vira falta do caixa; a nota/fatura continua baixada). Desfazer a
+      // baixa (🗑, a nota/fatura volta para em aberto) é outra coisa e fica só no balão 💵 Títulos Recebidos.
       const rowTit = (!f.haver && x.id)
-        ? _fcRow('titulo', String(x.id), tdsTit, null, `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button><button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>`)
+        ? _fcRow('titulo', String(x.id), tdsTit, null, `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button><button class="fc-btn mini" title="Tirar deste recebido: o valor vira falta do caixa e a nota/fatura continua baixada" style="color:#f08080" onclick="event.stopPropagation();fcLancExcluirRef('titulo','${fcEsc(String(x.id))}')">✖</button>`)
         : `<tr><td class="fc-td"></td>${tdsTit}<td class="fc-td" style="width:84px;white-space:nowrap">${btnH}</td></tr>`;
       entradas.push({ val: vLiq, hora: String(x.data_recebimento || '9999'), oficial: 1, rows: [rowTit] });
     });
@@ -3401,6 +3459,26 @@ async function fcNodeDetalhe(tipo) {
             entradas.flatMap(e => e.rows),
             `<tr><td class="fc-td" colspan="7"><b>Total</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totalLista)}</b></td></tr>`)
       : '<p style="padding:6px 8px;color:#777">Nenhum lançamento nesta forma neste caixa.</p>');
+
+    // TÍTULOS TIRADOS DESTE RECEBIDO (16/11/2026): fora da lista e das somas; ficam à vista, com o ↩ para devolver
+    const _titsForaCx = (d0.titulos_fora_lst || []).filter(f => grupos.includes(f.g));
+    if (_titsForaCx.length) {
+      const totFora = _titsForaCx.reduce((sm, f) => sm + Number(f.dinheiro || 0), 0);
+      secoes.push(stit(`✖ Títulos tirados deste recebido (${_titsForaCx.length}) — não somam aqui; o valor é falta do caixa até achar o pagamento`));
+      secoes.push(tab(['', 'Data', 'Descrição', '', '', 'Cliente', 'Forma', 'Valor', ''],
+        _titsForaCx.map(f => {
+          const x = f.x || {}, idT = fcEsc(String(x.id));
+          return `<tr data-fctitfora="${idT}" style="opacity:.8"><td class="fc-td"></td>
+          <td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
+          <td class="fc-td">📄 Título recebido <span style="color:#f59e0b;font-size:0.72rem">continua baixado no Faturar</span></td>
+          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
+          <td class="fc-td">${fcEsc(x.cliente_nome || '') || '—'}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
+          <td class="fc-td fc-r" style="text-decoration:line-through;color:#8aa">${fcMoney(f.dinheiro)}</td>
+          <td class="fc-td" style="width:84px;white-space:nowrap"><button class="fc-btn mini" title="Devolver: volta a somar nesta forma" onclick="event.stopPropagation();fcTitVoltarCaixa('${idT}')">↩</button><button class="fc-btn mini" title="Achou o pagamento? Corrija a forma: o título volta ao caixa na forma certa" onclick="event.stopPropagation();fcTitEditarAbrir('${idT}')">✎</button></td></tr>`;
+        }),
+        `<tr><td class="fc-td" colspan="7"><b>Fora do recebido</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totFora)}</b></td></tr>`));
+    }
 
     // Σ TOTAIS POR FORMA — nó inteiro (fila + cupons + manuais), sem o filtro
     {
@@ -3860,11 +3938,11 @@ function fcNodeMov(tipo) {
     const linhas = ts.map(x => {
       const tds = `<td class="fc-td">${_fcData(x.data_recebimento)}</td>
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
-      <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}</td>
+      <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}${x._fora_caixa ? ' <span style="color:#f59e0b;font-size:0.72rem" title="Tirado do recebido desta forma neste caixa (✖): o título continua baixado e o valor entra como falta até achar o pagamento. ✎ corrige a forma; ↩ devolve.">✖ fora do recebido — falta do caixa</span>' : ''}</td>
       <td class="fc-td fc-r" style="color:#8aa">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
       <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>`;
-      const lixo = x.id ? `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button><button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>` : '';
+      const lixo = x.id ? `<button class="fc-btn mini" title="Alterar o recebimento (forma, conta do Pix, data, juros/desconto)" onclick="event.stopPropagation();fcTitEditarAbrir('${fcEsc(String(x.id))}')">✎</button>${x._fora_caixa ? `<button class="fc-btn mini" title="Devolver ao recebido da forma (desfaz o ✖)" onclick="event.stopPropagation();fcTitVoltarCaixa('${fcEsc(String(x.id))}')">↩</button>` : ''}<button class="fc-btn mini" title="Excluir este recebimento (o título/fatura volta para em aberto)" style="color:#f87171" onclick="event.stopPropagation();fcTitExcluirAbrir('${fcEsc(String(x.id))}')">🗑</button>` : '';
       // conferência da linha (10/11/2026): a mesma do balão da forma — ☑ marca, Espaço/F9/F10 conferem (laranja), ref_tipo 'titulo'
       return x.id ? _fcRow('titulo', String(x.id), tds, null, lixo) : `<tr><td class="fc-td"></td>${tds}<td class="fc-td">${lixo}</td></tr>`;
     });
@@ -3882,6 +3960,7 @@ function fcNodeMov(tipo) {
          <table class="fc-grid"><thead><tr><th></th><th>Data</th><th>Cliente</th><th>Forma</th><th title="Valor que baixou do título no Faturar">Título</th><th>Juros/Desc.</th><th title="O que o cliente pagou: título + juros − desconto">Recebido</th><th></th></tr></thead>
          <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="4"><b>Total</b></td><td class="fc-td fc-r" style="color:#8aa">${fcMoney(totTit)}</td><td class="fc-td fc-r">${(totJ || totD) ? '+' + fcMoney(totJ) + ' / -' + fcMoney(totD) : '—'}</td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>
          <p style="padding:6px 10px;color:#777;font-size:0.74rem">🗑 exclui um recebimento lançado por engano: a nota/fatura volta para em aberto (motivo obrigatório).</p>
+         <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">Título baixado, mas o pagamento não está na forma? No balão da forma (Pix CNPJ, Cartão, Frota…) o <b>✖</b> da linha tira só do recebido: vira falta do caixa e a nota/fatura continua baixada. Achou o pagamento: <b>✎</b> corrige a forma. <b>↩</b> devolve.</p>
          <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">Recebido = título + juros − desconto: é o que entrou no caixa e o que soma em Títulos Recebidos e na linha da forma.</p>
          <p style="padding:0 10px 6px;color:#777;font-size:0.74rem">☑ marca · <b>Espaço</b> confere a linha (fica laranja) · F9 confere todas · F10 desconfere.</p>`
       : `<p style="padding:16px 10px 4px;color:#777">Nenhum título recebido neste caixa.</p>${btnBuscar}`);
@@ -4414,6 +4493,7 @@ async function fcTitEditarAbrir(id) {
       ${campo('Valor do título (baixa)', '<b>' + fcMoney(r.valor) + '</b> <span style="color:#667;font-size:0.72rem">não muda aqui — baixa errada: 🗑 e receber de novo</span>')}
       ${campo('Origem', fcEsc(r.origem || '—') + (r.autor ? ' · ' + fcEsc(r.autor) : ''))}
       ${r.recebimento_id ? campo('Maquininha', '<span style="color:#f0b45c">ligado a uma transação da maquininha — a forma é a da transação</span>') : ''}
+      ${((((window._fcConf || {})['titulo:' + r.id]) || {}).ajuste || {}).excluido ? campo('Neste caixa', '<span style="color:#f59e0b">fora do recebido (✖) — trocando a forma, o título volta a contar na forma nova</span>') : ''}
     </div>
     <label style="display:block;color:#9aa;font-size:0.75rem">Forma de pagamento${formaTravada ? ' (travada pela maquininha)' : ''}</label>
     <select id="fcte-forma" ${inp} onchange="_fcTitEdForma()" ${formaTravada ? 'disabled' : ''}>
@@ -4535,6 +4615,11 @@ async function fcTitEditarOk(id) {
     const cur = window._fcConf[k] = window._fcConf[k] || {};
     const hist = ((cur.ajuste || {}).editado || []).concat([{ em: new Date().toISOString(), por: quem, motivo, de, para }]);
     cur.ajuste = Object.assign({}, cur.ajuste || {}, { editado: hist });
+    // ACHOU O PAGAMENTO (16/11/2026): título tirado do recebido (✖) cuja FORMA foi corrigida volta a contar, na forma nova
+    if (cur.ajuste.excluido && para.forma !== de.forma) {
+      delete cur.ajuste.excluido;
+      cur.ajuste.fora_hist = (cur.ajuste.fora_hist || []).concat([{ em: new Date().toISOString(), por: quem, acao: 'voltou', motivo: 'forma corrigida' }]);
+    }
     await sb.from('oct_fc_lancamentos').upsert({
       empresa_id: window._fcEmpresaId, turno_id: window._fcTurnoAtual,
       ref_tipo: 'titulo', ref_id: String(r.id), conferido: !!cur.conferido, ajuste: cur.ajuste,
