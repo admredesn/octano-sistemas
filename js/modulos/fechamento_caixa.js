@@ -3895,6 +3895,10 @@ async function fcDifLancar(dif) {
       : dif < 0 && (cxFechado || ja) ? String.fromCharCode(10, 10) + '📄 Gerou título a faturar no nome dele (Faturar › Notas/Títulos em Aberto).'
       : dif < 0 ? String.fromCharCode(10, 10) + '📄 O título vai para o Faturar (no nome dele) quando o caixa for fechado (✅ Fechar caixa).'
                : String.fromCharCode(10, 10) + 'Sobra: registrada como responsabilidade, sem título a receber.'));
+  // quebra lancada: volta para a Diferenca de Caixa (v181) — 16/11/2026, Ronan: "após lançado ele fica parado na tela [do
+  // formulário], gostaria que após o lançamento da quebra ele fosse automaticamente para a tela [Diferença de Caixa]". O
+  // formulário "Lançar diferença para o responsável" ficava aberto por cima; agora o balão reabre já com o responsável.
+  await fcNode('diferenca');
 }
 // EXCLUIR A FALTA/SOBRA LANÇADA (07/11/2026, Ronan: "não tem opção de excluir a falta de caixa" — Tijuco 193, falta de 10,00
 // lançada para o Michael e o caixa agora com 8,00): o lançamento do responsável sai e o título dele, se livre, sai do Faturar.
