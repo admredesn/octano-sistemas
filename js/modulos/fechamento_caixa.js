@@ -2182,16 +2182,30 @@ async function _fcContaPadraoPix(grupo) {
   } catch (e) { return null; }
 }
 // campo "Em qual conta o Pix caiu?" (Incluir e ✎ Editar). marcada = conta já escolhida no lançamento
+// SÓ PIX CNPJ, SÓ BANCO (16/11/2026, Ronan — ✎ do cupom 4948 em Pix, com "PagBank (maquininha)" marcada: "todos os pix CNPJ
+// caem na conta sicoob, até porque pix na maquininha já é baixado com os cartões, não coloque essa opção"). O Pix da
+// maquininha (grupo 'pix') não pergunta conta: ele é baixado junto com os cartões. No Pix CNPJ a conta da maquininha não é
+// opção. Vem marcada: a conta já escolhida › a da forma Pix CNPJ › o Sicoob › a única conta de banco do posto.
+function _fcContaEhMaquininha(c) {
+  return String((c && c.tipo) || '') === 'pagbank' || /maquininha/i.test(String((c && c.nome) || ''));
+}
 async function _fcContaPixHtml(id, grupo, marcada) {
-  // fora: o caixa/cofre e as contas das operadoras de cartão frota ("CARTÃO TICKETLOG - …"): Pix não cai nelas
+  if (grupo !== 'pix_cnpj') { window._fcPixContas = []; return ''; }
+  // fora: o caixa/cofre, as contas das operadoras de cartão frota ("CARTÃO TICKETLOG - …") e a maquininha: Pix CNPJ não cai nelas
   const contas = (await _fcContasDoPosto())
-    .filter(c => String(c.tipo || '') !== 'caixa' && !/^cart[aã]o\s/i.test(String(c.nome || '').trim()));
+    .filter(c => String(c.tipo || '') !== 'caixa' && !/^cart[aã]o\s/i.test(String(c.nome || '').trim()) && !_fcContaEhMaquininha(c));
   window._fcPixContas = contas;
   if (!contas.length) {
     return '<p style="color:#f0b45c;font-size:0.72rem;margin-top:8px">Este posto ainda não tem contas cadastradas em '
       + 'Conciliação — o Pix fica registrado só aqui no fechamento.</p>';
   }
-  const sel = marcada != null ? Number(marcada) : await _fcContaPadraoPix(grupo);
+  const tem = v => v != null && contas.some(c => Number(c.id) === Number(v));
+  let sel = tem(marcada) ? Number(marcada) : null;
+  if (sel == null) { const p = await _fcContaPadraoPix('pix_cnpj'); if (tem(p)) sel = Number(p); }
+  if (sel == null) {
+    const sic = contas.filter(c => String(c.tipo || '') === 'sicoob');
+    if (sic.length === 1) sel = Number(sic[0].id); else if (contas.length === 1) sel = Number(contas[0].id);
+  }
   return `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Em qual conta o Pix caiu? *</label>
     <select id="${id}" class="fc-inp2" style="width:100%">
       ${sel == null ? '<option value="">— escolha a conta —</option>' : ''}
@@ -2667,8 +2681,10 @@ async function fcLancEditar(refTipo, refId) {
   // Pix: em qual conta caiu (23/10/2026) — no manual de Pix/Pix CNPJ e em qualquer lançamento com forma Pix
   const grupoPix = ['pix', 'pix_cnpj'].includes(base.secao) ? base.secao
     : (typeof _fcGrupoNome === 'function' ? _fcGrupoNome(String(v('forma_nome') || ''), '') : null);
-  const contaPixEd = (refTipo !== 'np' && (grupoPix === 'pix' || grupoPix === 'pix_cnpj'))
-    ? await _fcContaPixHtml('fcl-pix-conta', grupoPix, aj.conta_id != null ? aj.conta_id : null) : '';
+  // (16/11/2026) só o Pix CNPJ pergunta a conta; o campo fica pronto e aparece quando a forma (a mantida ou a escolhida) é Pix CNPJ
+  window._fcLancGrupoBase = grupoPix || '';
+  const contaPixEd = refTipo !== 'np'
+    ? `<div id="fcl-pix-conta-box" style="display:${grupoPix === 'pix_cnpj' ? 'block' : 'none'}">${await _fcContaPixHtml('fcl-pix-conta', 'pix_cnpj', (grupoPix === 'pix_cnpj' && aj.conta_id != null) ? aj.conta_id : null)}</div>` : '';
   // CUPOM QUE VIRA NOTA A PRAZO (03/11/2026): escolher "Nota a prazo" abre o cliente — vem do cupom (cadastro pelo id ou
   // pelo CPF/CNPJ) e pode ser trocado pela busca, como no ➕ Incluir. É ele que leva o título ao Faturar.
   window._fcNpPodeCriar = refTipo === 'venda' && !aj.titulo_id && _fcGrupoNome(String(v('forma_nome') || ''), '') !== 'prazo';
@@ -2694,7 +2710,7 @@ async function fcLancEditar(refTipo, refId) {
            <label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Cliente</label>
            <input id="fcl-cliente" value="${fcEsc(v('cliente_nome') || (base.rotulo || '').replace('Nota a prazo — ', ''))}" class="fc-inp2 lg" style="width:100%">`
         : `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:8px">Forma de pagamento</label>
-           <select id="fcl-forma" class="fc-inp2" style="width:200px" onchange="_fcNpCliMostrar(this.value)">
+           <select id="fcl-forma" class="fc-inp2" style="width:200px" onchange="_fcNpCliMostrar(this.value);_fcPixContaMostrar(this.value)">
              <option value="">(manter: ${fcEsc(v('forma_nome') || '—')})</option>
              ${formas.map(f => `<option value="${f}">${f}</option>`).join('')}
            </select>
@@ -2745,7 +2761,8 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       // edição parecia não salvar: ia parar em obs)
       if (descEl && descEl.value.trim()) ajuste.descricao = descEl.value.trim();
       ajuste.manual = true;
-      const cpM = _fcContaPixEscolhida('fcl-pix-conta');
+      _fcPixContaLimpar(ajuste, forma);
+      const cpM = _fcPixContaDoForm();
       if (cpM) { ajuste.conta_id = cpM.id; ajuste.conta_nome = cpM.nome; }
       // nota a prazo à mão: o valor novo vai também para o título no Faturar (só se ainda em aberto)
       const antes = (window._fcConf[k] || {}).ajuste || {};
@@ -2780,7 +2797,8 @@ async function fcLancSalvar(refTipo, refId, desfazer) {
       // bandeira nem aparecem no formulário dela.
       const cliEl = document.getElementById('fcl-cliente');
       if (refTipo === 'np' && cliEl && cliEl.value.trim()) ajuste.cliente_nome = cliEl.value.trim();
-      const cpE = _fcContaPixEscolhida('fcl-pix-conta');   // Pix: em qual conta caiu (23/10/2026)
+      _fcPixContaLimpar(ajuste, forma);
+      const cpE = _fcPixContaDoForm();   // Pix CNPJ: em qual conta caiu (23/10/2026; 16/11/2026: só Pix CNPJ, só banco)
       if (cpE) { ajuste.conta_id = cpE.id; ajuste.conta_nome = cpE.nome; }
       // CUPOM TROCADO PARA NOTA A PRAZO VIRA TÍTULO (03/11/2026, Ronan: "pode mudar o F.Caixa para criar o título"; NFC-e
       // 1009 da Sônia saiu como dinheiro e a troca da forma arrumou só o caixa — o título nunca chegou ao Faturar).
@@ -4481,7 +4499,8 @@ async function fcTitEditarAbrir(id) {
   if (formaAtual && !formas.includes(formaAtual)) formas.unshift(formaAtual);
   const formaTravada = !!r.recebimento_id;
   const g0 = _fcTitGrupoForma(formaAtual);
-  const contaHtml = await _fcContaPixHtml('fcte-conta', g0 === 'pix_cnpj' ? 'pix_cnpj' : 'pix', r.conta_id != null ? r.conta_id : null);
+  // (16/11/2026) só o Pix CNPJ pergunta a conta (banco); título em Pix da maquininha vai com os cartões
+  const contaHtml = await _fcContaPixHtml('fcte-conta', 'pix_cnpj', (g0 === 'pix_cnpj' && r.conta_id != null) ? r.conta_id : null);
   const campo = (rot, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span style="color:#8aa">${rot}</span><span style="color:#e5e7eb;text-align:right">${v}</span></div>`;
   const doc = d.nota ? 'nota ' + fcEsc(d.nota.numero_nfe || '') + (d.nota.status === 'pago' ? ' (quitada)' : ' (saldo ' + fcMoney(d.nota.valor) + ')')
     : d.fat ? 'fatura ' + fcEsc(d.fat.numero || '') + ' (' + fcEsc(d.fat.status || '') + ')' : '—';
@@ -4499,7 +4518,7 @@ async function fcTitEditarAbrir(id) {
     <select id="fcte-forma" ${inp} onchange="_fcTitEdForma()" ${formaTravada ? 'disabled' : ''}>
       ${formas.map(f => `<option value="${fcEsc(f)}" ${f === formaAtual ? 'selected' : ''}>${fcEsc(f)}</option>`).join('')}
     </select>
-    <div id="fcte-conta-box" style="display:${(g0 === 'pix' || g0 === 'pix_cnpj') ? 'block' : 'none'}">${contaHtml}</div>
+    <div id="fcte-conta-box" style="display:${g0 === 'pix_cnpj' ? 'block' : 'none'}">${contaHtml}</div>
     <div style="display:flex;gap:10px;margin-top:8px">
       <div style="flex:1"><label style="display:block;color:#9aa;font-size:0.75rem">Data do recebimento</label>
         <input type="date" id="fcte-data" value="${fcEsc(String(r.data_recebimento || '').slice(0, 10))}" max="${_fcTitEdHoje()}" ${inp}></div>
@@ -4520,7 +4539,7 @@ async function fcTitEditarAbrir(id) {
 function _fcTitEdForma() {
   const f = document.getElementById('fcte-forma'); const g = _fcTitGrupoForma(f && f.value);
   const box = document.getElementById('fcte-conta-box');
-  if (box) box.style.display = (g === 'pix' || g === 'pix_cnpj') ? 'block' : 'none';
+  if (box) box.style.display = g === 'pix_cnpj' ? 'block' : 'none';
   _fcTitEdRecalc();
 }
 function _fcTitEdRecalc() {
@@ -4553,12 +4572,12 @@ async function fcTitEditarOk(id) {
   if (desconto > Number(r.valor || 0) + 0.005) return erro('O desconto não pode passar do valor do título.');
   const g = _fcTitGrupoForma(forma), gAntes = _fcTitGrupoForma(r.forma);
   let contaId = r.conta_id != null ? Number(r.conta_id) : null;
-  if (g === 'pix' || g === 'pix_cnpj') {
+  if (g === 'pix_cnpj') {
     const c = _fcContaPixEscolhida('fcte-conta');
     if (c === false) return erro('Escolha em qual conta o Pix caiu.');
     if (c) contaId = c.id;
-  } else if ((gAntes === 'pix' || gAntes === 'pix_cnpj') && contaId != null) {
-    contaId = null;   // deixou de ser Pix: a conta volta a ser a padrão da forma (livro)
+  } else if (contaId != null && (gAntes === 'pix_cnpj' || (gAntes === 'pix' && g !== 'pix'))) {
+    contaId = null;   // deixou de ser Pix CNPJ (ou de ser Pix): a conta volta a ser a padrão da forma (livro)
   }
   const liqAntes = _fcTitLiq(r), liqNovo = Math.round((Number(r.valor || 0) + juros - desconto) * 100) / 100;
   const de = { forma: String(r.forma || ''), data: String(r.data_recebimento || '').slice(0, 10), juros: Number(r.juros || 0), desconto: Number(r.desconto || 0), conta_id: r.conta_id != null ? Number(r.conta_id) : null };
@@ -5546,6 +5565,23 @@ async function _fcTituloDoManual(turnoId, a) {
   return data.id;
 }
 // CUPOM TROCADO PARA NOTA A PRAZO (03/11/2026): o ✎ da venda mostra o cliente quando a forma escolhida é a prazo
+// campo da conta do Pix no ✎ (16/11/2026): aparece só quando a forma — a escolhida ou, em "(manter)", a do lançamento — é Pix CNPJ
+function _fcPixContaMostrar(forma) {
+  const box = document.getElementById('fcl-pix-conta-box'); if (!box || !box.style) return;
+  const g = forma ? _fcGrupoNome(String(forma), '') : (window._fcLancGrupoBase || '');
+  box.style.display = g === 'pix_cnpj' ? 'block' : 'none';
+}
+// conta escolhida no ✎: null quando o campo está escondido (a forma não é Pix CNPJ) ou não existe
+function _fcPixContaDoForm() {
+  const box = document.getElementById('fcl-pix-conta-box');
+  if (box && box.style && box.style.display === 'none') return null;
+  return _fcContaPixEscolhida('fcl-pix-conta');
+}
+// a forma foi TROCADA para outra que não é Pix CNPJ: a conta escolhida antes não vale mais (Pix da maquininha vai com os cartões)
+function _fcPixContaLimpar(ajuste, formaNova) {
+  if (!formaNova || _fcGrupoNome(String(formaNova), '') === 'pix_cnpj') return;
+  delete ajuste.conta_id; delete ajuste.conta_nome;
+}
 function _fcNpCliMostrar(forma) {
   const el = document.getElementById('fcl-np-cli');
   if (el) el.style.display = window._fcNpPodeCriar && _fcGrupoNome(String(forma || ''), '') === 'prazo' ? 'block' : 'none';
