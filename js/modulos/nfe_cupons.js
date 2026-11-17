@@ -20,6 +20,8 @@ const _NCUP_FORMAS = { "01": "Dinheiro", "02": "Cheque", "03": "Cartão de créd
                        "05": "A prazo / crédito", "10": "Vale alimentação", "15": "Boleto", "17": "Pix", "99": "Outros" };
 const _NCUP_MAX_REFS = 500;   // NF-e: no máximo 500 NFref
 window._ncup = window._ncup || { sel: new Set() };
+window._ncup.formas = window._ncup.formas || new Set();   // filtros de várias escolhas (vazio = todos)
+window._ncup.prods = window._ncup.prods || new Set();
 
 function _ncupSefaz() { return (typeof SEFAZ_URL !== "undefined" && SEFAZ_URL) || "https://www.redesn.com.br"; }
 function _ncupEsc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -273,7 +275,7 @@ async function moduloNfeCupons() {
   st.eid = (typeof empresaAtiva === "function") ? empresaAtiva() : null;
   if (!st.eid) { conteudo.innerHTML = '<p style="color:#f44;padding:20px">Escolha o posto primeiro.</p>'; return; }
   if (typeof pode === "function" && !pode("nfe_saida.ver")) { conteudo.innerHTML = '<p style="color:#f87171;padding:20px">Sem permissão para NF-e de saída.</p>'; return; }
-  if (st.eidTela !== st.eid) { st.vendas = null; st.sel = new Set(); st.eidTela = st.eid; }
+  if (st.eidTela !== st.eid) { st.vendas = null; st.sel = new Set(); st.formas = new Set(); st.prods = new Set(); st.eidTela = st.eid; }
   const { data: emp } = await sb.from("oct_empresas").select("*").eq("id", st.eid).single();
   st.emp = emp || {};
   st.cfg = (typeof _fatNfeConfig === "function") ? await _fatNfeConfig(st.eid) : { ambiente: "homologacao", serie: 1, ultimo: 0 };
@@ -318,6 +320,19 @@ async function moduloNfeCupons() {
       .ncup-ajuste{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px}
       .ncup-ajuste label{display:block;font-size:0.72rem;color:#888;margin-bottom:3px}
       .ncup-ajuste input,.ncup-ajuste select{padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.82rem}
+      .ncup-multi{position:relative}
+      .ncup-multi-btn{display:block;min-width:160px;text-align:left;padding:7px 26px 7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative;font-family:inherit}
+      .ncup-multi-btn::after{content:"▾";position:absolute;right:9px;top:7px;color:#888}
+      .ncup-multi-btn.ativo{border-color:#2a4a6a;color:#93c5fd}
+      .ncup-multi-pnl{position:absolute;left:0;top:100%;margin-top:2px;min-width:100%;width:max-content;max-width:min(560px,90vw);box-sizing:border-box;background:#13151f;border:1px solid #2a4a6a;border-radius:7px;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:8px}
+      .ncup-multi-lista{max-height:320px;overflow:auto}
+      .ncup-filtros .ncup-multi-pnl label{display:flex;gap:8px;align-items:center;padding:4px 6px;margin:0;color:#ddd;font-size:0.82rem;cursor:pointer;border-radius:5px}
+      .ncup-filtros .ncup-multi-pnl label:hover{background:#16304a}
+      .ncup-filtros .ncup-multi-pnl label span{color:#778;margin-left:auto;padding-left:12px;font-variant-numeric:tabular-nums}
+      .ncup-filtros .ncup-multi-pnl input[type=checkbox]{padding:0;margin:0;width:auto;accent-color:#3b82f6}
+      .ncup-multi-acoes{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+      .ncup-multi-acoes button{padding:4px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#1a1d2e;color:#aaa;font-size:0.76rem;cursor:pointer}
+      .ncup-multi-acoes button:hover{color:#e0e0e0;border-color:#2a4a6a}
     </style>
     <div class="ns-janela">
       <div class="ns-titulo">
@@ -346,8 +361,8 @@ async function moduloNfeCupons() {
             <div><button class="ncup-btn" onclick="ncupBuscar()">🔍 Buscar</button></div>
           </div>
           <div class="ncup-filtros">
-            <div><label>Forma de pagamento</label><select id="ncup-forma" onchange="ncupFiltrar()"><option value="">Todas</option></select></div>
-            <div style="min-width:220px"><label>Produto</label><input id="ncup-prod" list="ncup-prod-lista" autocomplete="off" style="width:320px;box-sizing:border-box" placeholder="Todos — digite: diesel, s10, arla…" title="Digite parte do nome (diesel, s500, 7891344…): mostra os cupons que têm um produto com essas palavras. Esc limpa." value="${_ncupEsc(st.prod || "")}"><datalist id="ncup-prod-lista"></datalist></div>
+            <div class="ncup-multi"><label>Forma de pagamento</label><button type="button" id="ncup-forma-btn" class="ncup-multi-btn" style="width:200px" onclick="_ncupMultiAbrir('forma')">Todas</button><div id="ncup-forma-pnl" class="ncup-multi-pnl" style="display:none"></div></div>
+            <div class="ncup-multi"><label>Produto</label><button type="button" id="ncup-prod-btn" class="ncup-multi-btn" style="width:320px" onclick="_ncupMultiAbrir('prod')">Todos</button><div id="ncup-prod-pnl" class="ncup-multi-pnl" style="display:none"></div></div>
             <div><label>Valor (R$)</label><input id="ncup-valor" autocomplete="off" inputmode="decimal" style="width:170px" placeholder="50,09 · 50 · 40 a 60" title="50,09 = exatamente esse valor · 50 = de 50,00 a 50,99 · 40 a 60 = a faixa. Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.valor || "")}"></div>
             <div><label>Nº do cupom</label><input id="ncup-num" autocomplete="off" inputmode="numeric" style="width:170px" placeholder="16276 · 16270 a 16278" title="Um número, vários separados por vírgula ou espaço, ou uma faixa (16270 a 16278). Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.num || "")}"></div>
             <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label></div>
@@ -367,9 +382,12 @@ async function moduloNfeCupons() {
   cli.addEventListener("input", () => { st.cliSel = null; clearTimeout(st.sugT); st.sugT = setTimeout(_ncupSugerir, 250); });
   cli.addEventListener("keydown", _ncupSugTecla);
   cli.addEventListener("blur", () => setTimeout(() => { const b = document.getElementById("ncup-sug"); if (b) b.style.display = "none"; }, 200));
-  const prod = document.getElementById("ncup-prod");   // Enter fica com a lista de sugestões; Esc limpa
-  prod.addEventListener("input", () => { clearTimeout(st.valT); st.valT = setTimeout(ncupFiltrar, 200); });
-  prod.addEventListener("keydown", e => { if (e.key === "Escape") { prod.value = ""; ncupFiltrar(); } });
+  if (!window._ncupMultiDoc) {   // clique fora / Esc fecha a lista de várias escolhas
+    window._ncupMultiDoc = true;
+    document.addEventListener("mousedown", e => { if (!(e.target.closest && e.target.closest(".ncup-multi"))) _ncupMultiFechar(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") _ncupMultiFechar(); });
+  }
+  _ncupMultiRotulo("forma"); _ncupMultiRotulo("prod");
   ["ncup-valor", "ncup-num"].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener("input", () => { clearTimeout(st.valT); st.valT = setTimeout(ncupFiltrar, 200); });
@@ -550,25 +568,75 @@ async function _ncupJuntarTitulos(titulos, campos, doc) {
 
 function _ncupMontarFiltros() {
   const st = window._ncup;
-  const formas = new Set(), prods = new Set();
+  // opções com a quantidade de cupons do período que têm cada uma
+  const cf = new Map(), cp = new Map();
   (st.vendas || []).forEach(v => {
-    _ncupFormas(v).forEach(c => formas.add(c));
-    (Array.isArray(v.itens) ? v.itens : []).forEach(it => { if (it.desc) prods.add(String(it.desc)); });
+    new Set(_ncupFormas(v)).forEach(c => cf.set(c, (cf.get(c) || 0) + 1));
+    new Set((Array.isArray(v.itens) ? v.itens : []).map(it => String(it.desc || "")).filter(Boolean)).forEach(p => cp.set(p, (cp.get(p) || 0) + 1));
   });
-  const sf = document.getElementById("ncup-forma"), sp = document.getElementById("ncup-prod-lista");
-  if (sf) {
-    const atual = st.forma || "";
-    sf.innerHTML = '<option value="">Todas</option>' + Array.from(formas).sort()
-      .map(c => `<option value="${_ncupEsc(c)}"${c === atual ? " selected" : ""}>${_ncupEsc(c)}</option>`).join("");
-  }
-  // produto: campo de texto com sugestões (antes era <select>, que não pesquisa ao digitar)
-  if (sp) sp.innerHTML = Array.from(prods).sort().map(p => `<option value="${_ncupEsc(p)}"></option>`).join("");
+  const ord = (a, b) => a[0].localeCompare(b[0], "pt-BR");
+  st.opc = { forma: Array.from(cf).sort(ord), prod: Array.from(cp).sort(ord) };
+  st.formas = new Set(Array.from(st.formas).filter(x => cf.has(x)));   // nova busca: some o que não existe mais
+  st.prods = new Set(Array.from(st.prods).filter(x => cp.has(x)));
+  _ncupMultiRotulo("forma"); _ncupMultiRotulo("prod");
+  ["forma", "prod"].forEach(k => { const p = document.getElementById(`ncup-${k}-pnl`); if (p && p.style.display !== "none") _ncupMultiLista(k); });
 }
-// produto digitado: cada palavra tem que aparecer no nome de um mesmo item (sem acento, maiúsc./minúsc. tanto faz)
-function _ncupProdOk(v, txt) {
-  const pal = _ncupNorm(txt).split(" ").filter(Boolean);
-  if (!pal.length) return true;
-  return (Array.isArray(v.itens) ? v.itens : []).some(it => { const d = _ncupNorm(it.desc); return pal.every(p => d.includes(p)); });
+
+// FILTROS DE VÁRIAS ESCOLHAS (17/11/2026, Ronan: "em cada filtro tem que ter um checkbox para selecionar mais de um produto
+// e forma de pagamento"). Nada marcado = todos; marcado = cupom que tem QUALQUER um dos marcados. No produto, o campo de
+// cima pesquisa a lista ao digitar (palavras, sem acento) e Enter marca os que aparecem.
+const _NCUP_MULTI = { forma: { set: "formas", todos: "Todas", plural: "formas", busca: false },
+                      prod: { set: "prods", todos: "Todos", plural: "produtos", busca: true } };
+function _ncupMultiRotulo(k) {
+  const cfg = _NCUP_MULTI[k], a = Array.from(window._ncup[cfg.set]), b = document.getElementById(`ncup-${k}-btn`);
+  if (!b) return;
+  b.textContent = !a.length ? cfg.todos : a.length === 1 ? a[0] : `${a.length} ${cfg.plural}: ${a.join(" + ")}`;
+  b.title = a.length ? a.join("\n") : cfg.todos;
+  b.classList.toggle("ativo", a.length > 0);
+}
+function _ncupMultiFechar() {
+  Object.keys(_NCUP_MULTI).forEach(k => { const p = document.getElementById(`ncup-${k}-pnl`); if (p) p.style.display = "none"; });
+}
+function _ncupMultiAbrir(k) {
+  const p = document.getElementById(`ncup-${k}-pnl`);
+  if (!p) return;
+  const aberto = p.style.display !== "none";
+  _ncupMultiFechar();
+  if (aberto) return;
+  p.innerHTML = `${_NCUP_MULTI[k].busca ? `<input id="ncup-${k}-q" autocomplete="off" placeholder="digite: diesel, s10, arla… (Enter marca os que aparecem)" style="width:100%;box-sizing:border-box;margin-bottom:6px">` : ""}
+    <div class="ncup-multi-acoes"><button type="button" onclick="_ncupMultiTodos('${k}', true)">Marcar os que aparecem</button><button type="button" onclick="_ncupMultiTodos('${k}', false)">Limpar</button></div>
+    <div class="ncup-multi-lista" id="ncup-${k}-lista"></div>`;
+  p.style.display = "block";
+  _ncupMultiLista(k);
+  const q = document.getElementById(`ncup-${k}-q`);
+  if (q) {
+    q.addEventListener("input", () => _ncupMultiLista(k));
+    q.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); _ncupMultiTodos(k, true); } });
+    q.focus();
+  }
+}
+function _ncupMultiVisiveis(k) {
+  const pal = _ncupNorm((document.getElementById(`ncup-${k}-q`) || {}).value).split(" ").filter(Boolean);
+  return (((window._ncup.opc || {})[k]) || []).filter(([n]) => { const d = _ncupNorm(n); return pal.every(x => d.includes(x)); });
+}
+function _ncupMultiLista(k) {
+  const st = window._ncup, s = st[_NCUP_MULTI[k].set], el = document.getElementById(`ncup-${k}-lista`);
+  if (!el) return;
+  if (!((st.opc || {})[k] || []).length) { el.innerHTML = `<div style="color:#888;padding:6px;font-size:0.8rem">Busque os cupons do período primeiro.</div>`; return; }
+  const ops = _ncupMultiVisiveis(k);
+  el.innerHTML = ops.length
+    ? ops.map(([n, c], i) => `<label><input type="checkbox" data-i="${i}" ${s.has(n) ? "checked" : ""}>${_ncupEsc(n)}<span title="cupons do período com ${k === "prod" ? "este produto" : "esta forma"}">${c}</span></label>`).join("")
+    : `<div style="color:#888;padding:6px;font-size:0.8rem">Nenhum com esse nome.</div>`;
+  el.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
+    const n = ops[Number(cb.dataset.i)][0];
+    if (cb.checked) s.add(n); else s.delete(n);
+    _ncupMultiRotulo(k); ncupFiltrar();
+  }));
+}
+function _ncupMultiTodos(k, marcar) {
+  const s = window._ncup[_NCUP_MULTI[k].set];
+  if (marcar) _ncupMultiVisiveis(k).forEach(([n]) => s.add(n)); else s.clear();
+  _ncupMultiLista(k); _ncupMultiRotulo(k); ncupFiltrar();
 }
 
 // cupom coberto por NF-e: de produção sempre; de homologação só quando o posto ainda emite NF-e em homologação
@@ -636,15 +704,13 @@ async function _ncupBuscaTecla(e) {
 // semBusca: a busca por valor / nº não conta (o cupom marcado continua marcado enquanto se procura o próximo)
 function _ncupVisiveis(semBusca) {
   const st = window._ncup;
-  st.forma = (document.getElementById("ncup-forma") || {}).value || "";
-  st.prod = (document.getElementById("ncup-prod") || {}).value || "";
   st.mostrarJa = !!(document.getElementById("ncup-ja") || {}).checked;
   st.valor = (document.getElementById("ncup-valor") || {}).value || "";
   st.num = (document.getElementById("ncup-num") || {}).value || "";
   const fx = semBusca ? null : _ncupFaixa(st.valor), fn = semBusca ? null : _ncupNumeros(st.num);
   return (st.vendas || []).filter(v => {
-    if (st.forma && !_ncupFormas(v).includes(st.forma)) return false;
-    if (!semBusca && st.prod && !_ncupProdOk(v, st.prod)) return false;
+    if (st.formas.size && !_ncupFormas(v).some(c => st.formas.has(c))) return false;
+    if (!semBusca && st.prods.size && !(Array.isArray(v.itens) ? v.itens : []).some(it => st.prods.has(String(it.desc || "")))) return false;
     if (fx && !fx.erro) { const n = Number(v.valor_total || 0); if (n < fx.min - 0.005 || n > fx.max + 0.005) return false; }
     if (fn && !fn.erro) { const n = Number(v.numero); if (fn.lista ? !fn.lista.has(n) : (n < fn.min || n > fn.max)) return false; }
     if (!st.mostrarJa && _ncupNfeDo(v)) return false;
