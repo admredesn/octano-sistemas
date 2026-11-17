@@ -1916,6 +1916,7 @@ async function fcLancIncluir() {
       ${livresHtml}
       <label style="display:block;color:#9aa;font-size:0.75rem">Valor (R$) *</label>
       <input id="fcm-valor" type="number" step="0.01" class="fc-inp2" style="width:140px">
+      ${_fcSecaoAceitaNegativo(secao) ? '<p style="color:#8892a0;font-size:0.72rem;margin:4px 0 0">Aceita valor <b>negativo</b> (ex.: -500,00): é a sangria negativa — diminui o Dinheiro (sangria / cofre) deste caixa, para acertar com o depósito bancário.</p>' : ''}
       ${secao === 'prazo'
         // NOTA A PRAZO só pode ser prazo, e não tem bandeira: os dois campos
         // saem da tela e vão fixos, para ninguém lançar uma nota como
@@ -2022,10 +2023,17 @@ function fcmAbastToggle(radio, valor, desc) {
   document.getElementById('fcm-desc').value = desc;
 }
 
+// sangria negativa (v185) — 17/11/2026, Ronan (AC caixa 862): "Sistema não deixa eu incluir sangria negativa (é preciso para
+// fazer ajuste com depósitos bancários)". No balão 💵 Dinheiro / Sangria o valor do ➕ Incluir pode ser NEGATIVO: diminui a
+// linha "Dinheiro (sangria / cofre)" e o contado da gaveta — no resultado, o mesmo efeito de uma receita, sem aparecer em
+// Receitas. Nos outros balões continua só valor positivo: lá o lançamento cria título, linha no livro ou venda.
+function _fcSecaoAceitaNegativo(secao) { return secao === 'dinheiro' || secao === 'sangria'; }
+
 async function fcLancIncluirSalvar(secao) {
   if (!podeOuAvisa('fcaixa.lanc_incluir')) return;
   const valor = parseFloat(document.getElementById('fcm-valor').value);
-  if (isNaN(valor) || valor <= 0) { alert('Informe o valor.'); return; }
+  if (isNaN(valor) || valor === 0) { alert('Informe o valor.'); return; }
+  if (valor < 0 && !_fcSecaoAceitaNegativo(secao)) { alert('Valor negativo só no balão Dinheiro / Sangria (sangria negativa).'); return; }
   const ajuste = {
     manual: true, secao, valor,
     forma_nome: document.getElementById('fcm-forma').value,
@@ -2317,6 +2325,8 @@ async function fcGerarDeposito() {
   if (_fcTravado(true)) return;
   const alvos = _fcSangriasMarcadas(false);
   if (!alvos.length) { alert('Marque (☑) a(s) sangria(s) que foram depositadas.'); return; }
+  // sangria negativa (v185) é ajuste, não dinheiro levado ao banco: não vira depósito (o livro não tem depósito negativo)
+  if (alvos.some(a => a.valor < 0)) { alert('Sangria negativa é ajuste e não vira depósito: desmarque-a e gere o depósito só das sangrias positivas.'); return; }
   const total = alvos.reduce((s, a) => s + a.valor, 0);
   const contas = (await _fcContasDoPosto()).filter(c => String(c.tipo || '') !== 'caixa');
   const hoje = new Date(); const p = n => String(n).padStart(2, '0');
@@ -3693,8 +3703,9 @@ async function fcNodeDetalhe(tipo) {
         window._fcLancBase['manual:' + m.id] = { rotulo: 'Manual — ' + (m.descricao || m.forma_nome || ''), valor: m.valor, forma_nome: m.forma_nome, bandeira: m.bandeira, secao: m.secao };
         const depN = m.deposito ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 ${_manDepN(m) ? 'sangria depositada' : 'depositado'} em ${fcEsc(m.deposito.conta_nome || 'conta')}${m.deposito.data ? ' · ' + fcEsc(String(m.deposito.data).split('-').reverse().join('/')) : ''}${_fcDepLote(m.deposito)}</span>` : '';
         const pixN = m.conta_nome ? ` <span style="color:#7ea8d8;font-size:0.72rem">🏦 Pix caiu em ${fcEsc(m.conta_nome)}</span>` : '';
+        const negN = (Number(m.valor || 0) < 0 && _fcSecaoAceitaNegativo(m.secao)) ? ' <span style="color:#f0b45c;font-size:0.72rem">sangria negativa (ajuste): diminui o Dinheiro (sangria / cofre)</span>' : '';
         return _fcRow('manual', m.id, `<td class="fc-td" style="white-space:nowrap">${m.recebido_em ? _fcDataHoraLocal(m.recebido_em) : '✍ manual'}</td>
-          <td class="fc-td">${fcEsc(m.descricao) || '—'}${depN}${pixN}</td>
+          <td class="fc-td">${fcEsc(m.descricao) || '—'}${negN}${depN}${pixN}</td>
           <td class="fc-td">${fcEsc(_fcRotForma(m.forma_nome, '', m.bandeira)) || '—'}</td>
           <td class="fc-td fc-r">${fcMoney(m.valor)}</td>`);
       });
