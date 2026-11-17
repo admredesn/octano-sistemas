@@ -19,6 +19,16 @@
 const _NCUP_FORMAS = { "01": "Dinheiro", "02": "Cheque", "03": "Cartão de crédito", "04": "Cartão de débito",
                        "05": "A prazo / crédito", "10": "Vale alimentação", "15": "Boleto", "17": "Pix", "99": "Outros" };
 const _NCUP_MAX_REFS = 500;   // NF-e: no máximo 500 NFref
+// cupom SEM IDENTIFICAÇÃO (17/11/2026, Ronan: filtro "consumidor final" — o funcionário do cliente abastece, depois a
+// empresa pede a nota e o posto acha o cupom pela hora/câmera): sem CPF/CNPJ no cupom (ou só zeros) e não veio de
+// título a prazo do cliente. No máximo _NCUP_MAX_ANON desses por NF-e: o caso do dia a dia é um ou poucos abastecimentos;
+// o limite impede juntar centenas de cupons anônimos numa nota só.
+const _NCUP_MAX_ANON = 10;
+function _ncupSemIdent(v) {
+  if (v._titulo || v._tecnox) return false;
+  const d = _ncupDig(v.cliente_cpf);
+  return !d || /^0+$/.test(d);
+}
 window._ncup = window._ncup || { sel: new Set() };
 window._ncup.formas = window._ncup.formas || new Set();   // filtros de várias escolhas (vazio = todos)
 window._ncup.prods = window._ncup.prods || new Set();
@@ -365,7 +375,8 @@ async function moduloNfeCupons() {
             <div class="ncup-multi"><label>Produto</label><button type="button" id="ncup-prod-btn" class="ncup-multi-btn" style="width:320px" onclick="_ncupMultiAbrir('prod')">Todos</button><div id="ncup-prod-pnl" class="ncup-multi-pnl" style="display:none"></div></div>
             <div><label>Valor (R$)</label><input id="ncup-valor" autocomplete="off" inputmode="decimal" style="width:170px" placeholder="50,09 · 50 · 40 a 60" title="50,09 = exatamente esse valor · 50 = de 50,00 a 50,99 · 40 a 60 = a faixa. Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.valor || "")}"></div>
             <div><label>Nº do cupom</label><input id="ncup-num" autocomplete="off" inputmode="numeric" style="width:170px" placeholder="16276 · 16270 a 16278" title="Um número, vários separados por vírgula ou espaço, ou uma faixa (16270 a 16278). Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.num || "")}"></div>
-            <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label></div>
+            <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label>
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:4px 0 0" title="Esconde os cupons que já têm CPF/CNPJ (e os das notinhas a prazo): ficam só os de consumidor não identificado. No máximo ${_NCUP_MAX_ANON} deles por NF-e."><input id="ncup-anon" type="checkbox" onchange="ncupFiltrar()" ${st.soAnon ? "checked" : ""}> só sem identificação (consumidor final)</label></div>
           </div>
           <div id="ncup-lista"><p style="color:#888;padding:16px">Informe o cliente e/ou o período e clique em Buscar.</p></div>
           <div class="ncup-rodape">
@@ -536,7 +547,7 @@ async function _ncupJuntarTitulos(titulos, campos, doc) {
     if (temChave.has(k)) return;
     if (String(v.status || "").toLowerCase() === "cancelada") { st.titCancel.push({ t, v }); return; }
     temChave.add(k);
-    st.vendas.push(Object.assign({}, v, { cliente_nome: v.cliente_nome || nomeDe(t), cliente_cpf: v.cliente_cpf || doc || "" }));
+    st.vendas.push(Object.assign({}, v, { cliente_nome: v.cliente_nome || nomeDe(t), cliente_cpf: v.cliente_cpf || doc || "", _titulo: true }));
   });
   if (!tecnox.length) return;
   const nums = Array.from(new Set(tecnox.map(t => Number(_ncupDig(t.numero_nfe) || Number(_ncupDig(t.chave_nfe).slice(25, 34)))).filter(n => n > 0)));
@@ -583,7 +594,8 @@ function _ncupMontarFiltros() {
 }
 
 // FILTROS DE VÁRIAS ESCOLHAS (17/11/2026, Ronan: "em cada filtro tem que ter um checkbox para selecionar mais de um produto
-// e forma de pagamento"). Nada marcado = todos; marcado = cupom que tem QUALQUER um dos marcados. No produto, o campo de
+// e forma de pagamento"). Nada marcado = todos. Forma: cupom que tem QUALQUER uma das marcadas. Produto: cupom que tem SÓ
+// produtos marcados (nenhum item fora deles). No produto, o campo de
 // cima pesquisa a lista ao digitar (palavras, sem acento) e Enter marca os que aparecem.
 const _NCUP_MULTI = { forma: { set: "formas", todos: "Todas", plural: "formas", busca: false },
                       prod: { set: "prods", todos: "Todos", plural: "produtos", busca: true } };
@@ -605,6 +617,7 @@ function _ncupMultiAbrir(k) {
   if (aberto) return;
   p.innerHTML = `${_NCUP_MULTI[k].busca ? `<input id="ncup-${k}-q" autocomplete="off" placeholder="digite: diesel, s10, arla… (Enter marca os que aparecem)" style="width:100%;box-sizing:border-box;margin-bottom:6px">` : ""}
     <div class="ncup-multi-acoes"><button type="button" onclick="_ncupMultiTodos('${k}', true)">Marcar os que aparecem</button><button type="button" onclick="_ncupMultiTodos('${k}', false)">Limpar</button></div>
+    ${k === "prod" ? `<div style="color:#778;font-size:0.74rem;margin:0 2px 6px">Mostra os cupons que têm <b>só</b> os produtos marcados. O número é de cupons do período com o produto.</div>` : ""}
     <div class="ncup-multi-lista" id="ncup-${k}-lista"></div>`;
   p.style.display = "block";
   _ncupMultiLista(k);
@@ -705,15 +718,19 @@ async function _ncupBuscaTecla(e) {
 function _ncupVisiveis(semBusca) {
   const st = window._ncup;
   st.mostrarJa = !!(document.getElementById("ncup-ja") || {}).checked;
+  st.soAnon = !!(document.getElementById("ncup-anon") || {}).checked;
   st.valor = (document.getElementById("ncup-valor") || {}).value || "";
   st.num = (document.getElementById("ncup-num") || {}).value || "";
   const fx = semBusca ? null : _ncupFaixa(st.valor), fn = semBusca ? null : _ncupNumeros(st.num);
   return (st.vendas || []).filter(v => {
     if (st.formas.size && !_ncupFormas(v).some(c => st.formas.has(c))) return false;
-    if (!semBusca && st.prods.size && !(Array.isArray(v.itens) ? v.itens : []).some(it => st.prods.has(String(it.desc || "")))) return false;
+    // produto (17/11, Ronan: "quando filtrar só gasolina, tem que aparecer cupons que têm só gasolina"): TODOS os itens do
+    // cupom têm que estar entre os marcados (gasolina + arla marcados = só gasolina, só arla, ou gasolina e arla)
+    if (!semBusca && st.prods.size) { const its = Array.isArray(v.itens) ? v.itens : []; if (!its.length || !its.every(it => st.prods.has(String(it.desc || "")))) return false; }
     if (fx && !fx.erro) { const n = Number(v.valor_total || 0); if (n < fx.min - 0.005 || n > fx.max + 0.005) return false; }
     if (fn && !fn.erro) { const n = Number(v.numero); if (fn.lista ? !fn.lista.has(n) : (n < fn.min || n > fn.max)) return false; }
     if (!st.mostrarJa && _ncupNfeDo(v)) return false;
+    if (st.soAnon && !_ncupSemIdent(v)) return false;
     return true;
   });
 }
@@ -824,10 +841,13 @@ function _ncupResumo() {
   let aviso = "";
   if (docs.length > 1) aviso = ` <span style="color:#f87171">· cupons de ${docs.length} clientes diferentes: uma NF-e é de um cliente só</span>`;
   else if (sel.length > _NCUP_MAX_REFS) aviso = ` <span style="color:#f87171">· no máximo ${_NCUP_MAX_REFS} cupons por NF-e</span>`;
+  const anon = sel.filter(_ncupSemIdent).length;
+  if (anon > _NCUP_MAX_ANON) aviso += ` <span style="color:#f87171">· ${anon} cupons sem identificação: no máximo ${_NCUP_MAX_ANON} por NF-e</span>`;
+  else if (anon) aviso += ` <span style="color:#aaa">· ${anon} sem identificação</span>`;
   const vis = new Set(_ncupVisiveis().map(v => v.id)), fora = sel.filter(v => !vis.has(v.id)).length;
   if (fora) aviso += ` <span style="color:#93c5fd">· ${fora} marcado(s) fora da lista (busca por produto / valor / nº)</span>`;
   r.innerHTML = `<b style="color:#e0e0e0">${sel.length}</b> cupom(ns) escolhido(s) · <b style="color:#4ade80">R$ ${_ncupMoney(tot)}</b>${aviso}`;
-  b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS;
+  b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS || anon > _NCUP_MAX_ANON;
 }
 
 // ---------- destinatário + conferência ----------
@@ -841,6 +861,7 @@ async function ncupAbrirEmissao() {
   if (!sel.length) return;
   const docs = Array.from(new Set(sel.map(v => _ncupDig(v.cliente_cpf)).filter(Boolean)));
   if (docs.length > 1) { alert("Os cupons escolhidos são de clientes diferentes. Uma NF-e é de um cliente só."); return; }
+  if (sel.filter(_ncupSemIdent).length > _NCUP_MAX_ANON) { alert(`No máximo ${_NCUP_MAX_ANON} cupons sem identificação por NF-e.`); return; }
   st.confirmar = false; st.pessoa = null;
   const prod = st.cfg.ambiente === "producao";
   const tot = sel.reduce((s, v) => s + Number(v.valor_total || 0), 0);
