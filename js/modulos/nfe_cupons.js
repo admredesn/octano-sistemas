@@ -855,6 +855,52 @@ function _ncupResumo() {
 
 // ---------- destinatário + conferência ----------
 function _ncupFechar() { const m = document.getElementById("ncup-modal"); if (m) m.remove(); }
+
+// placa / local dos cupons sem identificação (janela de emissão)
+function _ncupIdentTipo(id, tipo) {   // acerta o tipo da linha e o campo ao lado; devolve o campo
+  const s = Array.from(document.querySelectorAll("#ncup-placas select.ncup-ident-tipo")).find(x => x.dataset.id === String(id));
+  const i = Array.from(document.querySelectorAll("#ncup-placas input.ncup-placa")).find(x => x.dataset.id === String(id));
+  if (s) s.value = tipo;
+  if (i) {
+    const ent = tipo === "entrega";
+    i.style.borderColor = "";
+    i.maxLength = ent ? 60 : 8;
+    i.placeholder = ent ? "local ou tanque (ex.: Fazenda Boa Vista)" : "ABC1D23";
+  }
+  return i;
+}
+function _ncupDesconfirmarEmissao() {
+  const st = window._ncup;
+  if (!st.confirmar) return;
+  st.confirmar = false;
+  const b = document.getElementById("ncup-emitir");
+  if (b && !b.disabled) b.textContent = `Emitir NF-e em ${st.cfg && st.cfg.ambiente === "producao" ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}`;
+  _ncupMsg("");
+}
+function _ncupPlacaQtd() {
+  const n = document.querySelectorAll("#ncup-placas input.ncup-pl-marca:checked").length, el = document.getElementById("ncup-pl-qtd");
+  if (el) { el.textContent = `${n} marcado(s)`; el.style.color = n ? "#93c5fd" : "#aaa"; }
+}
+// 17/11, Ronan: confere os cupons, marca os do mesmo veículo (1, 5, 9, 10…) e aplica a placa de uma vez (F1)
+function _ncupPlacaAplicar() {
+  const tipo = (document.getElementById("ncup-pl-tipo") || {}).value || "placa";
+  const inp = document.getElementById("ncup-pl-valor");
+  const marcados = Array.from(document.querySelectorAll("#ncup-placas input.ncup-pl-marca:checked"));
+  const entrega = tipo === "entrega";
+  const val = entrega ? _ncupTxt(inp && inp.value, 60).toUpperCase() : _ncupPlacaNorm(inp && inp.value);
+  if (!marcados.length) { _ncupMsg("Marque os cupons (caixinha da esquerda) antes de aplicar.", "#f59e0b"); return; }
+  if (entrega ? val.length < 3 : !_NCUP_PLACA_RE.test(val)) {
+    if (inp) { inp.style.borderColor = "#f87171"; inp.focus(); }
+    _ncupMsg(entrega ? "Escreva o local da entrega (ao menos 3 letras)." : "Placa inválida: use ABC1234 ou ABC1D23.", "#f87171");
+    return;
+  }
+  if (inp) inp.style.borderColor = "";
+  marcados.forEach(c => { const i = _ncupIdentTipo(c.dataset.id, tipo); if (i) i.value = val; c.checked = false; });
+  _ncupPlacaQtd();
+  _ncupDesconfirmarEmissao();
+  _ncupMsg(`${entrega ? "Local" : "Placa"} ${_ncupEsc(val)} aplicad${entrega ? "o" : "a"} em ${marcados.length} cupom(ns).`, "#4ade80");
+  if (inp) inp.select();
+}
 function _ncupMsg(html, cor) { const el = document.getElementById("ncup-msg"); if (el) { el.style.color = cor || "#aaa"; el.innerHTML = html; } }
 
 async function ncupAbrirEmissao() {
@@ -874,9 +920,15 @@ async function ncupAbrirEmissao() {
         <div style="margin-top:12px;padding:10px 12px;border:1px solid #5a4a10;border-radius:8px;background:#1d1a0a">
           <div style="color:#fbbf24;font-size:0.84rem;font-weight:600">${anon.length} cupom(ns) sem identificação — informe a placa do veículo ou, se foi entrega, o local</div>
           <div style="color:#aaa;font-size:0.76rem;margin:2px 0 8px">Obrigatório. A placa (conferida no cupom, comprovante ou câmera) ou o local da entrega sai nas observações da NF-e.</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+            <span id="ncup-pl-qtd" style="color:#aaa;font-size:0.78rem;min-width:92px">0 marcado(s)</span>
+            <select id="ncup-pl-tipo" style="padding:5px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem"><option value="placa">Placa</option><option value="entrega">Entrega</option></select>
+            <input id="ncup-pl-valor" autocomplete="off" maxlength="60" placeholder="placa ou local para os marcados" style="width:220px;box-sizing:border-box;padding:5px 8px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem;text-transform:uppercase">
+            <button type="button" class="ncup-btn" style="padding:5px 10px;font-size:0.78rem" onclick="_ncupPlacaAplicar()" title="Marque os cupons um a um (caixinha da esquerda), digite a placa ou o local e aplique">Aplicar nos marcados (F1)</button>
+          </div>
           <div style="max-height:260px;overflow:auto"><table class="ncup-ed" id="ncup-placas">
-            <thead><tr><th>Cupom</th><th>Data</th><th>Itens</th><th style="text-align:right">Valor (R$)</th><th style="width:96px">Tipo</th><th style="width:190px">Placa / local *</th></tr></thead>
-            <tbody>${anon.map(v => `<tr><td><b>${_ncupEsc(v.numero)}</b></td><td>${_ncupHora(v.data_venda)}</td>
+            <thead><tr><th style="width:26px"></th><th>Cupom</th><th>Data</th><th>Itens</th><th style="text-align:right">Valor (R$)</th><th style="width:96px">Tipo</th><th style="width:190px">Placa / local *</th></tr></thead>
+            <tbody>${anon.map(v => `<tr><td><input type="checkbox" class="ncup-pl-marca" data-id="${_ncupEsc(v.id)}" style="width:auto;margin:0"></td><td><b>${_ncupEsc(v.numero)}</b></td><td>${_ncupHora(v.data_venda)}</td>
               <td style="color:#bbb">${_ncupEsc((Array.isArray(v.itens) ? v.itens : []).map(it => it.desc).join(" · ").slice(0, 70))}</td>
               <td style="text-align:right">${_ncupMoney(v.valor_total)}</td>
               <td><select class="ncup-ident-tipo" data-id="${_ncupEsc(v.id)}" style="padding:4px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem"><option value="placa">Placa</option><option value="entrega">Entrega</option></select></td>
@@ -943,16 +995,23 @@ async function ncupAbrirEmissao() {
   }));
   // Placa × Entrega: o campo ao lado vira placa (8, maiúsculas) ou local/tanque da entrega (texto)
   m.querySelectorAll("select.ncup-ident-tipo").forEach(s => s.addEventListener("change", () => {
-    const i = Array.from(m.querySelectorAll("input.ncup-placa")).find(x => x.dataset.id === s.dataset.id);
-    if (i) {
-      const ent = s.value === "entrega";
-      i.value = ""; i.style.borderColor = "";
-      i.maxLength = ent ? 60 : 8;
-      i.placeholder = ent ? "local ou tanque (ex.: Fazenda Boa Vista)" : "ABC1D23";
-      i.focus();
-    }
-    if (st.confirmar) { st.confirmar = false; const b = document.getElementById("ncup-emitir"); if (b && !b.disabled) b.textContent = `Emitir NF-e em ${prod ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}`; _ncupMsg(""); }
+    const i = _ncupIdentTipo(s.dataset.id, s.value);
+    if (i) { i.value = ""; i.focus(); }
+    _ncupDesconfirmarEmissao();
   }));
+  // marcar cupons (um a um — sem "marcar todos") e aplicar a mesma placa/local nos marcados: botão, Enter no campo ou F1
+  m.querySelectorAll("input.ncup-pl-marca").forEach(c => c.addEventListener("change", _ncupPlacaQtd));
+  const plv = document.getElementById("ncup-pl-valor");
+  if (plv) plv.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); _ncupPlacaAplicar(); } });
+  if (!window._ncupF1) {
+    window._ncupF1 = true;
+    document.addEventListener("keydown", e => {
+      if (e.key !== "F1" || !document.getElementById("ncup-placas")) return;
+      e.preventDefault();
+      const v = document.getElementById("ncup-pl-valor");
+      if (v && String(v.value).trim()) _ncupPlacaAplicar(); else if (v) v.focus();
+    });
+  }
   const nome = (sel.find(v => v.cliente_nome) || {}).cliente_nome || "";
   if (docs[0]) document.getElementById("ncup-doc").value = docs[0];
   if (nome) document.getElementById("ncup-nome").value = nome;
