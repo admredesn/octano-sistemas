@@ -21,9 +21,15 @@ const _NCUP_FORMAS = { "01": "Dinheiro", "02": "Cheque", "03": "Cartão de créd
 const _NCUP_MAX_REFS = 500;   // NF-e: no máximo 500 NFref
 // cupom SEM IDENTIFICAÇÃO (17/11/2026, Ronan: filtro "consumidor final" — o funcionário do cliente abastece, depois a
 // empresa pede a nota e o posto acha o cupom pela hora/câmera): sem CPF/CNPJ no cupom (ou só zeros) e não veio de
-// título a prazo do cliente. No máximo _NCUP_MAX_ANON desses por NF-e: o caso do dia a dia é um ou poucos abastecimentos;
-// o limite impede juntar centenas de cupons anônimos numa nota só.
-const _NCUP_MAX_ANON = 10;
+// título a prazo do cliente. PLACA OBRIGATÓRIA (17/11, Ronan escolheu no lugar do limite de 10 por NF-e): na emissão,
+// cada cupom sem identificação pede a placa do veículo (digitada cupom a cupom); vai nas observações da NF-e com quem
+// identificou e a data.
+const _NCUP_PLACA_RE = /^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/;   // ABC1234 ou Mercosul ABC1D23
+function _ncupPlacaNorm(s) { return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+function _ncupQuem() {
+  try { if (typeof perfil !== "undefined" && perfil && (perfil.nome || perfil.email)) return String(perfil.nome || perfil.email); } catch (e) { /* sem perfil */ }
+  return String(window._ncup.usuario || "");
+}
 function _ncupSemIdent(v) {
   if (v._titulo || v._tecnox) return false;
   const d = _ncupDig(v.cliente_cpf);
@@ -376,7 +382,7 @@ async function moduloNfeCupons() {
             <div><label>Valor (R$)</label><input id="ncup-valor" autocomplete="off" inputmode="decimal" style="width:170px" placeholder="50,09 · 50 · 40 a 60" title="50,09 = exatamente esse valor · 50 = de 50,00 a 50,99 · 40 a 60 = a faixa. Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.valor || "")}"></div>
             <div><label>Nº do cupom</label><input id="ncup-num" autocomplete="off" inputmode="numeric" style="width:170px" placeholder="16276 · 16270 a 16278" title="Um número, vários separados por vírgula ou espaço, ou uma faixa (16270 a 16278). Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.num || "")}"></div>
             <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label>
-              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:4px 0 0" title="Esconde os cupons que já têm CPF/CNPJ (e os das notinhas a prazo): ficam só os de consumidor não identificado. No máximo ${_NCUP_MAX_ANON} deles por NF-e."><input id="ncup-anon" type="checkbox" onchange="ncupFiltrar()" ${st.soAnon ? "checked" : ""}> só sem identificação (consumidor final)</label></div>
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:4px 0 0" title="Esconde os cupons que já têm CPF/CNPJ (e os das notinhas a prazo): ficam só os de consumidor não identificado. Na NF-e, cada um deles pede a placa do veículo."><input id="ncup-anon" type="checkbox" onchange="ncupFiltrar()" ${st.soAnon ? "checked" : ""}> só sem identificação (consumidor final)</label></div>
           </div>
           <div id="ncup-lista"><p style="color:#888;padding:16px">Informe o cliente e/ou o período e clique em Buscar.</p></div>
           <div class="ncup-rodape">
@@ -842,12 +848,11 @@ function _ncupResumo() {
   if (docs.length > 1) aviso = ` <span style="color:#f87171">· cupons de ${docs.length} clientes diferentes: uma NF-e é de um cliente só</span>`;
   else if (sel.length > _NCUP_MAX_REFS) aviso = ` <span style="color:#f87171">· no máximo ${_NCUP_MAX_REFS} cupons por NF-e</span>`;
   const anon = sel.filter(_ncupSemIdent).length;
-  if (anon > _NCUP_MAX_ANON) aviso += ` <span style="color:#f87171">· ${anon} cupons sem identificação: no máximo ${_NCUP_MAX_ANON} por NF-e</span>`;
-  else if (anon) aviso += ` <span style="color:#aaa">· ${anon} sem identificação</span>`;
+  if (anon) aviso += ` <span style="color:#aaa">· ${anon} sem identificação (a placa de cada um é pedida na emissão)</span>`;
   const vis = new Set(_ncupVisiveis().map(v => v.id)), fora = sel.filter(v => !vis.has(v.id)).length;
   if (fora) aviso += ` <span style="color:#93c5fd">· ${fora} marcado(s) fora da lista (busca por produto / valor / nº)</span>`;
   r.innerHTML = `<b style="color:#e0e0e0">${sel.length}</b> cupom(ns) escolhido(s) · <b style="color:#4ade80">R$ ${_ncupMoney(tot)}</b>${aviso}`;
-  b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS || anon > _NCUP_MAX_ANON;
+  b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS;
 }
 
 // ---------- destinatário + conferência ----------
@@ -861,11 +866,24 @@ async function ncupAbrirEmissao() {
   if (!sel.length) return;
   const docs = Array.from(new Set(sel.map(v => _ncupDig(v.cliente_cpf)).filter(Boolean)));
   if (docs.length > 1) { alert("Os cupons escolhidos são de clientes diferentes. Uma NF-e é de um cliente só."); return; }
-  if (sel.filter(_ncupSemIdent).length > _NCUP_MAX_ANON) { alert(`No máximo ${_NCUP_MAX_ANON} cupons sem identificação por NF-e.`); return; }
   st.confirmar = false; st.pessoa = null;
   const prod = st.cfg.ambiente === "producao";
   const tot = sel.reduce((s, v) => s + Number(v.valor_total || 0), 0);
   const inp = (id, rot, extra) => `<div style="${(extra && extra.w) || ""}"><label>${rot}</label><input id="${id}" ${(extra && extra.attr) || ""}></div>`;
+  // cupons sem identificação: a placa de cada um (obrigatória), digitada cupom a cupom
+  const anon = sel.filter(_ncupSemIdent).slice().sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")));
+  const anonHtml = !anon.length ? "" : `
+        <div style="margin-top:12px;padding:10px 12px;border:1px solid #5a4a10;border-radius:8px;background:#1d1a0a">
+          <div style="color:#fbbf24;font-size:0.84rem;font-weight:600">${anon.length} cupom(ns) sem identificação — informe a placa do veículo de cada um</div>
+          <div style="color:#aaa;font-size:0.76rem;margin:2px 0 8px">Obrigatório. A placa (conferida no cupom, comprovante ou câmera) sai nas observações da NF-e, com quem identificou e a data.</div>
+          <div style="max-height:260px;overflow:auto"><table class="ncup-ed" id="ncup-placas">
+            <thead><tr><th>Cupom</th><th>Data</th><th>Itens</th><th style="text-align:right">Valor (R$)</th><th style="width:120px">Placa *</th></tr></thead>
+            <tbody>${anon.map(v => `<tr><td><b>${_ncupEsc(v.numero)}</b></td><td>${_ncupHora(v.data_venda)}</td>
+              <td style="color:#bbb">${_ncupEsc((Array.isArray(v.itens) ? v.itens : []).map(it => it.desc).join(" · ").slice(0, 70))}</td>
+              <td style="text-align:right">${_ncupMoney(v.valor_total)}</td>
+              <td><input class="ncup-placa" data-id="${_ncupEsc(v.id)}" maxlength="8" autocomplete="off" placeholder="ABC1D23" value="${_ncupEsc(_ncupPlacaNorm(v.placa || (v.prazo_dados && v.prazo_dados.placa) || ""))}" style="text-align:left;text-transform:uppercase"></td></tr>`).join("")}</tbody>
+          </table></div>
+        </div>`;
   _ncupFechar();
   const m = document.createElement("div");
   m.id = "ncup-modal"; m.className = "ncup-modal";
@@ -874,7 +892,7 @@ async function ncupAbrirEmissao() {
       <div class="ns-titulo"><h3>NF-e de ${sel.length} cupom(ns) · cupons R$ ${_ncupMoney(tot)}</h3><button class="ns-fechar" onclick="_ncupFechar()">✕</button></div>
       <div style="padding:16px">
         <div style="font-size:0.8rem;color:#aaa">NF-e em <b style="color:${prod ? "#4ade80" : "#f59e0b"}">${prod ? "PRODUÇÃO (vale fiscalmente)" : "HOMOLOGAÇÃO (teste)"}</b> · série ${_ncupEsc(st.cfg.serie)} · CFOP 5929 · sem pagamento (está nos cupons)</div>
-        <div id="ncup-itens-prev" style="margin-top:10px;font-size:0.8rem;color:#ccc">Montando os itens…</div>
+        <div id="ncup-itens-prev" style="margin-top:10px;font-size:0.8rem;color:#ccc">Montando os itens…</div>${anonHtml}
         <div class="ncup-linha"><div style="flex:1"><label>Observações da nota — placa, KM, motorista… (saem nas informações complementares)</label>
           <textarea id="ncup-obs" rows="2" maxlength="1500" placeholder="ex.: Placa: ABC1D23 KM: 70181"
             style="width:100%;box-sizing:border-box;padding:7px 9px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.84rem;font-family:inherit;resize:vertical"></textarea></div></div>
@@ -1441,6 +1459,18 @@ async function _ncupEmitir() {
   if (!/^[A-Za-z]{2}$/.test(dest.uf)) falta.push("UF");
   if (_ncupDig(dest.c_mun).length !== 7) falta.push("código IBGE do município (7 dígitos)");
   if (falta.length) { _ncupMsg("Falta: " + falta.join(", ") + ".", "#f87171"); return; }
+  // placa de cada cupom sem identificação (obrigatória)
+  const placaDe = {}, semPlaca = [];
+  sel.filter(_ncupSemIdent).forEach(v => {
+    const el = Array.from(document.querySelectorAll("#ncup-placas input.ncup-placa")).find(i => i.dataset.id === String(v.id));
+    const pl = _ncupPlacaNorm(el && el.value);
+    if (el) el.style.borderColor = _NCUP_PLACA_RE.test(pl) ? "" : "#f87171";
+    if (_NCUP_PLACA_RE.test(pl)) placaDe[v.id] = pl; else semPlaca.push(v.numero);
+  });
+  if (semPlaca.length) {
+    _ncupMsg(`Falta a placa (ABC1234 ou ABC1D23) do(s) cupom(ns) sem identificação: ${_ncupEsc(semPlaca.slice(0, 15).join(", "))}${semPlaca.length > 15 ? ` e mais ${semPlaca.length - 15}` : ""}.`, "#f87171");
+    return;
+  }
   const docCupom = Array.from(new Set(sel.map(v => _ncupDig(v.cliente_cpf)).filter(Boolean)));
   const cfg = st.cfg, prod = cfg.ambiente === "producao";
   let nota;
@@ -1448,6 +1478,19 @@ async function _ncupEmitir() {
     if (!st.prep) st.prep = await _ncupPreparar(sel);
     if (!st.ed) throw new Error("Os itens da NF-e não foram montados — feche e abra de novo.");
     nota = _ncupMontarNota(sel, dest, cfg, st.prep.prodSet, st.emp, st.prep.prods, _ncupEdAtual());
+    // cupons sem identificação: placa por cupom nas observações (fixo, não sai editando o campo Observações)
+    const ids = Object.keys(placaDe);
+    if (ids.length) {
+      const porPlaca = {};
+      sel.filter(v => placaDe[v.id]).sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")))
+        .forEach(v => { (porPlaca[placaDe[v.id]] = porPlaca[placaDe[v.id]] || []).push(String(v.numero)); });
+      const quem = _ncupTxt(_ncupQuem(), 60), hoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+      const decl = `CUPONS SEM IDENTIFICACAO NA VENDA, IDENTIFICADOS PELA PLACA${quem ? " POR " + quem.toUpperCase() : ""} EM ${hoje}: `
+        + Object.keys(porPlaca).map(p => `${p}: ${porPlaca[p].join(", ")}`).join("; ");
+      const compl = [nota.inf_complementar, decl].filter(Boolean).join(" | ");
+      if (compl.length > 4900) throw new Error(`As observações passariam do tamanho que a SEFAZ aceita (${compl.length} de 4.900 caracteres, com a lista de cupons e placas). Divida os cupons em mais de uma NF-e.`);
+      nota.inf_complementar = compl;
+    }
   } catch (e) { _ncupMsg(_ncupEsc(e.message || e), "#f87171"); return; }
   const vNF = _ncupVNF(nota);
   // datas escolhidas na tela (vazias = agora; saída vazia = a da emissão)
