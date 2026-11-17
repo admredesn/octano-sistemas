@@ -626,6 +626,12 @@ async function fcCarregarDados() {
       if (gH === 'dinheiro') t.haver_din += val;
       else (t._titFora = t._titFora || []).push({ g: ['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(gH) ? gH : 'deposito',
         valor: val, dinheiro: val, x: v, haver: true });
+    } else if (val > 0 && _fcHaverIndep(v)) {
+      // haver independente (v183) — 17/11/2026, Ronan (Florestal caixa 1233): "sempre que lançar haver crédito, lance de
+      // forma independente, sem lançar na forma de pagamento" — o dinheiro já está na forma em que o cliente pagou (o cheque
+      // editado para o valor cheio); somar de novo na linha dela dobrava (Cheque 4.136,80 em vez de 3.300,00). Só sai do
+      // total, na linha Haver crédito. Não entra em _titFora nem no esperado da gaveta.
+      t.haver_gerado += val;
     } else if (val > 0) t.haver_sem_forma += val;
     // VALE HAVER LANÇADO NO RETAGUARDA (09/11/2026, Ronan — Florestal caixa 1200: "o sistema não está deixando lançar o
     // vale haver no retaguarda, tem que deixar criar, editar, excluir"): o cliente abasteceu com o crédito e o cupom não
@@ -4062,7 +4068,7 @@ function fcNodeMov(tipo) {
     });
     const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
     const gerados = vh ? (d.vales_lst || []).filter(v => Number(v.valor || 0) > 0) : [];
-    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito pago neste turno (está em Haver crédito, à esquerda; o dinheiro dele, na linha da forma): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : 'sem forma'})`).join(' · ')}</p>` : '';
+    const extraGer = gerados.length ? `<p style="padding:10px 10px 4px;color:#9aa;font-size:0.78rem">Crédito lançado neste turno (está em Haver crédito, à esquerda): ${gerados.map(v => `${fcEsc(v.pessoa_nome)} ${fcMoney(v.valor)} (${v.forma ? fcEsc(v.forma) : _fcHaverIndep(v) ? 'independente' : 'sem forma'})`).join(' · ')}</p>` : '';
     const btnVh = vh ? `<button class="fc-btn2" style="margin:10px;border-color:#2a5a3a;color:#7be0a0" onclick="fcValeHaverForm('')">➕ Lançar Vale Haver (abastecido com o crédito)</button>` : '';
     const tit = vh ? '🤝 Vale Haver — abastecido com o crédito do cliente' : tipo === 'vale_motorista' ? '👷 Vale / Consumo (a pessoa deve)' : '📒 Vales do caixa';
     return fcModalNav(tit, vs.length
@@ -6149,6 +6155,11 @@ async function fcExtratoDesfazer() {
 // conta_id, no turno deste caixa. O saldo do cliente é a soma dos lançamentos dele: editar o valor muda o saldo.
 // ============================================================
 const _FC_HAVER_FORMAS = ['Dinheiro', 'Pix', 'Cartão de débito', 'Cartão de crédito', 'Cheque', 'Transferência'];
+// HAVER INDEPENDENTE (v183, 17/11/2026): crédito lançado no F.Caixa SEM forma. É a regra de todo lançamento novo daqui.
+// Crédito com forma (antigo ou do PDV) segue somando na linha dela; crédito do PDV sem forma segue só informativo.
+function _fcHaverIndep(v) {
+  return !!v && v.tipo === 'credito_adiantado' && !v.forma && v.origem === 'retaguarda';
+}
 
 async function fcNodeHaverCredito() {
   const turnoId = window._fcTurnoAtual; if (!turnoId) return;
@@ -6161,7 +6172,7 @@ async function fcNodeHaverCredito() {
   const linhas = vs.map(v => `<tr>
       <td class="fc-td">${_fcDataHoraLocal(v.criado_em)}</td>
       <td class="fc-td">${fcEsc(v.pessoa_nome) || '—'}</td>
-      <td class="fc-td">${v.forma ? fcEsc(v.forma) : '<span style="color:#f0b45c">sem forma</span>'}</td>
+      <td class="fc-td">${v.forma ? fcEsc(v.forma) : _fcHaverIndep(v) ? '<span style="color:#889" title="Não entra na linha da forma de pagamento: o dinheiro já está na forma em que o cliente pagou">independente</span>' : '<span style="color:#f0b45c">sem forma</span>'}</td>
       <td class="fc-td">${dt(v.pago_em)}</td>
       <td class="fc-td">${fcEsc(nomeConta(v.conta_id))}</td>
       <td class="fc-td" style="color:#889;font-size:0.72rem">${fcEsc(v.operador) || '—'}${v.descricao ? '<br>' + fcEsc(String(v.descricao).slice(0, 90)) : ''}</td>
@@ -6170,9 +6181,10 @@ async function fcNodeHaverCredito() {
   const tot = vs.reduce((s, v) => s + Number(v.valor || 0), 0);
   const btn = `<button class="fc-btn2" style="margin:10px;border-color:#2a5a3a;color:#7be0a0" onclick="fcHaverForm('')">➕ Lançar crédito do cliente</button>`;
   return fcModalNav('💰 Haver crédito — crédito pago pelo cliente neste caixa', `
-    <p style="padding:8px 10px;color:#888;font-size:0.78rem">O cliente pagou e ficou com crédito para abastecer depois. O dinheiro entra na
-      linha da forma (Cheque, Pix, Cartão, Depósito em Conta ou na gaveta) e aqui sai do total — não é venda. O que ele abastecer com o
-      crédito aparece em <b>Vale Haver</b>, no dia do abastecimento.</p>
+    <p style="padding:8px 10px;color:#888;font-size:0.78rem">O cliente pagou a mais e ficou com crédito para abastecer depois. O crédito sai do total
+      aqui — não é venda — e é lançado <b>independente</b>: não entra sozinho em nenhuma forma de pagamento. O dinheiro dele já está na forma em
+      que o cliente pagou (ex.: o cheque lançado pelo valor cheio). O que ele abastecer com o crédito aparece em <b>Vale Haver</b>, no dia do
+      abastecimento.${vs.some(v => v.forma) ? ' Os que mostram uma forma (lançados pelo PDV ou antes de 17/11/2026) continuam somando na linha dela.' : ''}</p>
     ${vs.length ? `<table class="fc-grid"><thead><tr><th>Lançado</th><th>Cliente</th><th>Forma</th><th>Pago em</th><th>Conta</th><th>Quem / obs.</th><th>Valor</th><th></th></tr></thead>
       <tbody>${linhas.join('')}<tr><td class="fc-td" colspan="6"><b>Total</b></td><td class="fc-td fc-r"><b>${fcMoney(tot)}</b></td><td></td></tr></tbody></table>`
       : '<p style="padding:16px 10px;color:#777">Nenhum crédito lançado neste caixa.</p>'}${btn}`);
@@ -6191,6 +6203,10 @@ async function fcHaverForm(id) {
   const contas = window._fcHaverContas || await _fcContasDoPosto();
   const diaCaixa = t.aberto_em ? _fcDiaLocal(t.aberto_em) : _fcDiaLocal();
   window._fcHaverSel = v ? { id: v.pessoa_id, nome: v.pessoa_nome } : null;
+  // v183: o lançamento novo é independente (sem forma). A forma só aparece no ✎ de um crédito que TEM forma (antigo) ou
+  // que veio do PDV; no lançado pelo retaguarda a 1ª opção passa para independente.
+  const comForma = !!(v && (v.forma || v.origem !== 'retaguarda'));
+  const podeIndep = !v || v.origem === 'retaguarda';
   const inp = 'style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff"';
   const lab = txt => `<label style="display:block;color:#9aa;font-size:0.75rem;margin-top:10px">${txt}</label>`;
   fcModal(id ? '✎ Editar crédito do cliente' : '➕ Lançar crédito do cliente', `
@@ -6201,14 +6217,15 @@ async function fcHaverForm(id) {
              <div id="fhc-lista" style="max-height:150px;overflow:auto"></div>
              <div id="fhc-escolhido" style="margin-top:4px;color:#7ee2a0;font-size:0.8rem"></div>`}
       ${lab('Valor do crédito (R$)')}<input id="fhc-valor" type="number" step="0.01" min="0.01" value="${v ? Number(v.valor).toFixed(2) : ''}" ${inp}>
-      ${lab('Forma de pagamento')}
-      <select id="fhc-forma" ${inp}><option value="">— como o cliente pagou? —</option>
-        ${_FC_HAVER_FORMAS.map(f => `<option ${v && v.forma === f ? 'selected' : ''}>${f}</option>`).join('')}</select>
+      ${comForma ? `${lab('Forma de pagamento')}
+      <select id="fhc-forma" ${inp}><option value="">${podeIndep ? '— independente: não entra na forma de pagamento —' : '— como o cliente pagou? —'}</option>
+        ${_FC_HAVER_FORMAS.map(f => `<option ${v && v.forma === f ? 'selected' : ''}>${f}</option>`).join('')}</select>` : ''}
       ${lab('Data do pagamento')}<input id="fhc-data" type="date" value="${(v && v.pago_em) || diaCaixa || ''}" ${inp}>
-      ${lab('Conta em que o dinheiro entrou')}
+      ${comForma ? `${lab('Conta em que o dinheiro entrou')}
       <select id="fhc-conta" ${inp}><option value="">— (gaveta / não se aplica) —</option>
-        ${contas.map(c => `<option value="${c.id}" ${v && String(v.conta_id) === String(c.id) ? 'selected' : ''}>${fcEsc(c.nome)}</option>`).join('')}</select>
+        ${contas.map(c => `<option value="${c.id}" ${v && String(v.conta_id) === String(c.id) ? 'selected' : ''}>${fcEsc(c.nome)}</option>`).join('')}</select>` : ''}
       ${lab('Observação')}<input id="fhc-obs" value="${v && v.descricao ? fcEsc(v.descricao) : ''}" placeholder="ex.: sobra do cheque 3192" ${inp}>
+      ${comForma ? '' : '<p style="color:#9aa;font-size:0.74rem;margin-top:8px">Lançamento independente: sai do total em Haver crédito e não entra em nenhuma forma de pagamento. O dinheiro já está na forma em que o cliente pagou (ex.: o cheque lançado pelo valor cheio).</p>'}
       ${v ? '<p style="color:#f0b45c;font-size:0.74rem;margin-top:8px">Mudar o valor muda o saldo de crédito do cliente.</p>' : ''}
       <div id="fhc-msg" style="color:#f87171;font-size:0.78rem;min-height:16px;margin-top:8px"></div>
       <div style="display:flex;gap:8px;margin-top:6px">
@@ -6253,10 +6270,16 @@ async function fcHaverSalvar(id) {
   const pes = window._fcHaverSel;
   if (!pes || !pes.id) { msg.textContent = 'Escolha o cliente.'; return; }
   if (!(valor > 0)) { msg.textContent = 'Informe o valor do crédito.'; return; }
-  if (!forma) { msg.textContent = 'Escolha a forma de pagamento.'; return; }
+  // v183: o campo da forma só existe no ✎ de crédito com forma (antigo ou do PDV). Sem ele = independente.
+  const temForma = !!document.getElementById('fhc-forma');
+  const vAnt = id ? ((((window._fcCache || {}).porTurno || {})[window._fcTurnoAtual] || {}).vales_lst || []).find(x => String(x.id) === String(id)) : null;
+  const podeIndep = !vAnt || vAnt.origem === 'retaguarda';
+  if (temForma && !forma && !podeIndep) { msg.textContent = 'Escolha a forma de pagamento.'; return; }
   if (!data) { msg.textContent = 'Informe a data do pagamento.'; return; }
-  if (['Pix', 'Transferência'].includes(forma) && !conta) { msg.textContent = 'Pix / transferência: informe a conta em que o dinheiro entrou.'; return; }
-  const dados = { valor, forma, pago_em: data, conta_id: conta ? Number(conta) : null, descricao: obs || null };
+  if (temForma && ['Pix', 'Transferência'].includes(forma) && !conta) { msg.textContent = 'Pix / transferência: informe a conta em que o dinheiro entrou.'; return; }
+  const dados = { valor, pago_em: data, descricao: obs || null };
+  if (temForma) { dados.forma = forma || null; dados.conta_id = (forma && conta) ? Number(conta) : null; }
+  else if (!id) { dados.forma = null; dados.conta_id = null; }   // lançamento novo: independente
   let r;
   if (id) {
     r = await sb.from('oct_vales').update(dados).eq('id', id).eq('tipo', 'credito_adiantado').select('id');
@@ -6294,7 +6317,7 @@ async function fcHaverExcluir(id) {
   } catch (e) { /* sem saldo no aviso */ }
   const dt = s => s ? String(s).slice(8, 10) + '/' + String(s).slice(5, 7) + '/' + String(s).slice(0, 4) : '';
   const msg = `Excluir o crédito de R$ ${fcMoney(val)} de ${v.pessoa_nome || 'cliente'}${v.forma ? ' (' + v.forma + (v.pago_em ? ', pago em ' + dt(v.pago_em) : '') + ')' : ''}?\n\n`
-    + `O lançamento é APAGADO: sai da linha da forma e do Haver crédito deste caixa e da conta do cliente`
+    + `O lançamento é APAGADO: sai ${v.forma ? 'da linha da forma e ' : ''}do Haver crédito deste caixa e da conta do cliente`
     + (saldo != null ? ` — o saldo de crédito dele vai de R$ ${fcMoney(saldo)} para R$ ${fcMoney(saldo - val)}.` : '.')
     + `\nO que ele já abasteceu com o crédito continua lançado.\nNão dá para desfazer (para corrigir valor, forma ou data use o ✎).`;
   if (!confirm(msg)) return;
