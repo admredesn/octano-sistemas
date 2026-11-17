@@ -717,7 +717,7 @@ async function fcCarregarDados() {
     const t = porTurno[c.turno_id]; if (!t) return;
     const a = c.ajuste; const v = Number(a.valor || 0);
     t.manuais = t.manuais || [];
-    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null, conta_id: a.conta_id || null, conta_nome: a.conta_nome || null, titulo_id: a.titulo_id || null });
+    t.manuais.push({ id: c.ref_id, secao: a.secao, valor: v, forma_nome: a.forma_nome, bandeira: a.bandeira, descricao: a.descricao, item_vendido: !!a.item_vendido, qtd: a.qtd, recebido_em: a.recebido_em || null, deposito: a.deposito || null, conta_id: a.conta_id || null, conta_nome: a.conta_nome || null, titulo_id: a.titulo_id || null, extrato_exato: !!a.extrato_exato });
     // ITEM VENDIDO lançado à mão (frentista esqueceu): entra também como VENDA
     // de produto — os dois lados crescem juntos e o Resultado não desequilibra.
     if (a.item_vendido) { t.venda_prod += v; t.venda_total += v; }
@@ -862,8 +862,24 @@ async function fcCarregarDados() {
     }
     // o que soma na linha da forma também vai para o balão da forma (06/11/2026: tela e balão saem da mesma lista)
     t.titulos_receb_lst = [];
+    const _exato = (t.manuais || []).some(m => m.extrato_exato && String(m.id || '').indexOf('ext-') === 0);
     pend.forEach(f => {
       if (f.x && f.x._no_extrato) return;
+      // extrato exato (v186) — 17/11/2026, Ronan (AC caixa 849 de 04/11: tela 12.661,77 × PagBank 10.105,71; a diferença de
+      // 2.556,06 eram 6 títulos da CEMTAL em Pix): "tem que substituir pelo extrato exato, independente se foi recebimento de
+      // título ou de abastecimento, e a substituição não pode afetar a baixa do título, são coisas independentes (valor que
+      // entra com valor que sai, valores independentes que caso dê diferença aí sim procuramos os erros)". No caixa trocado
+      // pelo extrato, o título (ou crédito) em cartão/Pix que não achou a transação dele NÃO soma mais na forma: Cartão + Pix
+      // = extrato. Ele continua baixado e em Títulos Recebidos (Vendas); o valor fica como diferença do caixa até achar o
+      // pagamento (Pix que caiu no banco = forma Pix CNPJ). Pix CNPJ, frota, cheque e "Outro" seguem somando na forma deles.
+      // Vale para a substituição feita a partir da v186 (linha do extrato com extrato_exato); o caixa trocado antes fica como
+      // foi fechado até alguém refazer a substituição nele.
+      if (_fcExtratoExato(_exato, f.g)) {
+        if (f.x) f.x._fora_extrato = true;
+        t.titulos_fora_extrato = Math.round(((t.titulos_fora_extrato || 0) + f.dinheiro) * 100) / 100;
+        (t.titulos_fora_extrato_lst = t.titulos_fora_extrato_lst || []).push(f);
+        return;
+      }
       t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.dinheiro;   // líquido (10/11/2026): o que o cliente pagou nessa forma
       t.titulos_receb_lst.push(f);
     });
@@ -1130,6 +1146,9 @@ function fcDetalhe(turnoId) {
     // TÍTULO TIRADO DO RECEBIDO (16/11/2026): baixado no Faturar, mas o pagamento não foi achado neste caixa — é ele a falta.
     // (mov.): não soma; só mostra de onde vem a diferença. Clique = 💵 Títulos Recebidos (↩ devolve, ✎ corrige a forma).
     ...(Number(d.titulos_fora || 0) > 0.004 ? [['Títulos sem pagamento localizado', d.titulos_fora, { info: true, node: 'titulos' }]] : []),
+    // TÍTULO FORA DO EXTRATO (v186): caixa trocado pelo extrato e o título em cartão/Pix não achou a transação dele — não soma
+    // (Cartão + Pix = extrato). (mov.): só mostra de onde vem a diferença. Clique = 💳 Cartão + Pix (a lista fica no fim).
+    ...(Number(d.titulos_fora_extrato || 0) > 0.004 ? [['Títulos fora do extrato', d.titulos_fora_extrato, { info: true, node: 'cartao' }]] : []),
     // "Vale Motorista" saiu da tela (Ronan 25/08): nao existe no negocio. Era
     // heranca do layout TecnoX e so' mostrava numero errado — os R$349,38 que
     // apareceram no turno 52 eram a MESMA falta de caixa lancada 6x como vale,
@@ -3571,6 +3590,30 @@ async function fcNodeDetalhe(tipo) {
         `<tr><td class="fc-td" colspan="7"><b>Fora do recebido</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totFora)}</b></td></tr>`));
     }
 
+    // TÍTULOS FORA DO EXTRATO (v186): caixa trocado pelo extrato — o título/crédito em cartão/Pix sem transação no extrato não
+    // soma (Cartão + Pix = extrato). Fica à vista, com o ✎ para corrigir a forma (Pix que caiu no banco = Pix CNPJ).
+    const _titsForaExt = (d0.titulos_fora_extrato_lst || []).filter(f => grupos.includes(f.g));
+    if (_titsForaExt.length) {
+      const totFE = _titsForaExt.reduce((sm, f) => sm + Number(f.dinheiro || 0), 0);
+      secoes.push(stit(`🏦 Títulos fora do extrato (${_titsForaExt.length}) — não somam aqui: o caixa está igual ao extrato. A baixa não muda; o valor é diferença do caixa até achar o pagamento`));
+      secoes.push(tab(['', 'Data', 'Descrição', '', '', 'Cliente', 'Forma', 'Valor', ''],
+        _titsForaExt.map(f => {
+          const x = f.x || {}, idT = fcEsc(String(x.id));
+          const btnFE = !x.id ? '' : f.haver
+            ? `<button class="fc-btn mini" title="Editar o crédito do cliente (forma, data, conta, valor)" onclick="event.stopPropagation();fcHaverForm('${idT}')">✎</button>`
+            : `<button class="fc-btn mini" title="Achou o pagamento? Corrija a forma (Pix que caiu direto no banco = Pix CNPJ): o título passa a somar na forma certa" onclick="event.stopPropagation();fcTitEditarAbrir('${idT}')">✎</button>`;
+          return `<tr data-fctitext="${idT}" style="opacity:.8"><td class="fc-td"></td>
+          <td class="fc-td" style="white-space:nowrap">${_dataTit(f)}</td>
+          <td class="fc-td">📄 ${f.haver ? 'Crédito (haver) gerado' : 'Título recebido'} <span style="color:#f59e0b;font-size:0.72rem">sem transação no extrato${f.haver ? '' : ' · continua baixado no Faturar'}</span></td>
+          <td class="fc-td">—</td><td class="fc-td fc-r">—</td>
+          <td class="fc-td">${fcEsc(x.cliente_nome || x.pessoa_nome || '') || '—'}</td>
+          <td class="fc-td">${fcEsc(_fcRotForma(String(x.forma || ''), '', '')) || '—'}</td>
+          <td class="fc-td fc-r" style="text-decoration:line-through;color:#8aa">${fcMoney(f.dinheiro)}</td>
+          <td class="fc-td" style="width:84px;white-space:nowrap">${btnFE}</td></tr>`;
+        }),
+        `<tr><td class="fc-td" colspan="7"><b>Fora do extrato</b></td><td class="fc-td fc-r" colspan="2"><b>${fcMoney(totFE)}</b></td></tr>`));
+    }
+
     // Σ TOTAIS POR FORMA — nó inteiro (fila + cupons + manuais), sem o filtro
     {
       const totais = {};
@@ -4034,7 +4077,7 @@ function fcNodeMov(tipo) {
     const linhas = ts.map(x => {
       const tds = `<td class="fc-td">${_fcData(x.data_recebimento)}</td>
       <td class="fc-td">${fcEsc(x.cliente_nome) || '—'}</td>
-      <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}${x._fora_caixa ? ' <span style="color:#f59e0b;font-size:0.72rem" title="Tirado do recebido desta forma neste caixa (✖): o título continua baixado e o valor entra como falta até achar o pagamento. ✎ corrige a forma; ↩ devolve.">✖ fora do recebido — falta do caixa</span>' : ''}</td>
+      <td class="fc-td">${fcEsc(x.forma) || '—'}${x._na_frota ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Casou com um lançamento manual do balão Cartão Frota: o valor já está lá e não soma de novo">✓ já no Cartão Frota</span>' : ''}${x._fora_caixa ? ' <span style="color:#f59e0b;font-size:0.72rem" title="Tirado do recebido desta forma neste caixa (✖): o título continua baixado e o valor entra como falta até achar o pagamento. ✎ corrige a forma; ↩ devolve.">✖ fora do recebido — falta do caixa</span>' : ''}${x._no_extrato ? ' <span style="color:#7ea8d8;font-size:0.72rem" title="Caixa trocado pelo extrato da maquininha: este título casou com uma transação do extrato, o valor já está no Cartão + Pix e não soma de novo">✓ já no extrato</span>' : ''}${x._fora_extrato ? ' <span style="color:#f59e0b;font-size:0.72rem" title="Caixa trocado pelo extrato da maquininha: nenhuma transação do extrato casa com este título, então ele não soma no Cartão + Pix (que fica igual ao extrato). O título continua baixado; o valor é diferença do caixa até achar o pagamento. Se o Pix caiu direto no banco, ✎ e troque a forma para Pix CNPJ.">🏦 sem transação no extrato — não soma no Cartão + Pix</span>' : ''}</td>
       <td class="fc-td fc-r" style="color:#8aa">${fcMoney(x.valor)}</td>
       <td class="fc-td fc-r">${(Number(x.juros || 0) || Number(x.desconto || 0)) ? '+' + fcMoney(x.juros) + ' / -' + fcMoney(x.desconto) : '—'}</td>
       <td class="fc-td fc-r"><b>${fcMoney(_fcTitLiq(x))}</b></td>`;
@@ -5940,6 +5983,11 @@ function _fcTemLoteExtrato() {
     c && c.ajuste && c.ajuste.extrato_lote && c.ajuste.turno_ref === t);
 }
 
+// extrato exato (v186): no caixa trocado pelo extrato, o Cartão + Pix é SÓ o extrato — título ou crédito recebido em cartão/Pix
+// (formas da maquininha) não soma na forma, casando ou não com uma transação. A baixa do título não tem nada com isso.
+// Vale para a substituição feita a partir da v186 (as linhas do extrato levam ajuste.extrato_exato).
+function _fcExtratoExato(trocado, grupo) { return !!trocado && (grupo === 'cartao' || grupo === 'pix'); }
+
 // lançamentos de cartão/Pix do turno que serão substituídos
 // LÊ DO BANCO, não da memória: o _fcConf do navegador fica velho entre a
 // inclusão de um lançamento e a substituição, e foi assim que 5 lançamentos
@@ -6084,6 +6132,9 @@ async function fcExtratoSubstituir() {
   const atual = alvos.reduce((s, a) => s + a.valor, 0);
   const novo = ext.reduce((s, r) => s + Number(r.valor || 0), 0);
   const refazendo = _fcTemLoteExtrato();
+  // extrato exato (v186): títulos/créditos recebidos em cartão/Pix neste caixa deixam de somar no Cartão + Pix
+  const titsMaq = (d0._titFora || []).filter(f => _fcExtratoExato(true, f.g));
+  const titsMaqV = titsMaq.reduce((s, f) => s + Number(f.dinheiro || 0), 0);
 
   if (!confirm(
     (refazendo ? 'REFAZER a substituição pelo extrato?' : 'SUBSTITUIR os lançamentos de cartão/Pix pelo extrato?') + N2
@@ -6091,6 +6142,9 @@ async function fcExtratoSubstituir() {
     + 'e entra uma linha por transação do extrato. O caixa fica igual ao extrato.' + N2
     + 'Sai do caixa : ' + fcMoney(atual) + '  (' + alvos.length + ' lançamento(s))' + N1
     + 'Entra extrato: ' + fcMoney(novo) + '  (' + ext.length + ' transação(ões))' + N2
+    + (titsMaq.length ? 'Título(s) recebido(s) em cartão/Pix: ' + fcMoney(titsMaqV) + '  (' + titsMaq.length + ')' + N1
+      + 'Não somam mais no Cartão + Pix: fica só o extrato. A BAIXA NÃO MUDA: a nota/fatura' + N1
+      + 'continua paga e o valor continua em Títulos Recebidos.' + N2 : '')
     + 'O DINHEIRO não é tocado (o extrato da maquininha não conhece espécie).' + N2
     + 'Nada é apagado de verdade: dá para desfazer depois.')) return;
 
@@ -6136,7 +6190,7 @@ async function fcExtratoSubstituir() {
         bandeira: r.bandeira || null,
         descricao: '🏦 extrato ' + (r.origem || 'maquininha') + (Number(r.parcelas || 1) > 1 ? ' · ' + r.parcelas + 'x' : ''),
         recebido_em: r.recebido_em || null,
-        extrato_lote: lote, turno_ref: turnoId,
+        extrato_lote: lote, turno_ref: turnoId, extrato_exato: true,
       },
     });
   });
