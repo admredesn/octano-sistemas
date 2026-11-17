@@ -347,7 +347,7 @@ async function moduloNfeCupons() {
           </div>
           <div class="ncup-filtros">
             <div><label>Forma de pagamento</label><select id="ncup-forma" onchange="ncupFiltrar()"><option value="">Todas</option></select></div>
-            <div style="min-width:220px"><label>Produto</label><select id="ncup-prod" onchange="ncupFiltrar()" style="max-width:320px"><option value="">Todos</option></select></div>
+            <div style="min-width:220px"><label>Produto</label><input id="ncup-prod" list="ncup-prod-lista" autocomplete="off" style="width:320px;box-sizing:border-box" placeholder="Todos — digite: diesel, s10, arla…" title="Digite parte do nome (diesel, s500, 7891344…): mostra os cupons que têm um produto com essas palavras. Esc limpa." value="${_ncupEsc(st.prod || "")}"><datalist id="ncup-prod-lista"></datalist></div>
             <div><label>Valor (R$)</label><input id="ncup-valor" autocomplete="off" inputmode="decimal" style="width:170px" placeholder="50,09 · 50 · 40 a 60" title="50,09 = exatamente esse valor · 50 = de 50,00 a 50,99 · 40 a 60 = a faixa. Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.valor || "")}"></div>
             <div><label>Nº do cupom</label><input id="ncup-num" autocomplete="off" inputmode="numeric" style="width:170px" placeholder="16276 · 16270 a 16278" title="Um número, vários separados por vírgula ou espaço, ou uma faixa (16270 a 16278). Enter marca o cupom quando sobra um só." value="${_ncupEsc(st.num || "")}"></div>
             <div style="align-self:center;padding-top:16px"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;color:#aaa;font-size:0.8rem;margin:0"><input id="ncup-ja" type="checkbox" onchange="ncupFiltrar()" ${st.mostrarJa ? "checked" : ""}> mostrar os que já viraram NF-e</label></div>
@@ -367,6 +367,9 @@ async function moduloNfeCupons() {
   cli.addEventListener("input", () => { st.cliSel = null; clearTimeout(st.sugT); st.sugT = setTimeout(_ncupSugerir, 250); });
   cli.addEventListener("keydown", _ncupSugTecla);
   cli.addEventListener("blur", () => setTimeout(() => { const b = document.getElementById("ncup-sug"); if (b) b.style.display = "none"; }, 200));
+  const prod = document.getElementById("ncup-prod");   // Enter fica com a lista de sugestões; Esc limpa
+  prod.addEventListener("input", () => { clearTimeout(st.valT); st.valT = setTimeout(ncupFiltrar, 200); });
+  prod.addEventListener("keydown", e => { if (e.key === "Escape") { prod.value = ""; ncupFiltrar(); } });
   ["ncup-valor", "ncup-num"].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener("input", () => { clearTimeout(st.valT); st.valT = setTimeout(ncupFiltrar, 200); });
@@ -552,17 +555,20 @@ function _ncupMontarFiltros() {
     _ncupFormas(v).forEach(c => formas.add(c));
     (Array.isArray(v.itens) ? v.itens : []).forEach(it => { if (it.desc) prods.add(String(it.desc)); });
   });
-  const sf = document.getElementById("ncup-forma"), sp = document.getElementById("ncup-prod");
+  const sf = document.getElementById("ncup-forma"), sp = document.getElementById("ncup-prod-lista");
   if (sf) {
     const atual = st.forma || "";
     sf.innerHTML = '<option value="">Todas</option>' + Array.from(formas).sort()
       .map(c => `<option value="${_ncupEsc(c)}"${c === atual ? " selected" : ""}>${_ncupEsc(c)}</option>`).join("");
   }
-  if (sp) {
-    const atual = st.prod || "";
-    sp.innerHTML = '<option value="">Todos</option>' + Array.from(prods).sort()
-      .map(p => `<option value="${_ncupEsc(p)}"${p === atual ? " selected" : ""}>${_ncupEsc(p)}</option>`).join("");
-  }
+  // produto: campo de texto com sugestões (antes era <select>, que não pesquisa ao digitar)
+  if (sp) sp.innerHTML = Array.from(prods).sort().map(p => `<option value="${_ncupEsc(p)}"></option>`).join("");
+}
+// produto digitado: cada palavra tem que aparecer no nome de um mesmo item (sem acento, maiúsc./minúsc. tanto faz)
+function _ncupProdOk(v, txt) {
+  const pal = _ncupNorm(txt).split(" ").filter(Boolean);
+  if (!pal.length) return true;
+  return (Array.isArray(v.itens) ? v.itens : []).some(it => { const d = _ncupNorm(it.desc); return pal.every(p => d.includes(p)); });
 }
 
 // cupom coberto por NF-e: de produção sempre; de homologação só quando o posto ainda emite NF-e em homologação
@@ -638,7 +644,7 @@ function _ncupVisiveis(semBusca) {
   const fx = semBusca ? null : _ncupFaixa(st.valor), fn = semBusca ? null : _ncupNumeros(st.num);
   return (st.vendas || []).filter(v => {
     if (st.forma && !_ncupFormas(v).includes(st.forma)) return false;
-    if (st.prod && !(Array.isArray(v.itens) ? v.itens : []).some(it => String(it.desc || "") === st.prod)) return false;
+    if (!semBusca && st.prod && !_ncupProdOk(v, st.prod)) return false;
     if (fx && !fx.erro) { const n = Number(v.valor_total || 0); if (n < fx.min - 0.005 || n > fx.max + 0.005) return false; }
     if (fn && !fn.erro) { const n = Number(v.numero); if (fn.lista ? !fn.lista.has(n) : (n < fn.min || n > fn.max)) return false; }
     if (!st.mostrarJa && _ncupNfeDo(v)) return false;
@@ -753,7 +759,7 @@ function _ncupResumo() {
   if (docs.length > 1) aviso = ` <span style="color:#f87171">· cupons de ${docs.length} clientes diferentes: uma NF-e é de um cliente só</span>`;
   else if (sel.length > _NCUP_MAX_REFS) aviso = ` <span style="color:#f87171">· no máximo ${_NCUP_MAX_REFS} cupons por NF-e</span>`;
   const vis = new Set(_ncupVisiveis().map(v => v.id)), fora = sel.filter(v => !vis.has(v.id)).length;
-  if (fora) aviso += ` <span style="color:#93c5fd">· ${fora} marcado(s) fora da lista (busca por valor / nº)</span>`;
+  if (fora) aviso += ` <span style="color:#93c5fd">· ${fora} marcado(s) fora da lista (busca por produto / valor / nº)</span>`;
   r.innerHTML = `<b style="color:#e0e0e0">${sel.length}</b> cupom(ns) escolhido(s) · <b style="color:#4ade80">R$ ${_ncupMoney(tot)}</b>${aviso}`;
   b.disabled = docs.length > 1 || sel.length > _NCUP_MAX_REFS;
 }
