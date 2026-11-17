@@ -331,6 +331,9 @@ async function moduloNfeCupons() {
       .ncup-ed td{padding:4px 6px;border-bottom:1px solid #1a1d2e;color:#ddd}
       .ncup-ed input{width:100%;box-sizing:border-box;padding:4px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem;text-align:right;font-variant-numeric:tabular-nums}
       .ncup-ed tr.ncup-manual td:first-child{color:#93c5fd}
+      #ncup-placas tbody tr:focus-within td{background:#16304a}
+      #ncup-placas input.ncup-pl-marca{cursor:pointer;accent-color:#3b82f6}
+      #ncup-placas input.ncup-pl-marca:focus{outline:2px solid #60a5fa;outline-offset:2px}
       .ncup-ajuste{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px}
       .ncup-ajuste label{display:block;font-size:0.72rem;color:#888;margin-bottom:3px}
       .ncup-ajuste input,.ncup-ajuste select{padding:6px 8px;border-radius:6px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.82rem}
@@ -899,7 +902,9 @@ function _ncupPlacaAplicar() {
   _ncupPlacaQtd();
   _ncupDesconfirmarEmissao();
   _ncupMsg(`${entrega ? "Local" : "Placa"} ${_ncupEsc(val)} aplicad${entrega ? "o" : "a"} em ${marcados.length} cupom(ns).`, "#4ade80");
-  if (inp) inp.select();
+  // volta para a lista, no cupom onde estava (segue com ↑/↓ e espaço)
+  const volta = document.querySelectorAll("#ncup-placas input.ncup-pl-marca")[window._ncup.plUltima || 0];
+  if (volta) { volta.focus(); volta.closest("tr").scrollIntoView({ block: "nearest" }); } else if (inp) inp.select();
 }
 function _ncupMsg(html, cor) { const el = document.getElementById("ncup-msg"); if (el) { el.style.color = cor || "#aaa"; el.innerHTML = html; } }
 
@@ -1001,8 +1006,24 @@ async function ncupAbrirEmissao() {
   }));
   // marcar cupons (um a um — sem "marcar todos") e aplicar a mesma placa/local nos marcados: botão, Enter no campo ou F1
   m.querySelectorAll("input.ncup-pl-marca").forEach(c => c.addEventListener("change", _ncupPlacaQtd));
+  // teclado (17/11, Ronan): ↑/↓ andam de cupom em cupom pela caixinha, espaço marca; F1 vai ao campo da placa, Enter aplica
+  // e volta para o cupom onde estava; ↓ no campo da placa volta para a lista
+  st.plUltima = 0;
+  const marcas = Array.from(m.querySelectorAll("input.ncup-pl-marca"));
+  marcas.forEach((c, i) => {
+    c.addEventListener("focus", () => { st.plUltima = i; });
+    c.addEventListener("keydown", e => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      const alvo = marcas[i + (e.key === "ArrowDown" ? 1 : -1)];
+      if (alvo) { alvo.focus(); alvo.closest("tr").scrollIntoView({ block: "nearest" }); }
+    });
+  });
   const plv = document.getElementById("ncup-pl-valor");
-  if (plv) plv.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); _ncupPlacaAplicar(); } });
+  if (plv) plv.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); _ncupPlacaAplicar(); }
+    else if (e.key === "ArrowDown" && marcas.length) { e.preventDefault(); const c = marcas[st.plUltima] || marcas[0]; c.focus(); c.closest("tr").scrollIntoView({ block: "nearest" }); }
+  });
   if (!window._ncupF1) {
     window._ncupF1 = true;
     document.addEventListener("keydown", e => {
