@@ -1546,6 +1546,55 @@ function _fcToast(msg) {
   t._tm = setTimeout(() => { t.style.opacity = '0'; setTimeout(() => { t.style.display = 'none'; }, 350); }, 2200);
 }
 
+// aviso com OK (v182) — 17/11/2026, Ronan (Florestal caixa 1234): "quando clico em salvar observação dentro do caixa aparece
+// apenas esse balão [...] queria que aparecesse uma aba confirmando [...] mas que eu tivesse que clicar ok para ela sair".
+// O balão verde (_fcToast) some sozinho em 2 s, no alto da tela, longe do campo: passava despercebido. Este fica no meio,
+// na frente de tudo, até o OK. Enter, Espaço e Esc também fecham (o botão nasce com o foco); clicar FORA não fecha.
+// Fecha ao SOLTAR a tecla e ignora tecla presa: quem salvou segurando o Enter não fecha o aviso sem ver, nem salva de novo.
+// Enquanto está aberto, as teclas não chegam na tela de trás (F9/F10 do balão, Ctrl+K, setas do caixa).
+function _fcAvisoOk(titulo, detalhe) {
+  return new Promise(resolve => {
+    const velho = document.getElementById('fc-aviso-ok');
+    if (velho && velho._fechar) velho._fechar();
+    const antes = document.activeElement;
+    const m = document.createElement('div'); m.id = 'fc-aviso-ok';
+    m.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center';
+    m.innerHTML = '<div role="alertdialog" aria-modal="true" aria-labelledby="fc-aviso-ok-tit" style="background:#13151f;'
+      + 'border:1px solid #2a5a3a;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.6);padding:22px 28px 18px;'
+      + 'min-width:300px;max-width:min(460px,90vw);text-align:center">'
+      + `<div id="fc-aviso-ok-tit" style="color:#7be0a0;font-weight:700;font-size:1.05rem">${fcEsc(titulo)}</div>`
+      + (detalhe ? `<div style="color:#aeb9c7;font-size:0.82rem;margin-top:8px;white-space:pre-line">${fcEsc(detalhe)}</div>` : '')
+      + '<button type="button" id="fc-aviso-ok-btn" style="margin-top:18px;min-width:120px;padding:8px 18px;font-size:0.9rem;'
+      + 'font-weight:700;background:#f97316;color:#fff;border:1px solid #f97316;border-radius:6px;cursor:pointer">OK</button></div>';
+    let armada = null;
+    const fecha = k => k === 'Enter' || k === 'Escape' || k === ' ';
+    const baixou = (ev) => {
+      if (ev.key === 'F5' || ev.key === 'F12') return;          // do navegador: seguem valendo
+      ev.stopImmediatePropagation(); ev.preventDefault();
+      if (!ev.repeat && fecha(ev.key)) armada = ev.key;
+    };
+    const soltou = (ev) => {
+      if (ev.key === 'F5' || ev.key === 'F12') return;
+      ev.stopImmediatePropagation(); ev.preventDefault();
+      if (armada !== null && ev.key === armada) fechar();
+    };
+    const fechar = () => {
+      document.removeEventListener('keydown', baixou, true);
+      document.removeEventListener('keyup', soltou, true);
+      m.remove();
+      try { if (antes && antes.focus && document.contains(antes)) antes.focus(); } catch (e) {}
+      resolve();
+    };
+    m._fechar = fechar;
+    document.addEventListener('keydown', baixou, true);
+    document.addEventListener('keyup', soltou, true);
+    document.body.appendChild(m);
+    const b = m.querySelector('#fc-aviso-ok-btn');
+    b.onclick = fechar;
+    b.focus();
+  });
+}
+
 function _fcEstadoCx(t) {
   if (String((t && t.status) || '').toLowerCase() !== 'fechado') return 'ABERTO';
   return t.conferido_em ? 'FECHADO' : 'A CONFERIR';
@@ -5360,6 +5409,7 @@ function fcModalFechar() {
 }
 async function fcSalvarObs() {
   const turnoId = window._fcTurnoAtual; const txt = document.getElementById('fc-obs')?.value || '';
+  let num = '';
   try {
     const { error } = await sb.from('oct_pdv_turnos').update({ observacao: txt }).eq('id', turnoId);
     if (error) throw error;
@@ -5367,8 +5417,10 @@ async function fcSalvarObs() {
     delete (window._fcObsRasc || {})[turnoId];
     const tc = (((window._fcCache || {}).turnos) || []).find(x => x.id === turnoId);
     if (tc) tc.observacao = txt;
-    _fcToast('✔ Observação salva');
-  } catch (e) { alert('Não foi possível salvar a observação: ' + ((e && e.message) || e) + '\nO texto continua no campo.'); }
+    num = tc && tc.numero != null ? String(tc.numero) : '';
+  } catch (e) { alert('Não foi possível salvar a observação: ' + ((e && e.message) || e) + '\nO texto continua no campo.'); return; }
+  // salvou: aviso com OK (v182) — fica na tela até o OK (antes era o balão verde, que sumia sozinho)
+  await _fcAvisoOk('✔ Observação salva', [num ? 'Caixa ' + num : '', txt.trim() ? '' : 'A observação ficou em branco.'].filter(Boolean).join(String.fromCharCode(10)));
 }
 
 // confirma a conferência de caixa físico e persiste no turno (esperado, diferença,
