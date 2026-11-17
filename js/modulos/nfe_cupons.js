@@ -934,6 +934,13 @@ async function ncupAbrirEmissao() {
     if (b && !b.disabled) b.textContent = `Emitir NF-e em ${prod ? "PRODUÇÃO" : "HOMOLOGAÇÃO"}`;
     _ncupMsg("");
   }));
+  // Enter no campo placa/local pula para o da linha de baixo (17/11, Ronan); na última, vai para as Observações
+  m.querySelectorAll("input.ncup-placa").forEach((el, i, todos) => el.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const prox = todos[i + 1] || document.getElementById("ncup-obs");
+    if (prox) { prox.focus(); if (prox.select) prox.select(); }
+  }));
   // Placa × Entrega: o campo ao lado vira placa (8, maiúsculas) ou local/tanque da entrega (texto)
   m.querySelectorAll("select.ncup-ident-tipo").forEach(s => s.addEventListener("change", () => {
     const i = Array.from(m.querySelectorAll("input.ncup-placa")).find(x => x.dataset.id === s.dataset.id);
