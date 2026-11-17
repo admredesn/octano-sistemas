@@ -2061,6 +2061,14 @@ async function fcLancIncluirSalvar(secao) {
   const refId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
   // nota a prazo com cliente do cadastro: vira TÍTULO no Faturar (antes ficava só no F.Caixa)
   if (secao === 'prazo' && ajuste.cliente_id) {
+    // DUPLICIDADE (17/11/2026, Bread Life: notinha de R$ 1.213,82 digitada à mão no caixa 1188 era a MESMA venda do cupom
+    // 178 já cobrada na fatura 101): se o cliente já tem título ou cupom parecido nesses dias, pergunta antes
+    try {
+      const dup = await _fcNpDuplicadas(window._fcTurnoAtual, ajuste.cliente_id, Number(ajuste.valor || 0));
+      if (dup.length && !confirm('ATENÇÃO — pode ser lançamento em dobro.' + N2 + 'Já existe para ' + (ajuste.cliente_nome || 'este cliente')
+        + ' nesses dias:' + N2 + dup.slice(0, 8).map(x => '• ' + x).join('\n') + N2
+        + 'Se for a mesma venda, NÃO lance de novo (a fatura cobraria duas vezes).' + N2 + 'Continuar mesmo assim?')) return;
+    } catch (e) { /* sem a conferência não trava o lançamento */ }
     try { ajuste.titulo_id = await _fcTituloDoManual(window._fcTurnoAtual, ajuste); }
     catch (e) { alert('Não consegui criar o título no Faturar: ' + (e.message || e) + N2 + 'Nada foi lançado.'); return; }
   }
@@ -5611,6 +5619,31 @@ async function _fcRespSalvar(turnoId, dif) {
 // NOTA A PRAZO lançada à mão vira TÍTULO (29/10/2026, Ronan: "criei uma notinha do geraldo sebastiao que não estava
 // dentro do octano, e ela não foi para fatura"): o ✍ ficava só no F.Caixa e o Faturar lê oct_pdv_notas_prazo. Data =
 // a do caixa. A observação NÃO leva "do TecnoX": o F.Caixa soma só o ✍ (o título não entra em rec.prazo de novo).
+// títulos e cupons do MESMO cliente, de um dia antes a um dia depois do caixa, com valor parecido (até 2% ou R$ 1,00)
+async function _fcNpDuplicadas(turnoId, clienteId, valor) {
+  const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
+  const base = new Date(t.aberto_em || Date.now()).getTime();
+  const de = new Date(base - 86400000).toISOString(), ate = new Date(new Date(t.fechado_em || t.aberto_em || Date.now()).getTime() + 86400000).toISOString();
+  const tol = Math.max(1, Math.abs(valor) * 0.02);
+  const perto = v => Math.abs(Number(v || 0) - valor) <= tol;
+  const dh = s => { try { return new Date(s).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+  const out = [];
+  const { data: ts } = await sb.from('oct_pdv_notas_prazo').select('numero_nfe,valor,valor_original,registrado_em,status,fatura_id')
+    .eq('empresa_id', window._fcEmpresaId).eq('cliente_id', clienteId).gte('registrado_em', de).lte('registrado_em', ate).neq('status', 'cancelado');
+  (ts || []).filter(x => perto(x.valor) || perto(x.valor_original)).forEach(x =>
+    out.push('título R$ ' + fcMoney(x.valor) + (x.numero_nfe ? ' (cupom ' + x.numero_nfe + ')' : ' (sem cupom)') + ' de ' + dh(x.registrado_em)
+      + (x.status === 'faturado' ? ' — já está em fatura' : x.status === 'pago' ? ' — já pago' : '')));
+  const { data: p } = await sb.from('oct_pessoas').select('documento').eq('id', clienteId).maybeSingle();
+  const doc = String((p && p.documento) || '').replace(/\D/g, '');
+  let q = sb.from('oct_pdv_vendas').select('numero,valor_total,data_venda,status').eq('empresa_id', window._fcEmpresaId)
+    .gte('data_venda', de).lte('data_venda', ate).neq('status', 'cancelada');
+  const fmt = doc.length === 14 ? doc.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5')
+    : doc.length === 11 ? doc.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : '';
+  q = doc.length >= 11 ? q.or('cliente_id.eq.' + clienteId + ',cliente_cpf.eq.' + doc + (fmt ? ',cliente_cpf.eq."' + fmt + '"' : '')) : q.eq('cliente_id', clienteId);
+  const { data: vs } = await q;
+  (vs || []).filter(v => perto(v.valor_total)).forEach(v => out.push('cupom ' + v.numero + ' de R$ ' + fcMoney(v.valor_total) + ' em ' + dh(v.data_venda)));
+  return out;
+}
 async function _fcTituloDoManual(turnoId, a) {
   const t = ((window._fcCache || {}).turnos || []).find(x => x.id === turnoId) || {};
   const valor = Math.round(Number(a.valor || 0) * 100) / 100;

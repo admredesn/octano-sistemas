@@ -614,7 +614,9 @@ async function _fatNfeConfig(eid) {
   } catch (e) { /* sem parâmetros: homologação */ }
   return cfg;
 }
-async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
+// opc.incluir = { titulo_id: codigo_do_produto } (17/11/2026): títulos SEM CUPOM da fatura que o operador mandou incluir
+// na nota como item avulso — ver _fatNfSemCupomPerguntar
+async function fatGerarNfConsolidada(ids, titulosArg, silencioso, opc) {
   if (!podeOuAvisa('faturar.emitir_nfe')) return;
   // no lote quem manda no que aparece na tela e' a barra de progresso
   const recusa = (motivo) => {
@@ -678,10 +680,11 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     // bloco FATURA (cobr), data de saída, "Val. Aprox. Tributos (IBPT)" + "REFERENTE AOS CUPONS: ..." nas inf. compl.
     // O preço do item sai do VALOR (vProd / qCom): o cupom do TecnoX grava o preço da tabela (6,24) com o valor
     // cobrado de outro preço (25 L = 155,50) e a SEFAZ recusava (629: vProd ≠ vUnCom × qCom).
-    const cods = Array.from(new Set(vendas.flatMap(v => (Array.isArray(v.itens) ? v.itens : []).map(it => String(it.cod || "")).filter(Boolean))));
+    const cods = Array.from(new Set(vendas.flatMap(v => (Array.isArray(v.itens) ? v.itens : []).map(it => String(it.cod || "")).filter(Boolean))
+      .concat(Object.values((opc && opc.incluir) || {}).map(String))));
     const prodPorCod = {};
     if (cods.length) {
-      const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,cest,unidade,origem,cst_icms,aliq_icms_ad_rem,cod_anp,desc_anp,perc_bio").eq("empresa_id", eid).in("codigo", cods);
+      const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,cest,unidade,origem,cst_icms,aliq_icms_ad_rem,cod_anp,desc_anp,perc_bio,preco_venda_a").eq("empresa_id", eid).in("codigo", cods);
       (ps || []).forEach(p => { prodPorCod[String(p.codigo)] = p; });
     }
     // a fatura inteira? (todos os títulos dela) -> desconto por item + bloco FATURA
@@ -689,7 +692,7 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const fids = Array.from(new Set(titulos.map(t => t.fatura_id).filter(Boolean)));
     if (fids.length === 1 && titulos.every(t => t.fatura_id === fids[0])) {
       const [{ data: fx }, { data: tx }] = await Promise.all([
-        sb.from("oct_faturas").select("id,numero,vencimento,valor,desconto,desconto_regra,boleto_id,parcela_de,nfe_chave,nfe_numero").eq("id", fids[0]).maybeSingle(),
+        sb.from("oct_faturas").select("id,numero,vencimento,valor,desconto,acrescimo,desconto_regra,boleto_id,parcela_de,nfe_chave,nfe_numero").eq("id", fids[0]).maybeSingle(),
         sb.from("oct_pdv_notas_prazo").select("id").eq("fatura_id", fids[0]),
       ]);
       if (fx && !fx.parcela_de && (tx || []).length === titulos.length) fatura = fx;
@@ -697,6 +700,20 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     // em produção a nota vale: a fatura que já tem NF-e (do Octano ou anexada do TecnoX) não ganha outra
     if (prod && fatura && fatura.nfe_chave)
       throw new Error(`A fatura ${fatura.numero ?? ""} já tem a NF-e nº ${fatura.nfe_numero || String(fatura.nfe_chave).slice(25, 34)}. Uma fatura não leva duas NF-e valendo.`);
+    // FATURA, NOTA E BOLETO COM O MESMO VALOR (regra do Ronan, 17/11/2026 — Bread Life 211: título lançado à mão no
+    // F.Caixa, sem cupom, ficava fora da NF-e calado: fatura/boleto 11.497,94 × NF-e 10.284,12). Título sem cupom numa
+    // fatura inteira: a tela PERGUNTA — tirar da fatura ou incluir na nota (item avulso). No lote, não emite.
+    const incluir = (opc && opc.incluir) || {};
+    const semCupom = titulos.filter(t => !/^\d{44}$/.test(String(t.chave_nfe || "")));
+    const avulsos = semCupom.filter(t => incluir[t.id]);
+    if (fatura && semCupom.length > avulsos.length) {
+      const soma = semCupom.reduce((s, t) => s + Number(t.valor || 0), 0);
+      if (silencioso) return recusa(`Valores diferentes: ${semCupom.length} título(s) sem cupom (R$ ${_fatMoney(soma)}) ficariam fora da NF-e. Abra a fatura e decida: tirar da fatura ou incluir na nota.`);
+      await _fatNfSemCupomPerguntar(fatura, titulos, semCupom);
+      return { ok: false, erro: "aguardando decisão" };
+    }
+    if (fatura && Number(fatura.acrescimo || 0) > 0)
+      throw new Error(`A fatura tem acréscimo de R$ ${_fatMoney(fatura.acrescimo)}, que não entra na NF-e — fatura, nota e boleto têm de ter o mesmo valor. Tire o acréscimo da fatura (✎) ou ponha o valor nos títulos.`);
     // CUPOM QUE JÁ VIROU NF-e (26/10/2026: tela Cupom → NF-e do retaguarda, NF-e do PDV — oct_nfe_cupons): a fatura não
     // emite outra para ele (a mesma venda com duas NF-e)
     {
@@ -735,12 +752,30 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
         linhas.push({ cod: String(it.cod || ""), produto: it.desc || f.nome || "ITEM", qtd: q, total, f });
       });
     });
+    // títulos SEM CUPOM que o operador mandou incluir (17/11/2026): item avulso com o produto escolhido, valor = o do
+    // título, quantidade = valor ÷ preço de venda do cadastro (sem preço: 1). Sem referência de cupom (não há).
+    avulsos.forEach(t => {
+      const pc = prodPorCod[String(incluir[t.id])];
+      if (!pc) { semNcm.push(`produto ${incluir[t.id]} (título de R$ ${_fatMoney(t.valor)})`); return; }
+      const f = { ncm: pc.ncm, cest: pc.cest, unidade: pc.unidade, origem: pc.origem, cst_icms: pc.cst_icms, aliq_icms_ad_rem: pc.aliq_icms_ad_rem,
+                  cod_anp: pc.cod_anp, desc_anp: pc.desc_anp, perc_bio: pc.perc_bio };
+      if (!f.ncm) { semNcm.push(`${pc.nome} (título de R$ ${_fatMoney(t.valor)})`); return; }
+      const total = +Number(t.valor || 0).toFixed(2), preco = Number(pc.preco_venda_a || 0);
+      const qtd = preco > 0 ? Math.max(0.001, Math.round(total / preco * 1000) / 1000) : 1;
+      linhas.push({ cod: String(pc.codigo), produto: pc.nome || "ITEM", qtd, total, f });
+    });
     if (!linhas.length) throw new Error("Os cupons selecionados não têm itens em oct_pdv_vendas.");
     // antes o NCM vazio virava 2711.19.10 (GLP) calado: agora para e diz qual produto
     if (semNcm.length) throw new Error(`Item sem NCM no cadastro de produtos: ${semNcm.slice(0, 5).join("; ")}${semNcm.length > 5 ? "…" : ""}. Complete o NCM e gere de novo.`);
     // a NF-e tem de fechar com os cupons (títulos) que ela consolida
     const somaItens = +linhas.reduce((s, l) => s + l.total, 0).toFixed(2);
-    const somaTit = +titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || ""))).reduce((s, t) => s + Number(t.valor_original != null && Number(t.valor_original) > 0 ? t.valor_original : t.valor || 0), 0).toFixed(2);
+    const somaTit = +(titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || ""))).reduce((s, t) => s + Number(t.valor_original != null && Number(t.valor_original) > 0 ? t.valor_original : t.valor || 0), 0)
+      + avulsos.reduce((s, t) => s + Number(t.valor || 0), 0)).toFixed(2);
+    // a NF-e leva o cupom INTEIRO; título com saldo diferente do cupom (pago em parte antes) deixaria a fatura diferente da nota
+    if (fatura) {
+      const parciais = titulos.filter(t => /^\d{44}$/.test(String(t.chave_nfe || "")) && t.valor_original != null && Number(t.valor_original) > 0 && Math.abs(Number(t.valor_original) - Number(t.valor || 0)) >= 0.01);
+      if (parciais.length) throw new Error(`${parciais.length} título(s) desta fatura têm saldo diferente do cupom (${parciais.slice(0, 5).map(t => `${t.numero_nfe || "?"}: cupom R$ ${_fatMoney(t.valor_original)}, título R$ ${_fatMoney(t.valor)}`).join("; ")}). A NF-e leva o cupom inteiro e a fatura ficaria com outro valor — fatura, nota e boleto têm de ter o mesmo valor. Acerte os títulos antes.`);
+    }
     if (Math.abs(somaItens - somaTit) > 0.05)
       throw new Error(`Os itens dos cupons somam R$ ${_fatMoney(somaItens)} e os títulos R$ ${_fatMoney(somaTit)}. A NF-e não foi emitida — confira os cupons.`);
     // desconto da fatura repartido linha a linha (MESMA conta do PDF da fatura)
@@ -793,6 +828,12 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     const vOrig = +itens.reduce((s, i) => s + i.vProd, 0).toFixed(2);
     const vDescTot = +itens.reduce((s, i) => s + i.vDesc, 0).toFixed(2);
     const vLiq = +(vOrig - vDescTot).toFixed(2);
+    // última conferência da regra (17/11/2026): a NF-e da fatura inteira tem o MESMO valor da fatura (e do boleto)
+    if (fatura) {
+      const liqFat = +(Number(fatura.valor || 0) - Number(fatura.desconto || 0) + Number(fatura.acrescimo || 0)).toFixed(2);
+      if (Math.abs(vLiq - liqFat) >= 0.01)
+        throw new Error(`A NF-e daria R$ ${_fatMoney(vLiq)} e a fatura é R$ ${_fatMoney(liqFat)} — fatura, nota e boleto têm de ter o mesmo valor. A NF-e não foi emitida; confira os títulos da fatura.`);
+    }
 
     const empresa = {
       cnpj: (emp.cnpj || "").replace(/\D/g, ""), nome: emp.nome, ie: (emp.ie || "").replace(/\D/g, ""),
@@ -905,6 +946,124 @@ async function fatGerarNfConsolidada(ids, titulosArg, silencioso) {
     if (silencioso) return { ok: false, erro: String(e.message || e) };
     if (msg()) msg().innerHTML = `<span style="color:#f87171">Erro: ${_fatEsc(e.message || e)}</span><br><br><button class="fat-btn" onclick="_fatFechaModal()">Fechar</button>`;
   }
+}
+
+// TÍTULO SEM CUPOM NA FATURA (17/11/2026, regra do Ronan: fatura, nota e boleto com o MESMO valor; "se acontecer esse caso
+// da duplicidade o sistema deve me perguntar se eu quero continuar mesmo assim"). Duas saídas, as duas deixam os três iguais:
+//   ✂ tirar da fatura  -> os títulos voltam para Títulos em Aberto; a fatura baixa para o valor da nota; boleto trocado;
+//   ➕ incluir na nota -> cada título vira item avulso (produto escolhido); a nota sai com o valor da fatura.
+async function _fatNfSemCupomPerguntar(fatura, titulos, semCupom) {
+  window._fatSemCupom = { fatura, titulos, semCupom };
+  const soma = +semCupom.reduce((s, t) => s + Number(t.valor || 0), 0).toFixed(2);
+  const liq = +(Number(fatura.valor || 0) - Number(fatura.desconto || 0) + Number(fatura.acrescimo || 0)).toFixed(2);
+  const linhas = semCupom.slice().sort((a, b) => String(a.registrado_em || "").localeCompare(String(b.registrado_em || ""))).map(t =>
+    `<tr><td style="padding:4px 6px;white-space:nowrap">${_fatData(t.registrado_em)}</td><td style="padding:4px 6px;text-align:right;white-space:nowrap">R$ ${_fatMoney(t.valor)}</td>
+     <td style="padding:4px 6px;color:#aab;font-size:0.76rem">${_fatEsc(String(t.observacao || "—").slice(0, 140))}</td></tr>`).join("");
+  _fatModal(`
+    <div style="background:#13151f;color:#f87171;padding:12px 18px;font-weight:600;border-radius:12px 12px 0 0;display:flex;justify-content:space-between">
+      <span>⚠ Fatura ${_fatEsc(fatura.numero ?? "")} — título(s) sem cupom</span><span onclick="_fatFechaModal()" style="cursor:pointer">✕</span></div>
+    <div style="padding:18px;color:#cdd6e0;font-size:0.86rem" id="fsc-corpo">
+      <p style="margin:0 0 8px"><b>${semCupom.length}</b> título(s) desta fatura não têm cupom fiscal — <b>R$ ${_fatMoney(soma)}</b>.
+        A NF-e só leva cupons, então sairia com <b>R$ ${_fatMoney(+(liq - soma).toFixed(2))}</b> e a fatura é <b>R$ ${_fatMoney(liq)}</b>.</p>
+      <p style="margin:0 0 10px;color:#f0b45c">Fatura, nota e boleto têm de ter o mesmo valor. Confira antes: notinha digitada à mão de uma venda
+        que já foi cobrada é <b>lançamento em dobro</b> (caso Bread Life, 17/11).</p>
+      <div style="max-height:200px;overflow:auto;border:1px solid #2a2d3e;border-radius:6px">
+        <table style="width:100%;border-collapse:collapse;font-size:0.8rem">${linhas}</table></div>
+      <div id="fsc-acao" style="margin-top:14px;display:flex;flex-direction:column;gap:8px">
+        <button class="fat-btn azul" onclick="_fatNfSemCupomTirar()">✂ Tirar da fatura — fatura, boleto e nota ficam em R$ ${_fatMoney(+(liq - soma).toFixed(2))}</button>
+        <button class="fat-btn" style="background:#0e7490" onclick="_fatNfSemCupomEscolher()">➕ Continuar mesmo assim: incluir na nota (escolher o produto) — os três ficam em R$ ${_fatMoney(liq)}</button>
+        <button class="fat-btn" onclick="_fatFechaModal()">Cancelar — não emitir agora</button>
+      </div>
+      <div id="fsc-msg" style="margin-top:10px;font-size:0.8rem;min-height:1.2em"></div>
+    </div>`);
+}
+
+async function _fatNfSemCupomTirar() {
+  const c = window._fatSemCupom; if (!c) return;
+  if (!podeOuAvisa('faturar.alterar_fatura')) return;
+  const msg = document.getElementById("fsc-msg");
+  const soma = +c.semCupom.reduce((s, t) => s + Number(t.valor || 0), 0).toFixed(2);
+  const valorNovo = +(Number(c.fatura.valor || 0) - soma).toFixed(2);
+  const liqNovo = +(valorNovo - Number(c.fatura.desconto || 0) + Number(c.fatura.acrescimo || 0)).toFixed(2);
+  if (!confirm(`Tirar ${c.semCupom.length} título(s) (R$ ${_fatMoney(soma)}) da fatura ${c.fatura.numero ?? ""}?\n\n` +
+               `Eles voltam para Títulos em Aberto (se forem lançamento em dobro, exclua lá).\nA fatura passa a R$ ${_fatMoney(liqNovo)}` +
+               `; o boleto é trocado por um desse valor e depois sai a NF-e.`)) return;
+  msg.style.color = "#9aa"; msg.textContent = "Tirando da fatura...";
+  try {
+    const ids = c.semCupom.map(t => t.id);
+    const { error: e1 } = await sb.from("oct_pdv_notas_prazo").update({ fatura_id: null, status: "aberto" }).in("id", ids).eq("fatura_id", c.fatura.id);
+    if (e1) throw e1;
+    const { data: fa } = await sb.from("oct_faturas").select("observacoes").eq("id", c.fatura.id).single();
+    const hist = `${new Date().toLocaleString("pt-BR")}: tirado(s) ${ids.length} título(s) sem cupom (R$ ${_fatMoney(soma)}) para a fatura ficar igual à NF-e — por ${await _fatUsuario()}`;
+    const { error: e2 } = await sb.from("oct_faturas").update({
+      valor: valorNovo, alterado_por: await _fatUsuario(), alterado_em: new Date().toISOString(),
+      observacoes: ((fa && fa.observacoes) ? fa.observacoes + "\n" : "") + hist,
+      fatura_pdf_path: null, fatura_pdf_pedido_em: new Date().toISOString(),
+    }).eq("id", c.fatura.id);
+    if (e2) throw e2;
+    const { data: bs } = await sb.from("oct_boletos").select("id,nosso_numero,status,valor").eq("fatura_id", c.fatura.id)
+      .in("status", ["pendente", "registrado"]).order("criado_em", { ascending: false }).limit(1);
+    let avisoBol = "";
+    if (bs && bs[0] && Math.abs(Number(bs[0].valor) - liqNovo) >= 0.01) {
+      const e3 = await _fatBoletoDoValorNovo(c.fatura.id, bs[0], liqNovo);
+      avisoBol = e3 ? ` ⚠ O boleto NÃO foi trocado (${e3}) — troque antes de enviar.` : ` Boleto novo de R$ ${_fatMoney(liqNovo)} pedido ao banco.`;
+    }
+    msg.style.color = "#7ee2a0"; msg.textContent = `Fatura ajustada para R$ ${_fatMoney(liqNovo)}.${avisoBol} Emitindo a NF-e...`;
+    const resto = c.titulos.filter(t => !ids.includes(t.id));
+    window._fatSemCupom = null;
+    _fatInvalidar();
+    if (resto.length) await fatGerarNfConsolidada(null, resto);
+    else _fatFechaModal();
+  } catch (e) {
+    msg.style.color = "#f87171"; msg.textContent = "Erro: " + (e.message || e);
+  }
+}
+
+async function _fatNfSemCupomEscolher() {
+  const c = window._fatSemCupom; if (!c) return;
+  const box = document.getElementById("fsc-acao"), msg = document.getElementById("fsc-msg");
+  msg.style.color = "#9aa"; msg.textContent = "Carregando os produtos...";
+  const eid = window._fatEid;
+  const { data: ps } = await sb.from("oct_produtos").select("codigo,nome,ncm,preco_venda_a,tanque_id,ativo").eq("empresa_id", eid).not("ncm", "is", null).order("nome").limit(2000);
+  const prods = (ps || []).filter(p => p.ativo !== false && p.codigo);
+  // produto mais vendido nos cupons desta fatura (sugestão) e o que a observação do título disser ("produto: X")
+  const chaves = c.titulos.map(t => t.chave_nfe).filter(x => /^\d{44}$/.test(String(x || ""))).slice(0, 80);
+  const conta = {};
+  if (chaves.length) {
+    const { data: vs } = await sb.from("oct_pdv_vendas").select("itens").eq("empresa_id", eid).in("nfce_chave", chaves);
+    (vs || []).forEach(v => (Array.isArray(v.itens) ? v.itens : []).forEach(it => { const k = String(it.cod || ""); if (k) conta[k] = (conta[k] || 0) + Number(it.total || 0); }));
+  }
+  const top = Object.keys(conta).sort((a, b) => conta[b] - conta[a])[0] || "";
+  const comb = prods.filter(p => p.tanque_id), resto = prods.filter(p => !p.tanque_id);
+  const opcoes = sel => `<option value="">— escolha o produto —</option>` +
+    (comb.length ? `<optgroup label="Combustíveis">${comb.map(p => `<option value="${_fatEsc(p.codigo)}"${p.codigo === sel ? " selected" : ""}>${_fatEsc(p.nome)}${p.preco_venda_a ? " · R$ " + _fatMoney(p.preco_venda_a) : ""}</option>`).join("")}</optgroup>` : "") +
+    `<optgroup label="Outros">${resto.map(p => `<option value="${_fatEsc(p.codigo)}"${p.codigo === sel ? " selected" : ""}>${_fatEsc(p.nome)}</option>`).join("")}</optgroup>`;
+  const palpite = t => {
+    const m = /produto:\s*([^;|]+)/i.exec(String(t.observacao || ""));
+    if (m) { const n = _fatProdChave(m[1]); const p = prods.find(x => _fatProdChave(x.nome) === n); if (p) return p.codigo; }
+    return top;
+  };
+  box.innerHTML = `<p style="margin:0;color:#aab;font-size:0.8rem">Cada título vira um item da nota com o valor dele (quantidade = valor ÷ preço do cadastro).
+      Sem cupom, o item sai sem referência de cupom.</p>
+    <div style="max-height:220px;overflow:auto">${c.semCupom.map(t => `
+      <div style="display:flex;gap:8px;align-items:center;margin:4px 0">
+        <span style="min-width:150px;font-size:0.8rem">${_fatData(t.registrado_em)} · <b>R$ ${_fatMoney(t.valor)}</b></span>
+        <select class="fsc-prod" data-id="${_fatEsc(t.id)}" style="flex:1;padding:6px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#eee">${opcoes(palpite(t))}</select>
+      </div>`).join("")}</div>
+    <button class="fat-btn" style="background:#0e7490" onclick="_fatNfSemCupomIncluir()">➕ Incluir na nota e emitir</button>
+    <button class="fat-btn" onclick="_fatFechaModal()">Cancelar — não emitir agora</button>`;
+  msg.textContent = "";
+}
+
+async function _fatNfSemCupomIncluir() {
+  const c = window._fatSemCupom; if (!c) return;
+  const msg = document.getElementById("fsc-msg");
+  const map = {};
+  let falta = 0;
+  document.querySelectorAll("#fsc-acao select.fsc-prod").forEach(s => { if (s.value) map[s.dataset.id] = s.value; else { falta++; s.style.borderColor = "#f87171"; } });
+  if (falta) { msg.style.color = "#f87171"; msg.textContent = `Escolha o produto de ${falta} título(s).`; return; }
+  window._fatSemCupom = null;
+  await fatGerarNfConsolidada(null, c.titulos, false, { incluir: map });
 }
 
 // NF-e de PRODUÇÃO emitida pelo Octano -> arquivada na fatura (mesmos campos do 📎 Anexar NF-e, origem "octano").
@@ -1026,6 +1185,14 @@ async function fatBoleto(id) {
   }
   if (!fat.vencimento) {
     _fatBolCaixa(`<p style="color:#f59e0b">A fatura está sem vencimento — o boleto precisa de uma data.</p>`);
+    return;
+  }
+  // fatura, nota e boleto com o MESMO valor (regra do Ronan, 17/11/2026)
+  if (fat.nfe_chave && fat.nfe_valor != null && Math.abs(Number(fat.nfe_valor) - _fatLiquido(fat)) >= 0.01) {
+    _fatBolCaixa(`<p style="color:#f87171">Não dá para emitir: a fatura é de <b>R$ ${_fatMoney(_fatLiquido(fat))}</b> e a NF-e nº
+      ${_fatEsc(fat.nfe_numero || "")} é de <b>R$ ${_fatMoney(fat.nfe_valor)}</b>.</p>
+      <p style="font-size:0.8rem;color:#889;margin-top:8px">Fatura, nota e boleto têm de ter o mesmo valor. Acerte a fatura
+      (ou cancele a NF-e e gere de novo) antes do boleto.</p>`);
     return;
   }
 
@@ -1813,6 +1980,8 @@ async function fatEnviar(faturaId) {
     bol = (r.data || [])[0] || null;
   } catch (e) { /* sem boletos */ }
   const temBol = !!(bol && ["registrado", "liquidado"].includes(bol.status));
+  // fatura, nota e boleto com o MESMO valor (regra do Ronan, 17/11/2026) — o banco recusa o envio se não baterem
+  const dif = await _fatValoresDiferentes(f);
 
   const dest = _fatDestinos(cli);
   const email = dest.emails.join(", ");
@@ -1853,10 +2022,12 @@ async function fatEnviar(faturaId) {
       </select>
       ${(!email && !zap) ? `<p style="color:#f87171;font-size:0.8rem;margin-top:10px">
         O cliente não tem e-mail nem telefone no cadastro — não há para onde enviar.</p>` : ""}
+      ${dif ? `<p style="color:#f87171;font-size:0.82rem;margin-top:10px;background:#2a0f0f;border:1px solid #5a2a2a;border-radius:6px;padding:8px 10px">
+        ⛔ Não pode enviar — valores diferentes: <b>${_fatEsc(dif)}</b>.<br>Fatura, nota e boleto têm de ter o mesmo valor: acerte a fatura, o boleto ou a NF-e antes.</p>` : ""}
       <div id="fen-msg" style="font-size:0.8rem;min-height:18px;margin-top:8px;color:#f87171"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="fat-btn" style="flex:1" onclick="_fatFechaModal()">Cancelar</button>
-        <button class="fat-btn azul" style="flex:2" id="fen-ok" ${(!email && !zap) ? "disabled" : ""}
+        <button class="fat-btn azul" style="flex:2" id="fen-ok" ${(!email && !zap) || dif ? "disabled" : ""}
           onclick="fatEnviarOk('${faturaId}')">📤 Enviar agora</button>
       </div>
     </div>`);
@@ -3114,6 +3285,28 @@ Se ${taxa[baixo.k].toFixed(2).replace(".", ",")} é o DESCONTO por litro, cancel
   }
   if (desc > 0 && !obs && !confirm("Salvar o desconto sem escrever o motivo?")) return;
 
+  // FATURA, NOTA E BOLETO COM O MESMO VALOR (17/11/2026, regra do Ronan): mudar o valor da fatura que já tem NF-e não
+  // pode (a nota não muda — cancela e gera de novo); com boleto vivo, o boleto é trocado por um do valor novo.
+  const liqAntes = _fatLiquido(st.f);
+  let bolTrocar = null;
+  if (Math.abs(liq - liqAntes) >= 0.01) {
+    if (st.f.nfe_chave) {
+      msg.style.color = "#f87171";
+      msg.innerHTML = `Esta fatura já tem a NF-e nº ${_fatEsc(st.f.nfe_numero || String(st.f.nfe_chave).slice(25, 34))} de R$ ${_fatMoney(st.f.nfe_valor != null ? st.f.nfe_valor : liqAntes)}. ` +
+        `Com a alteração a fatura ficaria R$ ${_fatMoney(liq)} — fatura, nota e boleto têm de ter o mesmo valor. Para mudar o valor, cancele a NF-e e gere de novo.`;
+      return;
+    }
+    const { data: bs } = await sb.from("oct_boletos").select("id,nosso_numero,status,valor").eq("fatura_id", faturaId)
+      .in("status", ["pendente", "registrado", "liquidado"]).order("criado_em", { ascending: false }).limit(1);
+    const b = (bs || [])[0];
+    if (b && b.status === "liquidado") { msg.style.color = "#f87171"; msg.textContent = `O boleto ${b.nosso_numero || ""} desta fatura já foi pago (R$ ${_fatMoney(b.valor)}). O valor não pode mudar.`; return; }
+    if (b) {
+      if (!confirm(`O boleto ${b.nosso_numero || "(na fila)"} é de R$ ${_fatMoney(b.valor)}. Fatura e boleto têm de ter o mesmo valor:\n\n` +
+                   `${b.status === "registrado" ? "um boleto novo de R$ " + _fatMoney(liq) + " vai substituir o antigo (o antigo é baixado no banco)" : "o boleto da fila sai com R$ " + _fatMoney(liq)}.\n\nContinuar?`)) return;
+      bolTrocar = b;
+    }
+  }
+
   msg.style.color = "#9aa"; msg.textContent = "Salvando...";
   const patch = {
     vencimento: venc, desconto: desc, acrescimo: acr, observacao: obs, desconto_regra: regra,
@@ -3144,8 +3337,41 @@ Se ${taxa[baixo.k].toFixed(2).replace(".", ",")} é o DESCONTO por litro, cancel
     error = r2.error;
   }
   if (error) { msg.style.color = "#f87171"; msg.textContent = "Erro: " + error.message; return; }
+  if (bolTrocar) {
+    const e3 = await _fatBoletoDoValorNovo(faturaId, bolTrocar, liq);
+    if (e3) alert("A fatura foi salva, mas o boleto NÃO foi trocado: " + e3 + "\nTroque o boleto antes de enviar (o envio com valores diferentes é recusado).");
+  }
   _fatFechaModal();
   _fatRecarregar();
+}
+
+// boleto do valor novo da fatura (17/11/2026): na fila ('pendente') só acerta o valor (o gateway registra pelo líquido da
+// fatura); registrado = pedido novo que SUBSTITUI o antigo (o worker do gateway registra o novo e baixa o antigo no banco)
+async function _fatBoletoDoValorNovo(faturaId, b, liq) {
+  try {
+    if (b.status === "pendente") {
+      const { error } = await sb.from("oct_boletos").update({ valor: liq }).eq("id", b.id).eq("status", "pendente");
+      return error ? (error.message || String(error)) : null;
+    }
+    const { data: f } = await sb.from("oct_faturas").select("empresa_id,cliente_id,cliente_nome,vencimento").eq("id", faturaId).single();
+    const { error } = await sb.from("oct_boletos").insert({
+      empresa_id: f.empresa_id, fatura_id: faturaId, cliente_id: f.cliente_id, cliente_nome: f.cliente_nome,
+      valor: liq, vencimento: f.vencimento, status: "pendente", criado_por: await _fatUsuario(), substitui_nosso_numero: String(b.nosso_numero),
+    });
+    return error ? (error.message || String(error)) : null;
+  } catch (e) { return String(e.message || e); }
+}
+
+// FATURA, NOTA E BOLETO COM O MESMO VALOR (regra do Ronan, 17/11/2026). Devolve null quando batem; senão o texto com os
+// valores. O banco recusa o ENVIO com valores diferentes (gatilho trg_fatura_envio_valores); aqui a tela explica antes.
+async function _fatValoresDiferentes(f) {
+  const liq = _fatLiquido(f);
+  const { data: bs } = await sb.from("oct_boletos").select("valor,status,nosso_numero").eq("fatura_id", f.id)
+    .in("status", ["pendente", "registrado", "liquidado"]).order("criado_em", { ascending: false }).limit(1);
+  const bol = (bs || [])[0] ? Number(bs[0].valor) : null;
+  const nfe = f.nfe_chave ? Number(f.nfe_valor != null ? f.nfe_valor : liq) : null;
+  if ((bol == null || Math.abs(bol - liq) < 0.01) && (nfe == null || Math.abs(nfe - liq) < 0.01)) return null;
+  return `fatura R$ ${_fatMoney(liq)}` + (bol != null ? ` · boleto R$ ${_fatMoney(bol)}` : "") + (nfe != null ? ` · NF-e R$ ${_fatMoney(nfe)}` : "");
 }
 
 // redesenha a aba que esta' aberta (sem F5, sem perder o lugar)
@@ -3198,9 +3424,9 @@ async function _fatReconferir(status) {
 
   let bolPorFat = {};
   try {
-    const r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status")
-      .in("fatura_id", novas.map(x => x.id));
-    (r.data || []).forEach(b => { bolPorFat[b.fatura_id] = b; });
+    const r = await sb.from("oct_boletos").select("fatura_id,nosso_numero,status,valor,criado_em")
+      .in("fatura_id", novas.map(x => x.id)).order("criado_em");
+    (r.data || []).forEach(b => { if (b.status !== "cancelado" || !bolPorFat[b.fatura_id]) bolPorFat[b.fatura_id] = b; });
   } catch (e) { /* segue sem */ }
 
   window._fatFaturas = novas;
@@ -3764,6 +3990,14 @@ function _fatStatusCel(f, bol) {
     ? `<div style="font-size:9.5px;color:#f0b45c" title="Última em ${_fatData(f.cobrada_em)}">📣 ${f.cobrancas} cobrança(s)</div>` : "";
   const erro = f.envio_erro
     ? `<div style="font-size:9.5px;color:#f87171" title="${_fatEsc(f.envio_erro)}">⚠ última tentativa falhou</div>` : "";
+  // FATURA, NOTA E BOLETO COM O MESMO VALOR (regra do Ronan, 17/11/2026): a divergência aparece na lista
+  let difv = "";
+  if (f.status === "aberta") {
+    const liq = _fatLiquido(f), partes = [];
+    if (bol && ["pendente", "registrado"].includes(bol.status) && bol.valor != null && Math.abs(Number(bol.valor) - liq) >= 0.01) partes.push("boleto R$ " + _fatMoney(bol.valor));
+    if (f.nfe_chave && f.nfe_valor != null && Math.abs(Number(f.nfe_valor) - liq) >= 0.01) partes.push("NF-e R$ " + _fatMoney(f.nfe_valor));
+    if (partes.length) difv = `<div style="font-size:10px;font-weight:700;color:#fecaca;background:#7f1d1d;border-radius:4px;padding:1px 6px;margin-top:3px;display:inline-block" title="Fatura, nota e boleto têm de ter o mesmo valor — o envio é recusado até acertar">⚠ valores diferentes: fatura R$ ${_fatMoney(liq)} · ${partes.join(" · ")}</div>`;
+  }
   // ENVIO AUTOMATICO esperando documento (03/10/2026): o nucleo so' manda quando o que
   // foi marcado no cadastro estiver pronto -- a NF-e marcada espera ser anexada
   let auto = "";
@@ -3777,7 +4011,7 @@ function _fatStatusCel(f, bol) {
   return sel(temNf, "NF", "NF-e anexada à fatura") +
          sel(temBol, "BOL", temBol ? "Boleto " + _fatEsc(bol.nosso_numero || "") + " registrado" : "Sem boleto registrado") +
          sel(env, "ENV", env ? "Enviada por " + _fatEsc(f.enviada_por || "—") : "Ainda não enviada ao cliente") +
-         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + _fatBolSituacao(f, bol) + auto + cob + erro;
+         `<div style="font-size:10px;color:${cor};margin-top:2px">${rot}</div>` + difv + _fatBolSituacao(f, bol) + auto + cob + erro;
 }
 
 // PAGO OU NAO: a situacao que o BANCO confirmou (consulta do Sicoob de hora em
