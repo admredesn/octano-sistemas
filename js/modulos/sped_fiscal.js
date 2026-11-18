@@ -63,6 +63,17 @@ function _sfCorta(s, n) { return _sfTxt(s).slice(0, n).trim(); }
 // COD_VER do 0000 pelo ano do período: 020 vale de 01/2026 (Guia Prático 3.1.9 — e cria o campo 11 do 1310)
 function _sfVerDoAno(ano) { return ano >= 2026 ? "020" : ano === 2025 ? "019" : ano === 2024 ? "018" : "017"; }
 function _sfDia(iso) { return String(iso || "").slice(0, 10); }
+// ENDEREÇO DO POSTO NO 0005 (18/11/2026): o cadastro guarda tudo num campo só ("MAJOR NECA ANDRADE, 7",
+// "RUA ISRAEL PINHEIRO, 332, CENTRO II") e o 0005 saía com o número dentro do END, NUM = "S/N" e BAIRRO = "CENTRO" fixo.
+// Separa "logradouro, número[, bairro]"; sem número reconhecível fica S/N; sem bairro, CENTRO (como antes).
+function _sfEnderecoPartes(end, bairro) {
+  const p = String(end || "").split(",").map(x => x.trim()).filter(Boolean);
+  const lgr = p.shift() || "";
+  let num = "S/N";
+  const m = p.length ? p[0].match(/^(?:N[º°O.]?\s*)?(\d+[A-Z]?|S\/?N)$/i) : null;
+  if (m) { num = m[1].toUpperCase(); p.shift(); }
+  return { lgr, num, bairro: String(bairro || p.join(", ") || "CENTRO").trim() };
+}
 // NF-e (modelo 55) do Faturar / Cupom → NF-e: o oct_nfce não guarda os itens, só o XML autorizado. Lê itens (mesmo formato
 // dos cupons importados: cfop, CST de ICMS/PIS/COFINS) e o destinatário — sem DOMParser, para rodar também fora do navegador.
 function _spedXmlTag(x, t) { const m = String(x || "").match(new RegExp("<" + t + ">([^<]*)</" + t + ">")); return m ? m[1] : ""; }
@@ -180,6 +191,14 @@ function spedFiscalMontar(d) {
   const codMun = String(cfg.cod_mun || emp.c_mun || "").replace(/\D/g, "");
   if (!codMun) A.push("Sem código IBGE do município (sped_config.cod_mun) — o PVA vai recusar o 0000.");
   if (!ctd.nome) A.push("Dados do CONTADOR não preenchidos (registro 0100) — preencha e salve na tela.");
+  else {
+    // 0100 (18/11/2026): CPF e CRC do contabilista são obrigatórios no PVA; o AC saiu com o CRC igual ao CPF
+    const cCpf = String(ctd.cpf || "").replace(/\D/g, ""), cCrc = String(ctd.crc || "").trim(), cCnpj = String(ctd.cnpj || "").replace(/\D/g, "");
+    if (!cCpf) A.push("0100: falta o CPF do contador responsável (" + ctd.nome + ") — obrigatório no PVA. Preencha nos dados do contador.");
+    if (!cCrc) A.push("0100: falta o CRC do contador (" + ctd.nome + ") — obrigatório no PVA.");
+    if (cCpf && cCrc && cCrc.replace(/\D/g, "") === cCpf) A.push("0100: o CRC do contador está igual ao CPF dele — confira o número do CRC.");
+    if (!cCnpj && /\b(LTDA|EIRELI|S\/?A|ME|EPP|SOCIEDADE)\b/i.test(String(ctd.nome))) A.push("0100: o contador é um escritório (" + ctd.nome + ") mas o CNPJ do escritório está vazio.");
+  }
   // perfil B = o do posto no gabarito; COD_VER pelo ano do período (a tela pode forçar 018/019/020)
   const codVer = d.codVer || _sfVerDoAno(Number(String(d.dtIni || "").slice(0, 4)));
   L.push(`|0000|${codVer}|0|${dtIni}|${dtFim}|${_sfTxt(emp.nome)}|${cnpj}||${emp.uf || "MG"}|${ie}|${codMun}|||B|1|`);
@@ -188,7 +207,8 @@ function spedFiscalMontar(d) {
     if (semCap.length) A.push("Tanque(s) " + semCap.join(", ") + " sem capacidade no cadastro — o campo 11 do 1310 (CAP_TANQUE) é obrigatório no leiaute 020; preencha em Tanques.");
   }
   L.push("|0001|0|");
-  L.push(`|0005|${_sfCorta(emp.nome_fantasia || emp.nome, 60)}|${String(emp.cep || "").replace(/\D/g, "")}|${_sfCorta(emp.endereco || "", 60)}|S/N||${_sfCorta(emp.bairro || "CENTRO", 60)}|${String(emp.telefone || "").replace(/\D/g, "")}||${_sfTxt(emp.email || "")}|`);
+  const endP = _sfEnderecoPartes(emp.endereco, emp.bairro);
+  L.push(`|0005|${_sfCorta(emp.nome_fantasia || emp.nome, 60)}|${String(emp.cep || "").replace(/\D/g, "")}|${_sfCorta(endP.lgr, 60)}|${_sfCorta(endP.num, 10)}||${_sfCorta(endP.bairro, 60)}|${String(emp.telefone || "").replace(/\D/g, "")}||${_sfTxt(emp.email || "")}|`);
   L.push(`|0100|${_sfCorta(ctd.nome, 100)}|${String(ctd.cpf || "").replace(/\D/g, "")}|${_sfTxt(ctd.crc || "")}|${String(ctd.cnpj || "").replace(/\D/g, "")}|${String(ctd.cep || "").replace(/\D/g, "")}|${_sfCorta(ctd.endereco || "", 60)}|${_sfCorta(ctd.numero || "", 10)}||${_sfCorta(ctd.bairro || "", 60)}|${String(ctd.fone || "").replace(/\D/g, "")}||${_sfTxt(ctd.email || "")}|${String(ctd.cod_mun || codMun).replace(/\D/g, "")}|`);
 
   // participantes = fornecedores das entradas do período
