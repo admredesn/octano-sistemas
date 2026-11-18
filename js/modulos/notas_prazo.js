@@ -26,12 +26,21 @@ async function npListar() {
   ]);
   const clientes = cliRes.data || [];
   const _npCod = Object.fromEntries(clientes.filter(c => c.tecnox_cod != null).map(c => [c.id, c.tecnox_cod]));   // código do cliente (20/10/2026)
-  const notas = notasRes.data || [];
+  const todasNotas = notasRes.data || [];
+  // SEM FOTO (18/11/2026, Ronan: "toda a nota emitida a prazo obrigatoriamente tem que vir para o registro de nota a prazo,
+  // mesmo que fique escura e tenha um botão para adicionar a foto"): título sem foto da via assinada e sem assinatura no app
+  const _npSemFoto = n => !n.foto_url && !n.auth_codigo;
+  const qtdSemFoto = todasNotas.filter(_npSemFoto).length;
+  const notas = window._npSoSemFoto ? todasNotas.filter(_npSemFoto) : todasNotas;
 
   conteudo.innerHTML = `
     <div style="max-width:1100px;padding:18px 20px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
         <h2 style="color:#f97316">📄 Notas a Prazo</h2>
+        <label style="display:flex;align-items:center;gap:6px;color:${qtdSemFoto ? '#fbbf24' : '#888'};font-size:0.82rem;cursor:pointer">
+          <input type="checkbox" ${window._npSoSemFoto ? 'checked' : ''} onchange="window._npSoSemFoto=this.checked;npListar()">
+          Só sem foto (${qtdSemFoto})
+        </label>
         <div>
           <label style="color:#888;font-size:0.78rem;margin-right:6px">Cliente</label>
           <select onchange="npSetFiltro(this.value)" style="padding:8px;border-radius:6px;border:1px solid #2a2d3e;background:#0b0d14;color:#fff">
@@ -48,7 +57,7 @@ async function npListar() {
               ${n.foto_url ? `<img src="${npEsc(n.foto_url)}" data-foto="${npEsc(n.foto_url)}"
                 data-legenda="${npEsc([n.cliente_nome, 'R$ ' + Number(n.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }), d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), n.numero_nfe ? 'NFC-e ' + n.numero_nfe : ''].filter(Boolean).join('  ·  '))}"
                 onclick="verFoto(this.dataset.foto, this.dataset.legenda)"
-                style="width:100%;height:160px;object-fit:cover;cursor:zoom-in;display:block" title="Ver comprovante">` : (n.auth_codigo ? npCartaoAssinatura(n, d) : '<div style="height:160px;background:#0b0d14;display:flex;align-items:center;justify-content:center;color:#555">sem foto</div>')}
+                style="width:100%;height:160px;object-fit:cover;cursor:zoom-in;display:block" title="Ver comprovante">` : (n.auth_codigo ? npCartaoAssinatura(n, d) : npCartaoSemFoto(n))}
               <div style="padding:10px">
                 <div style="color:#ddd;font-weight:500;font-size:0.86rem">${_npCod[n.cliente_id] != null ? '<span style="color:#93c5fd">' + _npCod[n.cliente_id] + '</span> · ' : ''}${npEsc(n.cliente_nome) || '—'}</div>
                 <div style="color:#9aa;font-size:0.76rem;margin-top:3px">${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
@@ -140,6 +149,63 @@ function npFecharAssinatura() {
   const ov = document.getElementById('np-assinatura');
   if (ov) ov.remove();
   if (window._npAssinEsc) { document.removeEventListener('keydown', window._npAssinEsc); window._npAssinEsc = null; }
+}
+
+// ---- título SEM FOTO (18/11/2026): escuro, com o botão para anexar a foto da via assinada ----
+// Nasce assim quando a captura no caixa não aconteceu (núcleo fora do ar, posto sem câmera, foto que não subiu) — o banco
+// cria o título de toda venda a prazo (SQL-NOTA-PRAZO-SEMPRE-TITULO.sql) — e também na nota a prazo lançada no F.Caixa.
+function npCartaoSemFoto(n) {
+  const doSistema = /título criado pelo sistema/i.test(n.observacao || '');
+  return `<div style="height:160px;background:#07080c;border-bottom:1px dashed #3b3f5c;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:10px;text-align:center">
+      <div style="color:#fbbf24;font-size:0.72rem;letter-spacing:.06em;text-transform:uppercase">Sem foto do comprovante</div>
+      <div style="color:#778;font-size:0.72rem">${doSistema ? 'a captura no caixa não foi feita' : 'lançada sem a foto da via assinada'}</div>
+      <button type="button" onclick="npAnexarFoto('${npEsc(n.id)}')"
+        style="padding:8px 14px;border-radius:7px;border:1px solid #f97316;background:#1f1206;color:#fdba74;font-weight:600;cursor:pointer">📷 Anexar foto</button>
+    </div>`;
+}
+
+// reduz a foto do celular (até 1600 px, JPEG) antes de subir; se o navegador não conseguir, sobe o arquivo como veio
+async function _npReduzir(arq) {
+  try {
+    const bmp = await createImageBitmap(arq);
+    const lado = Math.max(bmp.width, bmp.height), f = lado > 1600 ? 1600 / lado : 1;
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(bmp.width * f); cv.height = Math.round(bmp.height * f);
+    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.85));
+    return blob || arq;
+  } catch (e) { return arq; }
+}
+
+function npAnexarFoto(id) {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const arq = inp.files && inp.files[0];
+    if (!arq) return;
+    if (!/^image\//.test(arq.type || '')) { alert('Escolha uma foto (imagem).'); return; }
+    try {
+      const { data: n, error: e0 } = await sb.from('oct_pdv_notas_prazo').select('id,empresa_id,cliente_id,observacao,foto_url').eq('id', id).maybeSingle();
+      if (e0 || !n) throw (e0 || new Error('título não encontrado'));
+      if (n.foto_url && !confirm('Este título já tem foto. Trocar pela nova?')) return;
+      const blob = await _npReduzir(arq);
+      const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+      const agora = new Date();
+      const path = `${n.empresa_id}/${n.cliente_id || 'sem-cliente'}/${agora.toISOString().replace(/[:.]/g, '-')}-retaguarda.${ext}`;
+      const up = await sb.storage.from('notas_prazo').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+      if (up.error) throw up.error;
+      const url = sb.storage.from('notas_prazo').getPublicUrl(path)?.data?.publicUrl || null;
+      const quando = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const obsBase = /título criado pelo sistema/i.test(n.observacao || '') ? '' : (n.observacao || '');
+      const obs = (obsBase ? obsBase + ' · ' : '') + 'Foto anexada na retaguarda em ' + quando + '.';
+      const { error: e1 } = await sb.from('oct_pdv_notas_prazo').update({ foto_url: url, foto_path: path, observacao: obs }).eq('id', id);
+      if (e1) throw e1;
+      await npListar();
+    } catch (e) {
+      alert('Não consegui anexar a foto: ' + ((e && e.message) || e));
+    }
+  };
+  inp.click();
 }
 
 function npSetFiltro(v) { window._npFiltroCliente = v; npListar(); }
