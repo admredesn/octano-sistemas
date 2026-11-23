@@ -1791,6 +1791,24 @@ if (!window._fcTeclasOk) {
   });
 }
 
+// F1 = INCLUIR (v188) — 23/11/2026, Ronan (➕ Incluir lançamento, balão Pix CNPJ): "Consegue vincular o botão de Incluir
+// SEMPRE ao botão F1?". Com a janela ➕ Incluir lançamento aberta (qualquer balão; no de Itens é a ➕ Lançar item vendido),
+// o F1 aperta o botão que grava — o que leva data-fc-f1. Vale com o cursor em qualquer campo. Tecla presa não repete e, com
+// o aviso de OK na frente, o F1 não passa. Com uma janela do F.Caixa aberta o F1 não abre a Ajuda do navegador, tenha ela
+// botão de F1 ou não (quem aperta uma vez a mais não ganha uma aba de ajuda).
+if (!window._fcF1Ok) {
+  window._fcF1Ok = true;
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'F1' || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+    const m = document.getElementById('fc-modal');
+    if (!m) return;                                    // fora das janelas do F.Caixa o F1 segue como era
+    ev.preventDefault();
+    if (ev.repeat || document.getElementById('fc-aviso-ok')) return;
+    const b = m.querySelector('[data-fc-f1]');
+    if (b && !b.disabled && b.getClientRects().length) b.click();
+  });
+}
+
 // INCLUIR lançamento manual na seção aberta (vira ref_tipo='manual' e SOMA no fechamento)
 // (19/08 — pedido Ronan): antes de digitar valor solto, PROCURA na pista os
 // abastecimentos do turno que ainda não viraram lançamento (fila/cupom) —
@@ -1966,7 +1984,7 @@ async function fcLancIncluir() {
       <input id="fcm-desc" class="fc-inp2 lg" style="width:100%">
       <div style="display:flex;gap:8px;margin-top:14px">
         <button class="fc-btn" onclick="fcModalFechar()">Cancelar</button>
-        <button class="fc-btn azul" style="flex:1" onclick="fcLancIncluirSalvar('${secao}')">💾 Incluir</button>
+        <button class="fc-btn azul" data-fc-f1="1" style="flex:1" onclick="fcLancIncluirSalvar('${secao}')">💾 Incluir (F1)</button>
       </div>
     </div>`);
   window._fcModalVolta = true;   // fechar sem salvar volta pra conferência
@@ -2049,6 +2067,13 @@ function fcmAbastToggle(radio, valor, desc) {
 function _fcSecaoAceitaNegativo(secao) { return secao === 'dinheiro' || secao === 'sangria'; }
 
 async function fcLancIncluirSalvar(secao) {
+  // F1 = INCLUIR (v188): uma gravação por vez — F1 ou clique repetido enquanto grava não inclui dois lançamentos
+  if (window._fcIncluindo) return;
+  window._fcIncluindo = true;
+  try { return await _fcLancIncluirSalvar(secao); }
+  finally { window._fcIncluindo = false; }
+}
+async function _fcLancIncluirSalvar(secao) {
   if (!podeOuAvisa('fcaixa.lanc_incluir')) return;
   const valor = parseFloat(document.getElementById('fcm-valor').value);
   if (isNaN(valor) || valor === 0) { alert('Informe o valor.'); return; }
@@ -5293,7 +5318,7 @@ async function fcItemVendidoForm() {
         </select>
         ${vends.length ? '' : '<div style="color:#a63;font-size:0.72rem;margin-top:3px">⚠ nenhum vendedor encontrado nos últimos 120 dias — o item entra sem comissão</div>'}
       </div>
-      <button class="fc-btn azul" style="width:100%;margin-top:14px" onclick="fcItemVendidoSalvar()">💾 Lançar</button>
+      <button class="fc-btn azul" data-fc-f1="1" style="width:100%;margin-top:14px" onclick="fcItemVendidoSalvar()">💾 Lançar (F1)</button>
       <div id="fciv-msg" style="margin-top:8px;font-size:0.78rem;color:#f87171"></div>
     </div>`);
 }
@@ -5306,6 +5331,13 @@ function fcIVPreco() {
 }
 
 async function fcItemVendidoSalvar() {
+  // F1 = INCLUIR (v188): uma gravação por vez, como no Incluir lançamento
+  if (window._fcIncluindo) return;
+  window._fcIncluindo = true;
+  try { return await _fcItemVendidoSalvar(); }
+  finally { window._fcIncluindo = false; }
+}
+async function _fcItemVendidoSalvar() {
   if (!podeOuAvisa('fcaixa.item_vendido')) return;
   const sel = document.getElementById('fciv-prod');
   const nome = (sel.selectedOptions[0] || {}).textContent || '';
