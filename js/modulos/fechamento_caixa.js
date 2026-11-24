@@ -6212,6 +6212,18 @@ async function _fcExtratoCodigosEdi(ext) {
   } catch (e) { /* sem a aba Cartões: régua de valor/hora */ }
   return cod;
 }
+// REFAZER LIMPA PELO BANCO (v190) — 24/11/2026, Ronan (Tijuco, caixa 217 de 11/11: a pergunta do Refazer dizia 2.066,58 (45)
+// e o balão ficava com 46 / 2.096,58). As linhas do extrato da troca anterior eram apagadas pela lista da MEMÓRIA
+// (window._fcConf), que é por lançamento, sem o caixa: a venda que mudou de caixa (hora acertada) tinha linha nos dois, a do
+// outro caixa ficava por cima na memória e a linha antiga deste sobrava. Aqui a lista vem do BANCO, só do caixa da tela — a
+// mesma consulta do _fcExtratoAlvos. Devolve os ref_id ('ext-…') das linhas do extrato gravadas neste caixa.
+async function _fcExtratoLinhasNoBanco(eid, turnoId) {
+  const { data, error } = await sb.from('oct_fc_lancamentos')
+    .select('ref_tipo,ref_id,ajuste').eq('empresa_id', eid).eq('turno_id', turnoId);
+  if (error) throw new Error(error.message || String(error));
+  return (data || []).filter(o => o.ref_tipo === 'manual' && String(o.ref_id || '').indexOf('ext-') === 0 && (o.ajuste || {}).extrato_lote)
+    .map(o => String(o.ref_id));
+}
 async function fcExtratoSubstituir() {
   if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
   if (_fcTravado()) return;
@@ -6262,16 +6274,20 @@ async function fcExtratoSubstituir() {
 
   // 1) LIMPA o lote anterior: apaga as linhas do extrato que já estavam lá.
   //    Sem isto, refazer criaria uma segunda linha para a mesma transação.
-  if (refazendo) {
-    const antigos = Object.keys(window._fcConf || {}).filter(k => {
+  //    REFAZER LIMPA PELO BANCO (v190): a lista do que apagar vem do banco (o caixa da tela), mais o que a memória conhece.
+  {
+    const antigos = new Set(Object.keys(window._fcConf || {}).filter(k => {
       const a = (window._fcConf[k] || {}).ajuste || {};
       return k.indexOf('manual:ext-') === 0 && a.extrato_lote && a.turno_ref === turnoId;
-    });
-    for (const k of antigos) {
-      const rid = k.slice(7);
-      await sb.from('oct_fc_lancamentos').delete()
+    }).map(k => k.slice(7)));
+    try { (await _fcExtratoLinhasNoBanco(eid, turnoId)).forEach(rid => antigos.add(rid)); }
+    catch (e) { alert('Não consegui ler a substituição anterior deste caixa: ' + e.message + N2 + 'Nada foi alterado. Tente de novo.'); return; }
+    for (const rid of antigos) {
+      const { error: eDel } = await sb.from('oct_fc_lancamentos').delete()
         .eq('empresa_id', eid).eq('turno_id', turnoId).eq('ref_tipo', 'manual').eq('ref_id', rid);
-      delete window._fcConf[k];
+      if (eDel) { alert('Erro ao limpar a substituição anterior: ' + eDel.message); return; }
+      const k = 'manual:' + rid;
+      if ((((window._fcConf || {})[k] || {}).ajuste || {}).turno_ref === turnoId) delete window._fcConf[k];
     }
   }
 
@@ -6326,6 +6342,9 @@ async function fcExtratoDesfazer() {
     const tipo = k.slice(0, i), id = k.slice(i + 1);
     if (tipo === 'manual' && a.manual) criados.push(id); else anulados.push({ tipo, id, ajuste: a });
   });
+  // REFAZER LIMPA PELO BANCO (v190): as linhas do extrato deste caixa que estão no banco saem todas, conheça a memória ou não
+  try { (await _fcExtratoLinhasNoBanco(eid, turnoId)).forEach(rid => { if (!criados.includes(rid)) criados.push(rid); }); }
+  catch (e) { alert('Não consegui ler a substituição deste caixa: ' + e.message + '\n\nNada foi alterado. Tente de novo.'); return; }
   if (!anulados.length && !criados.length) { alert('Nada para desfazer neste caixa.'); return; }
   if (!confirm('Desfazer a substituição?\n\n' + criados.length + ' lançamento(s) do extrato saem e '
     + anulados.length + ' lançamento(s) original(is) voltam.')) return;
@@ -6334,7 +6353,7 @@ async function fcExtratoDesfazer() {
   for (const id of criados) {
     await sb.from('oct_fc_lancamentos').delete()
       .eq('empresa_id', eid).eq('turno_id', turnoId).eq('ref_tipo', 'manual').eq('ref_id', id);
-    delete window._fcConf['manual:' + id];
+    if ((((window._fcConf || {})['manual:' + id] || {}).ajuste || {}).turno_ref === turnoId) delete window._fcConf['manual:' + id];
   }
   // devolve os originais: tira só o que a substituição acrescentou
   for (const x of anulados) {
