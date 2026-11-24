@@ -6156,20 +6156,61 @@ function _fcPausaQuando(p) {
 // R$ 699,99 a mais que o app do PagBank). O núcleo reimportava o EDI sem o filtro de apelidos; a substituição somava as
 // duas. Aqui a venda do EDI que tem par no e-mail (mesmo valor, cartão com cartão / Pix com Pix, até 2 min) sai — cada
 // venda do e-mail absorve no máximo uma do EDI, para duas vendas iguais de verdade não virarem uma.
-function _fcExtratoSemDobro(ext) {
+//
+// EXTRATO SEM DOBRO PELO CÓDIGO (v189) — 24/11/2026, Ronan (Tijuco, caixa 213 de 09/11: extrato 2.185,92 (45) x PagBank
+// 2.235,92 (46)). Duas vendas de R$ 50,00 DE VERDADE em 3 minutos — débito Elo 19:48 pelo e-mail e crédito Mastercard 19:51
+// só pelo EDI — e a régua de valor/hora tirava a segunda como repetição da primeira. No cartão a repetição agora é pelo
+// CÓDIGO: o e-mail traz o codigo_transacao da venda e a aba Cartões (oct_cartao_transacoes, mesmo id da linha do EDI) diz
+// qual é o de cada venda do EDI. Venda do EDI com a transação conhecida e sem e-mail com esse código é venda que o e-mail
+// não trouxe: fica. Pix (o e-mail não traz o código) e cartão sem a transação na aba Cartões seguem na régua de valor/hora,
+// que deixa de casar débito com crédito. `codigos` = { id da linha do EDI: 'EDI-<CODIGO_TRANSACAO>' } (_fcExtratoCodigosEdi).
+function _fcExtratoSemDobro(ext, codigos) {
   const grupo = r => /pix/i.test(String(r.forma || '') + ' ' + String(r.bandeira || '')) ? 'pix' : 'cartao';
   const ts = r => Date.parse(String(r.recebido_em || '').replace(/([+-]\d{2}:?\d{2}|Z)$/, ''));
+  const tipo = r => { const f = String(r.forma || '').toLowerCase(); return /d[eé]b/.test(f) ? 'D' : /cr[eé]d/.test(f) ? 'C' : ''; };
   const emails = ext.filter(r => r.origem === 'pagbank_email').map(r => ({ r, t: ts(r), usado: false }));
   if (!emails.length) return ext;
+  // 1) cartão com a transação conhecida: a repetição é o e-mail com o MESMO código (marcado antes da régua de valor/hora)
+  const cod = codigos || {}, porId = {}, repetida = new Set(), propria = new Set();
+  emails.forEach(e => { porId[String(e.r.id).toUpperCase()] = e; });
+  ext.forEach(r => {
+    if (r.origem !== 'pagbank_edi' || grupo(r) !== 'cartao') return;
+    const k = cod[String(r.id)];
+    if (!k) return;
+    const e = porId[k];
+    if (e) { e.usado = true; repetida.add(r); } else propria.add(r);
+  });
+  // 2) o resto: mesmo valor, cartão com cartão / Pix com Pix, até 2 min, 1 para 1 — e débito não casa com crédito
   return ext.filter(r => {
     if (r.origem !== 'pagbank_edi') return true;
-    const t = ts(r), v = Math.round(Number(r.valor || 0) * 100), g = grupo(r);
-    const par = emails.filter(e => !e.usado && Math.round(Number(e.r.valor || 0) * 100) === v && grupo(e.r) === g && Math.abs(e.t - t) <= 120e3)
+    if (repetida.has(r)) return false;
+    if (propria.has(r)) return true;
+    const t = ts(r), v = Math.round(Number(r.valor || 0) * 100), g = grupo(r), tp = tipo(r);
+    const par = emails.filter(e => !e.usado && Math.round(Number(e.r.valor || 0) * 100) === v && grupo(e.r) === g
+      && !(tp && tipo(e.r) && tipo(e.r) !== tp) && Math.abs(e.t - t) <= 120e3)
       .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))[0];
     if (!par) return true;
     par.usado = true;
     return false;
   });
+}
+// EXTRATO SEM DOBRO PELO CÓDIGO (v189): o código da transação de cada venda do EDI do extrato, lido da aba Cartões. Só
+// consulta quando o extrato tem e-mail E EDI (só aí pode haver repetição). Sem resposta, fica a régua de valor/hora.
+async function _fcExtratoCodigosEdi(ext) {
+  const cod = {};
+  if (!ext.some(r => r.origem === 'pagbank_email')) return cod;
+  const ids = ext.filter(r => r.origem === 'pagbank_edi').map(r => String(r.id));
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      const { data, error } = await sb.from('oct_cartao_transacoes').select('id,codigo_transacao').in('id', ids.slice(i, i + 100));
+      if (error) break;
+      (data || []).forEach(c => {
+        const k = String(c.codigo_transacao || '').replace(/-/g, '').toUpperCase();
+        if (k) cod[String(c.id)] = 'EDI-' + k;
+      });
+    }
+  } catch (e) { /* sem a aba Cartões: régua de valor/hora */ }
+  return cod;
 }
 async function fcExtratoSubstituir() {
   if (!podeOuAvisa('fcaixa.substituir_extrato')) return;
@@ -6191,7 +6232,9 @@ async function fcExtratoSubstituir() {
     return;
   }
 
-  const ext = _fcExtratoSemDobro((d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || ''))));
+  // EXTRATO SEM DOBRO PELO CÓDIGO (v189): repetição de cartão pelo código da transação, não por valor/hora
+  const extTudo = (d0.receb_ext || []).filter(r => /pagbank/i.test(String(r.origem || '')));
+  const ext = _fcExtratoSemDobro(extTudo, await _fcExtratoCodigosEdi(extTudo));
   if (!ext.length) {
     alert('Sem retorno da maquininha para este turno.' + N2
       + 'O EDI é D-1 e o e-mail depende da ingestão — se o turno é de hoje, o extrato pode ainda não ter chegado.');
