@@ -271,7 +271,7 @@ async function abrirFormProduto(id, empresaId) {
           <label>Preço frota calculado <span style="color:#f97316">(é o que vai pro Prime)</span></label>
           <div id="fp-frota-resultado" style="padding:9px 12px;border:1px solid #3a2f13;border-radius:6px;background:#1a1508;color:#fbbf24;font-weight:600">R$ 0,00</div>
         </div>
-        <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque||0}" /></div>
+        <div class="form-group"><label>Estoque atual</label><input id="fp-estoque" type="number" step="0.001" value="${p?.estoque||0}" data-orig="${p?.estoque||0}" /></div>
         <div class="form-group"><label>Estoque mínimo</label><input id="fp-estoque-min" type="number" step="0.001" value="${p?.estoque_minimo||0}" /></div>
         <div class="form-group">
           <label>Tanque vinculado (opcional)</label>
@@ -398,6 +398,11 @@ async function _salvarProdutoInterno(id, empresaId) {
     pmpf:          parseFloat(document.getElementById('fp-pmpf')?.value) || 0,
     unidade_tributavel: document.getElementById('fp-unid-trib')?.value.trim() || null,
   };
+  // ESTOQUE NA FICHA (25/11/2026): a venda do PDV baixa o "Estoque atual" direto no banco (estoque automático,
+  // por posto). Salvar a ficha SEM mexer no campo não pode regravar o número que estava na tela quando ela abriu:
+  // desfaria a venda feita nesse meio tempo. Só manda o estoque se ele foi mudado aqui (produto novo sempre manda).
+  const _fpEst = document.getElementById('fp-estoque');
+  if (id && _fpEst && _fpEst.dataset.orig !== undefined && Number(_fpEst.value || 0) === Number(_fpEst.dataset.orig || 0)) delete dados.estoque;
 
   let error;
   if (id) {
