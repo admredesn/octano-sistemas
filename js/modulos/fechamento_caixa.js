@@ -1357,8 +1357,9 @@ function fcDetalhe(turnoId) {
         </div>
 
         <div class="fc-painel">
-          <div class="fc-obscab"><span>Observação:</span><button class="fc-btn mini" onclick="fcSalvarObs()">💾 Salvar Obs.</button></div>
-          <textarea id="fc-obs" class="fc-obs" placeholder="Observações do caixa..." oninput="_fcObsRascunho(this.value)">${fcEsc(_fcObsValor(t))}</textarea>
+          ${_fcObsIaHtml(t)}
+          <div class="fc-obscab"><span>Observação da conferência:</span><button class="fc-btn mini" onclick="fcSalvarObs()">💾 Salvar Obs.</button></div>
+          <textarea id="fc-obs" class="fc-obs" placeholder="Observações de quem confere o caixa..." oninput="_fcObsRascunho(this.value)">${fcEsc(_fcObsValor(t))}</textarea>
           <div style="background:#0f1520;border:1px solid #2a3a4a;border-radius:8px;padding:10px 12px;margin-top:10px">
             <div style="color:#f0b45c;font-weight:700;font-size:0.82rem;margin-bottom:6px">💵 Conferência de Caixa (dinheiro)</div>
             <div style="font-size:0.78rem;color:#b8c4d0;line-height:1.7">
@@ -2684,6 +2685,28 @@ function fcGrpToggle(k, btn) {
 window._fcObsRasc = window._fcObsRasc || {};
 function _fcObsRascunho(v) { if (window._fcTurnoAtual) window._fcObsRasc[window._fcTurnoAtual] = v; }
 function _fcObsValor(t) { const r = (window._fcObsRasc || {})[t && t.id]; return r != null ? r : ((t && t.observacao) || ''); }
+// OBSERVAÇÃO DA IA SEPARADA (v191) — 26/11/2026, Ronan: "quero outra aba de observações, precisamos diferenciar quando as
+// observações são feitas por você e quando são feitas por mim". A apuração do Claude era gravada no mesmo campo em que a
+// pessoa digita (oct_pdv_turnos.observacao). Agora ela vem de oct_pdv_turnos.observacao_ia e aparece num quadro próprio, só
+// de leitura: a tela NÃO grava nesse campo. O campo de sempre fica para quem confere. Recolhido mostra o começo do texto;
+// "Ver tudo" abre inteiro e a escolha vale para os outros caixas (o redesenho dos 30 s não fecha).
+window._fcObsIaAberta = window._fcObsIaAberta != null ? window._fcObsIaAberta
+  : (() => { try { return localStorage.getItem('fc_obs_ia_aberta') === '1'; } catch (e) { return false; } })();
+function _fcObsIaHtml(t) {
+  const txt = String((t && t.observacao_ia) || '').trim();
+  if (!txt) return '<div class="fc-obscab fc-obsia-cab"><span>🤖 Apuração do Claude (IA):</span></div><div class="fc-obsia-vazia">Sem apuração neste caixa.</div>';
+  const ab = !!window._fcObsIaAberta;
+  return '<div class="fc-obscab fc-obsia-cab"><span>🤖 Apuração do Claude (IA):</span>'
+    + '<button class="fc-btn mini" id="fc-obs-ia-btn" onclick="fcObsIaAlternar()">' + (ab ? '▴ Recolher' : '▾ Ver tudo') + '</button></div>'
+    + '<div id="fc-obs-ia" class="fc-obsia' + (ab ? ' aberta' : '') + '">' + fcEsc(txt) + '</div>';
+}
+function fcObsIaAlternar() {
+  window._fcObsIaAberta = !window._fcObsIaAberta;
+  try { localStorage.setItem('fc_obs_ia_aberta', window._fcObsIaAberta ? '1' : '0'); } catch (e) { /* sem armazenamento: vale só nesta tela */ }
+  const el = document.getElementById('fc-obs-ia'), b = document.getElementById('fc-obs-ia-btn');
+  if (el) el.classList.toggle('aberta', !!window._fcObsIaAberta);
+  if (b) b.textContent = window._fcObsIaAberta ? '▴ Recolher' : '▾ Ver tudo';
+}
 if (!window._fcAutoTimer) {
   window._fcAutoTimer = setInterval(() => {
     try {
@@ -6006,6 +6029,11 @@ function _fcEstilo() {
   .fc-painel{background:#0f1119;padding:12px}
   .fc-obscab{display:flex;justify-content:space-between;align-items:center;color:#f97316;font-weight:600;margin-bottom:5px}
   .fc-obs{width:100%;height:60px;border:1px solid #2a2d3e;border-radius:6px;font-size:11px;padding:6px;resize:vertical;box-sizing:border-box;background:#0b0d14;color:#e5e7eb}
+  /* OBSERVAÇÃO DA IA SEPARADA (v191) */
+  .fc-obsia-cab{color:#7ea8d8}
+  .fc-obsia{white-space:pre-wrap;word-break:break-word;max-height:76px;overflow:auto;border:1px solid #2a4a6a;border-radius:6px;font-size:11px;line-height:1.45;padding:6px;box-sizing:border-box;background:#0b1420;color:#cfe0f2;margin-bottom:10px}
+  .fc-obsia.aberta{max-height:none;overflow:visible}
+  .fc-obsia-vazia{font-size:11px;color:#667;margin-bottom:10px}
   .fc-btn2{display:block;width:100%;text-align:left;margin-top:7px;background:#1b2130;border:1px solid #2f3446;border-radius:6px;padding:8px 11px;font-size:11px;color:#c7d0dc;cursor:pointer}
   .fc-btn2:hover:not(:disabled){background:#242c3e;color:#fff}.fc-btn2:disabled{color:#5a6472;cursor:default}
   .fc-adgrid{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:6px;align-items:center;margin-top:12px}
