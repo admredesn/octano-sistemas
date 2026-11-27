@@ -1635,10 +1635,8 @@ async function _ncupEmitir() {
       const partes = [];
       if (Object.keys(grupos.placa).length) partes.push((Object.keys(grupos.placa).length > 1 ? "PLACAS: " : "PLACA: ") + lista(grupos.placa));
       if (Object.keys(grupos.entrega).length) partes.push("ENTREGA: " + lista(grupos.entrega));
-      ["cartao", "cupom"].forEach(t => {   // v18: "IDENTIFICADOS PELO CARTAO DO CLIENTE: CUPONS 16584, 17091"
-        const nums = [].concat(...Object.values(grupos[t]));
-        if (nums.length) partes.push(_NCUP_IDENT_FIXA[t].nota + ": " + (nums.length > 1 ? "CUPONS " : "CUPOM ") + nums.join(", "));
-      });
+      // v19 (27/11/2026, Ronan: "não precisa ter esse texto, porque lá em cima já cita o número dos cupons"): "Cartão do cliente"
+      // e "Cupom do cliente" NÃO saem na NF-e — ficam só no banco (oct_nfe_cupons.identificacao, com quem e quando)
       const compl = [nota.inf_complementar].concat(partes).filter(Boolean).join(" | ");
       if (compl.length > 4900) throw new Error(`As observações passariam do tamanho que a SEFAZ aceita (${compl.length} de 4.900 caracteres, com a lista de cupons e placas). Divida os cupons em mais de uma NF-e.`);
       nota.inf_complementar = compl;
