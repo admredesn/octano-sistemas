@@ -10,6 +10,8 @@
 //   PIS/COFINS s/ vendas       D Impostos s/ vendas               C Impostos a recolher
 //   taxa de cartão             D Taxas de cartão (despesa)        C Cartões a receber
 //   compra (NF-e de entrada)   D Compras                          C Fornecedores
+//   crédito pago pelo cliente  D Caixa/Bancos/Cartões             C Adiantamento de clientes
+//   cupom pago com o haver     D Adiantamento de clientes         C Revenda
 //
 // DESENHO: "contabilizar o mês" é DETERMINÍSTICO e IDEMPOTENTE — cada
 // lançamento tem (origem, chave_origem) únicos; regerar o mês apaga os
@@ -64,6 +66,10 @@ const CTB_PLANO_PADRAO = [
   ["1.1.1.05.000001", "Conta corrente entre empresas do grupo", "01", "A", 5, "1.1.1.05"],
   ["3.1.3.99.000002", "Impostos e taxas pagos (DAE/guias)", "04", "A", 5, "3.1.3.99"],
   ["3.1.3.99.000098", "Despesas a classificar (extrato bancario)", "04", "A", 5, "3.1.3.99"],
+  // v105 (27/11/2026) — haver do cliente ("Crédito do cliente"): o dinheiro adiantado é uma OBRIGAÇÃO do posto até o cliente
+  // abastecer. Grupo 2.1.1.08 "Adiantamentos" = o do plano do contador (ECD do Florestal).
+  ["2.1.1.08", "Adiantamentos", "02", "S", 4, "2.1.1"],
+  ["2.1.1.08.000001", "Adiantamento de clientes", "02", "A", 5, "2.1.1.08"],
 ];
 
 // contas usadas pelos templates (apelidos legiveis)
@@ -85,6 +91,7 @@ const CTB = {
   LIGADAS: "1.1.1.05.000001",
   IMPOSTOS_PAGOS: "3.1.3.99.000002",
   A_CLASSIFICAR: "3.1.3.99.000098",
+  ADIANT_CLIENTES: "2.1.1.08.000001",
 };
 
 // forma de pagamento (tpag da NFC-e) -> conta que recebe o dinheiro.
@@ -99,6 +106,25 @@ function ctbContaDaForma(tpag) {
   return CTB.CAIXA;
 }
 
+// forma do crédito do cliente (oct_vales.forma é o NOME: "Dinheiro", "Pix", "Cheque"...) -> conta que recebeu o dinheiro.
+// Mesma leitura do ctbContaDaForma. Sem forma conhecida devolve null (não dá para saber onde o dinheiro entrou).
+function ctbContaDaFormaNome(nome) {
+  const n = String(nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (!n) return null;
+  if (/dinheiro|cheque/.test(n)) return CTB.CAIXA;
+  if (/pix|transfer|deposito|boleto|\bted\b|\bdoc\b/.test(n)) return CTB.BANCOS;
+  if (/credito|debito|cartao/.test(n)) return CTB.CARTOES;
+  return null;
+}
+
+// dia LOCAL (Brasil, UTC-3) de um timestamp UTC; data pura (AAAA-MM-DD) passa direto
+function ctbDiaLocal(x) {
+  const s = String(x || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const t = Date.parse(s);
+  return isNaN(t) ? "" : new Date(t - 3 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 // ============================================================
 // NÚCLEO PURO: eventos -> lançamentos. Sem rede; testável no V8.
 // d = { competencia:'AAAA-MM', nfces:[{data_emissao,valor_total,forma_pagamento,status}],
@@ -109,8 +135,17 @@ function ctbContaDaForma(tpag) {
 // devolve { lancamentos: [{data,valor,historico,origem,chave,partidas:[{conta,dc,valor,hist}]}], avisos }
 // ============================================================
 function ctbMontarLancamentos(d) {
-  const L = [], A = [];
+  const L = [], A = [], O = [];    // O = observações: não bloqueiam o mês (A = desequilíbrio, bloqueia)
   const comp = d.competencia;
+  const brl = v => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
+
+  // HAVER (v105): quanto de cada cupom foi pago com "Crédito do cliente" (consumo do oct_vales amarrado à chave da NFC-e)
+  const haverPorChave = new Map();
+  (d.vales || []).forEach(v => {
+    if (String(v.tipo || "") !== "consumo" || !v.nfce_chave) return;
+    haverPorChave.set(v.nfce_chave, (haverPorChave.get(v.nfce_chave) || 0) + Math.abs(Number(v.valor || 0)));
+  });
+  const haverDia = new Map();
 
   // ---- 1. VENDAS: consolidado por DIA × FORMA (o padrão do contador:
   //         2.771 lançamentos "VR <dia>" D Caixa C Revenda) ----
@@ -121,7 +156,11 @@ function ctbMontarLancamentos(d) {
     if (!dia) return;
     const tpag = String(n.forma_pagamento || "01");
     const k = dia + "|" + tpag;
-    porDiaForma.set(k, (porDiaForma.get(k) || 0) + Number(n.valor_total || 0));
+    let valor = Number(n.valor_total || 0);
+    // a parte paga com o haver NÃO é venda a prazo (o tpag 05 é o mesmo) nem dinheiro novo: sai do balde da forma
+    const hv = n.chave_nfe ? Math.min(haverPorChave.get(n.chave_nfe) || 0, valor) : 0;
+    if (hv > 0.004) { haverDia.set(dia, (haverDia.get(dia) || 0) + hv); valor -= hv; }
+    porDiaForma.set(k, (porDiaForma.get(k) || 0) + valor);
   });
   porDiaForma.forEach((valor, k) => {
     if (valor <= 0.004) return;
@@ -133,6 +172,21 @@ function ctbMontarLancamentos(d) {
       origem: "nfce-dia", chave: k, competencia: comp,
       partidas: [
         { conta, dc: "D", valor: Number(valor.toFixed(2)) },
+        { conta: CTB.RECEITA, dc: "C", valor: Number(valor.toFixed(2)) },
+      ],
+    });
+  });
+
+  // ---- 1b. HAVER CONSUMIDO (v105): o cliente abasteceu com o crédito que já tinha pago — baixa a obrigação,
+  //          a receita entra agora. Consolidado por dia, como as vendas. ----
+  haverDia.forEach((valor, dia) => {
+    if (valor <= 0.004) return;
+    L.push({
+      data: dia, valor: Number(valor.toFixed(2)),
+      historico: "Vendas do dia " + dia.split("-").reverse().join("/") + " pagas com credito do cliente (haver)",
+      origem: "haver-consumo-dia", chave: dia, competencia: comp,
+      partidas: [
+        { conta: CTB.ADIANT_CLIENTES, dc: "D", valor: Number(valor.toFixed(2)) },
         { conta: CTB.RECEITA, dc: "C", valor: Number(valor.toFixed(2)) },
       ],
     });
@@ -293,6 +347,41 @@ function ctbMontarLancamentos(d) {
     });
   });
 
+  // ---- 8. CRÉDITO DO CLIENTE (v105): o dinheiro adiantado entra na conta da forma e nasce a obrigação.
+  //         Na DATA DO PAGAMENTO (pago_em; sem ela, o dia do lançamento). Sem forma = não sabemos onde o dinheiro
+  //         entrou: vira observação. ----
+  (d.vales || []).forEach(v => {
+    const tipo = String(v.tipo || "");
+    const val = Number(v.valor || 0);
+    const dia = v.pago_em ? String(v.pago_em).slice(0, 10) : ctbDiaLocal(v.criado_em);
+    if (!dia || dia.slice(0, 7) !== comp) return;
+    const quem = String(v.pessoa_nome || "cliente");
+    const diaBr = dia.split("-").reverse().join("/");
+    if (tipo === "credito_adiantado" || tipo === "troco_pendente") {
+      if (val <= 0.004) return;
+      const conta = ctbContaDaFormaNome(v.forma);
+      if (!conta) {
+        O.push("Crédito de cliente sem forma de pagamento, não contabilizado: " + quem + " " + brl(val) + " em " + diaBr
+          + " (informe a forma no F.Caixa › Haver crédito)");
+        return;
+      }
+      L.push({
+        data: dia, valor: Number(val.toFixed(2)),
+        historico: "Credito do cliente (haver) - " + quem + " - " + String(v.forma),
+        origem: "haver-credito", chave: String(v.id), competencia: comp,
+        partidas: [
+          { conta, dc: "D", valor: Number(val.toFixed(2)), hist: quem },
+          { conta: CTB.ADIANT_CLIENTES, dc: "C", valor: Number(val.toFixed(2)), hist: quem },
+        ],
+      });
+    } else if (tipo === "consumo" && !v.nfce_chave) {
+      O.push("Consumo de haver lançado no retaguarda sem cupom, não contabilizado: " + quem + " " + brl(Math.abs(val))
+        + " em " + diaBr + " (a venda está em outra forma ou fora do Octano — conferir com o contador)");
+    } else if (tipo !== "consumo") {
+      O.push("Lançamento de haver '" + tipo + "' não contabilizado: " + quem + " " + brl(val) + " em " + diaBr);
+    }
+  });
+
   // ---- verificação: TODO lançamento fecha D = C (partida dobrada não é opcional) ----
   L.forEach(l => {
     const deb = l.partidas.filter(p => p.dc === "D").reduce((s, p) => s + p.valor, 0);
@@ -300,7 +389,7 @@ function ctbMontarLancamentos(d) {
     if (Math.abs(deb - cred) > 0.009)
       A.push("DESEQUILÍBRIO em '" + l.historico + "': D " + deb.toFixed(2) + " x C " + cred.toFixed(2));
   });
-  return { lancamentos: L, avisos: A };
+  return { lancamentos: L, avisos: A, observacoes: O };
 }
 
 // ============================================================
@@ -396,7 +485,7 @@ async function ctbContabilizar() {
   try {
     // eventos do período
     const nfces = await _spedTudo(q => sb.from('oct_nfce')
-      .select('data_emissao,valor_total,forma_pagamento,status,itens')
+      .select('data_emissao,valor_total,forma_pagamento,status,itens,chave_nfe')
       .eq('empresa_id', eId).gte('data_emissao', dtIni).lte('data_emissao', dtFim + 'T23:59:59')
       .order('data_emissao').range(q * 1000, q * 1000 + 999));
     const fila = await _spedTudo(q => sb.from('oct_fila_transmissao')
@@ -436,6 +525,12 @@ async function ctbContabilizar() {
       .eq('empresa_id', eId).gte('data', dtIni).lte('data', dtFim + 'T23:59:59')
       .then(r => r.data || [], () => []);
 
+    // v105: haver do cliente (créditos pagos e consumos nos cupons). Tabela pequena: lê a empresa toda e o núcleo filtra o mês.
+    const vales = await sb.from('oct_vales')
+      .select('id,pessoa_nome,valor,tipo,origem,nfce_chave,forma,pago_em,criado_em')
+      .eq('empresa_id', eId)
+      .then(r => r.data || [], () => []);
+
     // v2: conta analítica por fornecedor (padrão do contador: uma
     // 2.1.1.01.NNNNNN por casa; a genérica .000001 fica de fallback)
     const fornecedorConta = await ctbGarantirContasFornecedor(eId,
@@ -462,7 +557,7 @@ async function ctbContabilizar() {
     });
 
     const r = ctbMontarLancamentos({
-      competencia: comp, nfces, entradas, pagamentos, sangrias, fornecedorConta, bancoMovs,
+      competencia: comp, nfces, entradas, pagamentos, sangrias, fornecedorConta, bancoMovs, vales,
       pisCofinsDia: Array.from(basePorDia, ([dia, base]) => ({ dia, base })),
       taxasDia: Array.from(taxasDia, ([dia, taxa]) => ({ dia, taxa })),
     });
@@ -492,6 +587,8 @@ async function ctbContabilizar() {
     out.innerHTML = '<div style="color:#4caf50;font-weight:600;margin-bottom:8px">✓ ' + r.lancamentos.length
       + ' lançamentos gravados em ' + comp + ' — R$ ' + tot.toFixed(2) + '</div>'
       + '<div style="color:#888;font-size:0.8rem">Regerar o mês é seguro: os automáticos são apagados e recriados; lançamentos manuais ficam.</div>'
+      + ((r.observacoes || []).length ? '<div style="color:#fbbf24;font-size:0.8rem;margin-top:10px">⚠ Fora da contabilização:<br>'
+        + r.observacoes.map(escHtml).join('<br>') + '</div>' : '')
       + '<div style="margin-top:10px"><button onclick="ctbBalancete()" class="btn-salvar" style="background:#1a3a5c">Ver balancete</button></div>';
   } catch (e) {
     console.error('ctbContabilizar:', e);
