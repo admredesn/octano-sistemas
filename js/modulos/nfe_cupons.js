@@ -27,6 +27,24 @@ const _NCUP_MAX_REFS = 500;   // NF-e: no máximo 500 NFref
 // nome de usuário: o sistema vai ser vendido); quem identificou e quando fica no banco (oct_nfe_cupons.identificacao +
 // criado_por + criado_em).
 const _NCUP_PLACA_RE = /^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/;   // ABC1234 ou Mercosul ABC1D23
+// v18 (27/11/2026, Ronan: "tem que ser uma forma mais simples ... em breve vai ser um funcionário"): identificação de UM CLIQUE,
+// sem digitar — o cupom foi pago com o CARTÃO/PIX do cliente (só em cupom pago assim) ou o cliente TROUXE O CUPOM/comprovante.
+const _NCUP_IDENT_FIXA = {
+  cartao: { rot: "Cartão do cliente", banco: "CARTAO DO CLIENTE", nota: "IDENTIFICADOS PELO CARTAO DO CLIENTE" },
+  cupom: { rot: "Cupom do cliente", banco: "CUPOM DO CLIENTE", nota: "CUPOM APRESENTADO PELO CLIENTE" },
+};
+function _ncupPagoCartao(v) {   // pago (no todo ou em parte) com cartão, Pix ou cartão frota — não com o haver do cliente
+  return (Array.isArray(v && v.pagamentos) ? v.pagamentos : []).some(p => {
+    const n = _ncupNorm(p.nome), c = String(p.forma || "").padStart(2, "0");
+    if (p.haver || /CREDITO DO CLIENTE|HAVER/.test(n)) return false;
+    return ["03", "04", "17", "18", "19"].includes(c) || /CART|CREDITO|DEBITO|PIX|FROTA/.test(n);
+  });
+}
+function _ncupIdentOpcoes(v) {   // <option>s do Tipo; "Cartão do cliente" só em cupom pago com cartão/Pix
+  return `<option value="placa">Placa</option><option value="entrega">Entrega</option>`
+    + (v && !_ncupPagoCartao(v) ? "" : `<option value="cartao">${_NCUP_IDENT_FIXA.cartao.rot}</option>`)
+    + `<option value="cupom">${_NCUP_IDENT_FIXA.cupom.rot}</option>`;
+}
 function _ncupPlacaNorm(s) { return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
 function _ncupSemIdent(v) {
   if (v._titulo || v._tecnox) return false;
@@ -865,8 +883,10 @@ function _ncupIdentTipo(id, tipo) {   // acerta o tipo da linha e o campo ao lad
   const i = Array.from(document.querySelectorAll("#ncup-placas input.ncup-placa")).find(x => x.dataset.id === String(id));
   if (s) s.value = tipo;
   if (i) {
-    const ent = tipo === "entrega";
+    const ent = tipo === "entrega", fixa = _NCUP_IDENT_FIXA[tipo];
     i.style.borderColor = "";
+    if (fixa) { i.readOnly = true; i.maxLength = 60; i.value = fixa.rot.toUpperCase(); i.style.color = "#7ee2a0"; return i; }
+    if (i.readOnly) { i.readOnly = false; i.value = ""; i.style.color = ""; }
     i.maxLength = ent ? 60 : 8;
     i.placeholder = ent ? "local ou tanque (ex.: Fazenda Boa Vista)" : "ABC1D23";
   }
@@ -890,8 +910,25 @@ function _ncupPlacaAplicar() {
   const inp = document.getElementById("ncup-pl-valor");
   const marcados = Array.from(document.querySelectorAll("#ncup-placas input.ncup-pl-marca:checked"));
   const entrega = tipo === "entrega";
-  const val = entrega ? _ncupTxt(inp && inp.value, 60).toUpperCase() : _ncupPlacaNorm(inp && inp.value);
   if (!marcados.length) { _ncupMsg("Marque os cupons (caixinha da esquerda) antes de aplicar.", "#f59e0b"); return; }
+  const fixa = _NCUP_IDENT_FIXA[tipo];
+  if (fixa) {   // v18: um clique, nada a digitar
+    const porId = {}; (_ncupSelecionados() || []).forEach(v => { porId[String(v.id)] = v; });
+    let n = 0; const fora = [];
+    marcados.forEach(c => {
+      const v = porId[String(c.dataset.id)];
+      if (tipo === "cartao" && v && !_ncupPagoCartao(v)) { fora.push(v.numero); return; }
+      _ncupIdentTipo(c.dataset.id, tipo); c.checked = false; n++;
+    });
+    _ncupPlacaQtd();
+    _ncupDesconfirmarEmissao();
+    _ncupMsg(`${fixa.rot} aplicado em ${n} cupom(ns).` + (fora.length ? ` Não pago com cartão/Pix (ficou como estava): ${_ncupEsc(fora.join(", "))}.` : ""),
+      fora.length ? "#f59e0b" : "#4ade80");
+    const volta0 = document.querySelectorAll("#ncup-placas input.ncup-pl-marca")[window._ncup.plUltima || 0];
+    if (volta0) { volta0.focus(); volta0.closest("tr").scrollIntoView({ block: "nearest" }); }
+    return;
+  }
+  const val = entrega ? _ncupTxt(inp && inp.value, 60).toUpperCase() : _ncupPlacaNorm(inp && inp.value);
   if (entrega ? val.length < 3 : !_NCUP_PLACA_RE.test(val)) {
     if (inp) { inp.style.borderColor = "#f87171"; inp.focus(); }
     _ncupMsg(entrega ? "Escreva o local da entrega (ao menos 3 letras)." : "Placa inválida: use ABC1234 ou ABC1D23.", "#f87171");
@@ -923,20 +960,20 @@ async function ncupAbrirEmissao() {
   const anon = sel.filter(_ncupSemIdent).slice().sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")));
   const anonHtml = !anon.length ? "" : `
         <div style="margin-top:12px;padding:10px 12px;border:1px solid #5a4a10;border-radius:8px;background:#1d1a0a">
-          <div style="color:#fbbf24;font-size:0.84rem;font-weight:600">${anon.length} cupom(ns) sem identificação — informe a placa do veículo ou, se foi entrega, o local</div>
-          <div style="color:#aaa;font-size:0.76rem;margin:2px 0 8px">Obrigatório. A placa (conferida no cupom, comprovante ou câmera) ou o local da entrega sai nas observações da NF-e.</div>
+          <div style="color:#fbbf24;font-size:0.84rem;font-weight:600">${anon.length} cupom(ns) sem identificação — informe a placa, o local da entrega, ou se foi pago com o cartão do cliente / o cliente trouxe o cupom</div>
+          <div style="color:#aaa;font-size:0.76rem;margin:2px 0 8px">Obrigatório. Sai nas observações da NF-e. "Cartão do cliente" e "Cupom do cliente" é só escolher no Tipo (nada a digitar).</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
             <span id="ncup-pl-qtd" style="color:#aaa;font-size:0.78rem;min-width:92px">0 marcado(s)</span>
-            <select id="ncup-pl-tipo" style="padding:5px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem"><option value="placa">Placa</option><option value="entrega">Entrega</option></select>
+            <select id="ncup-pl-tipo" style="padding:5px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem">${_ncupIdentOpcoes(null)}</select>
             <input id="ncup-pl-valor" autocomplete="off" maxlength="60" placeholder="placa ou local para os marcados" style="width:220px;box-sizing:border-box;padding:5px 8px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem;text-transform:uppercase">
             <button type="button" class="ncup-btn" style="padding:5px 10px;font-size:0.78rem" onclick="_ncupPlacaAplicar()" title="Marque os cupons um a um (caixinha da esquerda), digite a placa ou o local e aplique">Aplicar nos marcados (F1)</button>
           </div>
           <div style="max-height:260px;overflow:auto"><table class="ncup-ed" id="ncup-placas">
-            <thead><tr><th style="width:26px"></th><th>Cupom</th><th>Data</th><th>Itens</th><th style="text-align:right">Valor (R$)</th><th style="width:96px">Tipo</th><th style="width:190px">Placa / local *</th></tr></thead>
+            <thead><tr><th style="width:26px"></th><th>Cupom</th><th>Data</th><th>Itens</th><th style="text-align:right">Valor (R$)</th><th style="width:150px">Tipo</th><th style="width:190px">Placa / local *</th></tr></thead>
             <tbody>${anon.map(v => `<tr><td><input type="checkbox" class="ncup-pl-marca" data-id="${_ncupEsc(v.id)}" style="width:auto;margin:0"></td><td><b>${_ncupEsc(v.numero)}</b></td><td>${_ncupHora(v.data_venda)}</td>
               <td style="color:#bbb">${_ncupEsc((Array.isArray(v.itens) ? v.itens : []).map(it => it.desc).join(" · ").slice(0, 70))}</td>
               <td style="text-align:right">${_ncupMoney(v.valor_total)}</td>
-              <td><select class="ncup-ident-tipo" data-id="${_ncupEsc(v.id)}" style="padding:4px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem"><option value="placa">Placa</option><option value="entrega">Entrega</option></select></td>
+              <td><select class="ncup-ident-tipo" data-id="${_ncupEsc(v.id)}" style="padding:4px 6px;border-radius:5px;border:1px solid #2a2d3e;background:#0f1117;color:#e0e0e0;font-size:0.8rem">${_ncupIdentOpcoes(v)}</select></td>
               <td><input class="ncup-placa" data-id="${_ncupEsc(v.id)}" maxlength="8" autocomplete="off" placeholder="ABC1D23" value="${_ncupEsc(_ncupPlacaNorm(v.placa || (v.prazo_dados && v.prazo_dados.placa) || ""))}" style="text-align:left;text-transform:uppercase"></td></tr>`).join("")}</tbody>
           </table></div>
         </div>`;
@@ -1001,7 +1038,7 @@ async function ncupAbrirEmissao() {
   // Placa × Entrega: o campo ao lado vira placa (8, maiúsculas) ou local/tanque da entrega (texto)
   m.querySelectorAll("select.ncup-ident-tipo").forEach(s => s.addEventListener("change", () => {
     const i = _ncupIdentTipo(s.dataset.id, s.value);
-    if (i) { i.value = ""; i.focus(); }
+    if (i && !_NCUP_IDENT_FIXA[s.value]) { i.value = ""; i.focus(); }
     _ncupDesconfirmarEmissao();
   }));
   // marcar cupons (um a um — sem "marcar todos") e aplicar a mesma placa/local nos marcados: botão, Enter no campo ou F1
@@ -1030,7 +1067,8 @@ async function ncupAbrirEmissao() {
       if (e.key !== "F1" || !document.getElementById("ncup-placas")) return;
       e.preventDefault();
       const v = document.getElementById("ncup-pl-valor");
-      if (v && String(v.value).trim()) _ncupPlacaAplicar(); else if (v) v.focus();
+      const tFixo = _NCUP_IDENT_FIXA[(document.getElementById("ncup-pl-tipo") || {}).value];
+      if (tFixo || (v && String(v.value).trim())) _ncupPlacaAplicar(); else if (v) v.focus();
     });
   }
   const nome = (sel.find(v => v.cliente_nome) || {}).cliente_nome || "";
@@ -1564,13 +1602,20 @@ async function _ncupEmitir() {
     const el = Array.from(document.querySelectorAll("#ncup-placas input.ncup-placa")).find(i => i.dataset.id === String(v.id));
     const tp = Array.from(document.querySelectorAll("#ncup-placas select.ncup-ident-tipo")).find(i => i.dataset.id === String(v.id));
     const entrega = !!tp && tp.value === "entrega";
+    const fixa = tp && _NCUP_IDENT_FIXA[tp.value];
+    if (fixa) {   // v18: cartão do cliente (só pago com cartão/Pix) ou cupom trazido pelo cliente
+      const okF = tp.value !== "cartao" || _ncupPagoCartao(v);
+      if (el) el.style.borderColor = okF ? "" : "#f87171";
+      if (okF) identDe[v.id] = { tipo: tp.value, valor: fixa.banco }; else semIdent.push(v.numero);
+      return;
+    }
     const val = entrega ? _ncupTxt(el && el.value, 60).toUpperCase() : _ncupPlacaNorm(el && el.value);
     const ok = entrega ? val.length >= 3 : _NCUP_PLACA_RE.test(val);
     if (el) el.style.borderColor = ok ? "" : "#f87171";
     if (ok) identDe[v.id] = { tipo: entrega ? "entrega" : "placa", valor: val }; else semIdent.push(v.numero);
   });
   if (semIdent.length) {
-    _ncupMsg(`Falta a placa (ABC1234 ou ABC1D23) ou o local da entrega do(s) cupom(ns) sem identificação: ${_ncupEsc(semIdent.slice(0, 15).join(", "))}${semIdent.length > 15 ? ` e mais ${semIdent.length - 15}` : ""}.`, "#f87171");
+    _ncupMsg(`Falta a identificação (placa ABC1234/ABC1D23, local da entrega, cartão do cliente ou cupom do cliente) do(s) cupom(ns) sem identificação: ${_ncupEsc(semIdent.slice(0, 15).join(", "))}${semIdent.length > 15 ? ` e mais ${semIdent.length - 15}` : ""}.`, "#f87171");
     return;
   }
   const docCupom = Array.from(new Set(sel.map(v => _ncupDig(v.cliente_cpf)).filter(Boolean)));
@@ -1583,13 +1628,17 @@ async function _ncupEmitir() {
     // cupons sem identificação: placa por cupom nas observações (fixo, não sai editando o campo Observações)
     // só o objetivo da venda: "PLACAS: QQM1553 (CUPONS 3766, 3768); OPR5B99 (CUPOM 3769) | ENTREGA: FAZENDA X (CUPOM 3771)"
     if (Object.keys(identDe).length) {
-      const grupos = { placa: {}, entrega: {} };
+      const grupos = { placa: {}, entrega: {}, cartao: {}, cupom: {} };
       sel.filter(v => identDe[v.id]).sort((a, b) => String(a.data_venda || "").localeCompare(String(b.data_venda || "")))
         .forEach(v => { const d = identDe[v.id], g = grupos[d.tipo]; (g[d.valor] = g[d.valor] || []).push(String(v.numero)); });
       const lista = g => Object.keys(g).map(k => `${k} (${g[k].length > 1 ? "CUPONS" : "CUPOM"} ${g[k].join(", ")})`).join("; ");
       const partes = [];
       if (Object.keys(grupos.placa).length) partes.push((Object.keys(grupos.placa).length > 1 ? "PLACAS: " : "PLACA: ") + lista(grupos.placa));
       if (Object.keys(grupos.entrega).length) partes.push("ENTREGA: " + lista(grupos.entrega));
+      ["cartao", "cupom"].forEach(t => {   // v18: "IDENTIFICADOS PELO CARTAO DO CLIENTE: CUPONS 16584, 17091"
+        const nums = [].concat(...Object.values(grupos[t]));
+        if (nums.length) partes.push(_NCUP_IDENT_FIXA[t].nota + ": " + (nums.length > 1 ? "CUPONS " : "CUPOM ") + nums.join(", "));
+      });
       const compl = [nota.inf_complementar].concat(partes).filter(Boolean).join(" | ");
       if (compl.length > 4900) throw new Error(`As observações passariam do tamanho que a SEFAZ aceita (${compl.length} de 4.900 caracteres, com a lista de cupons e placas). Divida os cupons em mais de uma NF-e.`);
       nota.inf_complementar = compl;
@@ -1679,7 +1728,8 @@ async function _ncupEmitir() {
         nfe_numero: nota.numero, nfe_serie: cfg.serie, ambiente: cfg.ambiente, origem: "retaguarda", criado_por: st.usuario,
         // cupom sem identificação: como foi identificado (fica no banco, com quem e quando; não vai na nota)
         // (mesmas chaves em todas as linhas: o PostgREST recusa lote com chaves diferentes)
-        identificacao: identDe[v.id] ? (identDe[v.id].tipo === "entrega" ? "ENTREGA " : "PLACA ") + identDe[v.id].valor : null,
+        identificacao: identDe[v.id] ? (_NCUP_IDENT_FIXA[identDe[v.id].tipo] ? identDe[v.id].valor
+          : (identDe[v.id].tipo === "entrega" ? "ENTREGA " : "PLACA ") + identDe[v.id].valor) : null,
       }));
       const { error: el } = await sb.from("oct_nfe_cupons").upsert(linhas, { onConflict: "cupom_chave,nfe_chave", ignoreDuplicates: true });
       if (el) avisos.push("não marcou os cupons como transformados (" + (el.message || el) + ")");
