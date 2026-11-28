@@ -281,6 +281,14 @@ function _monLucroDisp(v) {
   return lucro * (avista / total);
 }
 
+// LUCRO LIVRE DO DIA (28/11/2026, Ronan: "do lado quero que mostra o lucro livre do dia tirando a venda a prazo"): o lucro
+// do dia inteiro menos TUDO o que saiu a prazo (o valor da venda, não só o lucro dela) — o que sobra do dia depois de
+// financiar o cliente. Mesma conta da tabela de 90 dias (Livre = lucro − a prazo). Pode ficar negativo.
+function _monLucroLivre(v) {
+  return Number((v && v.lucro) || 0) - Number((v && v.aPrazo) || 0);
+}
+function _monBRLsinal(x) { return (x < -0.004 ? '−' : '') + _monBRL(Math.abs(x)); }
+
 function _monDiaStr(d) {
   const p = n => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
@@ -632,6 +640,7 @@ function _monCardVendaPosto(nome, v, tv) {
       <span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">${v.apurado ? 'Lucro apurado:' : 'Lucro:'}</span>
       <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:#22c55e">${_monBRL(_monLucroDisp(v))}</span>
       ${v.total > 0 ? `<span style="color:#64748b;font-size:${tv ? '0.9rem' : '0.72rem'}">${_monNum(_monLucroDisp(v) / v.total * 100, 1)}%</span>` : ''}
+      <span style="white-space:nowrap" title="lucro do dia ${_monBRL(v.lucro)} − vendido a prazo ${_monBRL(v.aPrazo || 0)}"><span style="color:#94a3b8;font-size:${tv ? '0.9rem' : '0.74rem'}">Livre:</span> <span style="font-size:${tv ? '1.3rem' : '1.05rem'};font-weight:800;color:${_monLucroLivre(v) < -0.004 ? '#f87171' : '#2dd4bf'}">${_monBRLsinal(_monLucroLivre(v))}</span></span>
       ${Number(v.aPrazo || 0) > 0.009 ? `<span title="lucro que saiu a prazo — ainda não é caixa" style="color:#f0b45c;font-size:${tv ? '0.85rem' : '0.68rem'}">a prazo ${_monBRL(v.lucro - _monLucroDisp(v))}</span>` : ''}
       ${v.taxas > 0 ? `<span style="color:#f87171;font-size:${tv ? '0.82rem' : '0.68rem'}" title="taxas de cartão já descontadas do lucro">taxas −${_monBRL(v.taxas)}</span>` : ''}
     </div>
@@ -681,12 +690,13 @@ function _monHtml(dados, tv, doCache) {
     const totalGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].total) || 0), 0);
     const volGeral = ordenados.reduce((s, eid) => s + ((vendas[eid] && vendas[eid].volume) || 0), 0);
     const lucroGeral = ordenados.reduce((s, eid) => s + (vendas[eid] ? _monLucroDisp(vendas[eid]) : 0), 0);
+    const livreGeral = ordenados.reduce((s, eid) => s + (vendas[eid] ? _monLucroLivre(vendas[eid]) : 0), 0);
     const colVenda = tv ? '320px' : '250px';
     const vendasGrid = ordenados.map(eid => _monCardVendaPosto(nomes[eid], vendas[eid], tv)).join('');
     const secVendas = `
       <div style="display:flex;align-items:center;gap:12px;margin:${tv ? '4px 0 12px' : '2px 0 8px'};flex-wrap:wrap">
         <div style="font-size:${tv ? '1.35rem' : '1.05rem'};font-weight:800;color:#22c55e">💰 Vendas de hoje (NFC-e)</div>
-        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong> · <strong style="color:#38bdf8">${_monNum(volGeral, 1)} L</strong> · lucro <strong style="color:#22c55e">${_monBRL(lucroGeral)}</strong></div>
+        <div style="font-size:${tv ? '1rem' : '0.8rem'};color:#94a3b8">total: <strong style="color:#f8fafc">${_monBRL(totalGeral)}</strong> · <strong style="color:#38bdf8">${_monNum(volGeral, 1)} L</strong> · lucro <strong style="color:#22c55e">${_monBRL(lucroGeral)}</strong> · livre <strong style="color:${livreGeral < -0.004 ? '#f87171' : '#2dd4bf'}" title="lucro do dia − vendido a prazo, nos postos">${_monBRLsinal(livreGeral)}</strong></div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(${colVenda},1fr));gap:${tv ? '14px' : '10px'};margin-bottom:${tv ? '26px' : '18px'}">${vendasGrid}</div>`;
 
