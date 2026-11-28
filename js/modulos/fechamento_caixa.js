@@ -45,6 +45,13 @@ function _fcGrupoNome(nome, cod) {
   }
   return _fcGrupoForma(cod);
 }
+// LANÇAMENTO DE CAIXA DO PDV (oct_pdv_caixa: receita/despesa) EM PIX, CARTÃO, CHEQUE OU FROTA (28/11/2026, SEVEN turno 90:
+// o "saque cartão" = receita de R$ 150 em Pix + despesa de R$ 125 em dinheiro; a receita contava como dinheiro na gaveta).
+// Devolve o grupo da forma (cartao/pix/pix_cnpj/cheque/frota) ou null (dinheiro, sem forma, "Outros": gaveta, como antes).
+function _fcCaixaBanco(forma) {
+  const g = String(forma || '').trim() ? _fcGrupoNome(String(forma), '') : null;
+  return ['cartao', 'pix', 'pix_cnpj', 'cheque', 'frota'].includes(g) ? g : null;
+}
 function fcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fcMoney(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fcNum(v, casas) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: casas || 0, maximumFractionDigits: casas || 0 }); }
@@ -297,7 +304,7 @@ async function fcCarregarDados() {
     afericao: 0, afericao_litros: 0, afericao_itens: [],   // 05/11/2026: dentro de venda_comb e subtraída à parte
     litros_pista: 0,   // litros da bomba no turno espelhado (só conferência)
     rec: { dinheiro: 0, cartao: 0, pix: 0, pix_cnpj: 0, frota: 0, prazo: 0, cheque: 0, boleto: 0, outros: 0, haver: 0 },
-    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
+    sangria: 0, suprimento: 0, despesa: 0, deposito: 0, receita: 0, receita_banco: 0, despesa_banco: 0, outrosCaixa: 0, qtd_vendas: 0,
     sangria_depositada: 0, sangrias_dep: [],   // sangria que virou depósito em conta (🏦 Gerar depósito)
     fila_total: 0, fila_litros: 0, fila_itens: [],
     fila_sem_pgto: 0, fila_sem_pgto_itens: [],   // abastecido SEM pagamento confirmado (não entra no caixa)
@@ -569,10 +576,19 @@ async function fcCarregarDados() {
       t.troco_tecnox_dup = (t.troco_tecnox_dup || 0) + val;
     }
     else if (tipo.includes('suprim')) t.suprimento += val;
+    // DESPESA DO PDV PAGA EM PIX/CARTÃO (28/11/2026): não saiu da gaveta — fora do esperado e da linha Despesas (à parte)
+    else if (tipo.includes('desp') && _fcCaixaBanco(m.forma)) t.despesa_banco = (t.despesa_banco || 0) + val;
     else if (tipo.includes('desp')) t.despesa += val;
     else if (tipo.includes('depos')) t.deposito += val;
     else if (tipo.includes('receita')) {
       t.receita += val;
+      // RECEITA DO PDV EM PIX/CARTÃO (28/11/2026, SEVEN turno 90): mesma regra da receita do balão (11/10/2026) — fica na
+      // origem, sai do esperado na gaveta (receita_banco) e soma no recebido da forma (logo depois dos títulos, abaixo)
+      const _gB = _fcCaixaBanco(m.forma);
+      if (_gB) {
+        t.receita_banco = (t.receita_banco || 0) + val;
+        (t._recPdvBanco = t._recPdvBanco || []).push({ g: _gB, valor: val });
+      }
       // recebimento de título/fatura em DINHEIRO no PDV também vira receita no caixa (receber_titulo.js) — ver receita_titulo
       if (/^recebimento de (t[ií]tulo|fatura)/i.test(String(m.descricao || ''))) t.receita_receb_tit = (t.receita_receb_tit || 0) + val;
       // crédito do cliente pago em dinheiro (vales.js, 20/10/2026): a origem é Vendas › Haver, não Receitas
@@ -882,6 +898,27 @@ async function fcCarregarDados() {
       }
       t.titulos_receb[f.g] = (t.titulos_receb[f.g] || 0) + f.dinheiro;   // líquido (10/11/2026): o que o cliente pagou nessa forma
       t.titulos_receb_lst.push(f);
+    });
+  });
+
+  // RECEITA DO PDV EM PIX/CARTÃO NO RECEBIDO (28/11/2026): soma na linha da forma, como a receita do balão (11/10/2026),
+  // menos quando o dinheiro dela JÁ ESTÁ no recebido:
+  //   - LANÇADO À MÃO: um lançamento manual de recebimento (Pix, Pix CNPJ, cartão, cheque, frota) do mesmo valor — era
+  //     assim que se compensava (Florestal caixa 1217, 27/10: receita "Coleta de Óleo" R$ 440 em Pix + manual Pix CNPJ 440);
+  //     cada lançamento casa uma receita;
+  //   - CAIXA TROCADO PELO EXTRATO (qualquer substituição): Cartão + Pix = extrato, a passada da maquininha já está lá.
+  Object.values(porTurno).forEach(t => {
+    const lst = t._recPdvBanco || [];
+    if (!lst.length) return;
+    const trocado = (t.manuais || []).some(m => String(m.id || '').indexOf('ext-') === 0);
+    const NAO_REC = ['despesa', 'suprimento', 'deposito', 'receita', 'sangria', 'dinheiro'];
+    const maos = (t.manuais || []).filter(m => String(m.id || '').indexOf('ext-') !== 0 && !NAO_REC.includes(m.secao) && !m.deposito)
+      .map(m => ({ c: Math.round(Number(m.valor || 0) * 100), usado: false }));
+    lst.forEach(r => {
+      const mao = maos.find(x => !x.usado && x.c === Math.round(r.valor * 100));
+      if (mao) { mao.usado = true; t.receita_ja_lancada = Math.round(((t.receita_ja_lancada || 0) + r.valor) * 100) / 100; return; }
+      if (_fcExtratoExato(trocado, r.g)) { t.receita_no_extrato = Math.round(((t.receita_no_extrato || 0) + r.valor) * 100) / 100; return; }
+      t.rec[r.g] = (t.rec[r.g] || 0) + r.valor;
     });
   });
 
@@ -1371,6 +1408,7 @@ function fcDetalhe(turnoId) {
               ${d.sangria_gaveta > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Sangrias</span><b>${fcMoney(d.sangria_gaveta)}</b></div>` : ''}
               ${d.sangria_cofre_dup > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#667;font-size:0.7rem" title="O TecnoX lança uma sangria a cada depósito no cofre. O mesmo depósito já está no Contado (cofre), então não é descontado de novo."><span>Sangrias do cofre (TecnoX) — já no contado</span><span>${fcMoney(d.sangria_cofre_dup)}</span></div>` : ''}
               ${d.despesa > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Despesas</span><b>${fcMoney(d.despesa)}</b></div>` : ''}
+              ${d.despesa_banco > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#667;font-size:0.7rem" title="Despesa lançada no PDV paga em cartão ou Pix: não saiu da gaveta."><span>Despesas em cartão/pix — fora da gaveta</span><span>${fcMoney(d.despesa_banco)}</span></div>` : ''}
               ${d.deposito > 0.009 ? `<div style="display:flex;justify-content:space-between;color:#e0a0a0"><span>− Depósitos</span><b>${fcMoney(d.deposito)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between;border-top:1px solid #2a3a4a;margin-top:4px;padding-top:4px"><span>= Esperado na gaveta</span><b style="color:#7ea8d8">${fcMoney(d.dinheiro_esperado)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>Contado (gaveta ${fcMoney(t.valor_fechamento)} + cofre ${fcMoney(d.receb_ext_cofre)})</span><b>${d.dinheiro_contado == null ? '—' : fcMoney(d.dinheiro_contado)}</b></div>
